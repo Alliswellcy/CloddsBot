@@ -10,6 +10,7 @@ import type { SessionManager } from '../sessions/index';
 import type { FeedManager } from '../feeds/index';
 import type { Database } from '../db/index';
 import type { MemoryService } from '../memory/index';
+import type { OpportunityFinder } from '../opportunity/index';
 import { logger } from '../utils/logger';
 import { execApprovals } from '../permissions';
 
@@ -20,6 +21,7 @@ export interface CommandContext {
   feeds: FeedManager;
   db: Database;
   memory?: MemoryService;
+  opportunityFinder?: OpportunityFinder;
   commands: CommandRegistry;
   send: (message: OutgoingMessage) => Promise<string | null>;
 }
@@ -2257,6 +2259,470 @@ export function createDefaultCommands(): CommandDefinition[] {
               '  webhook <url>       - Add webhook endpoint',
               '  discord <url>       - Add Discord webhook',
               '  slack <url>         - Add Slack webhook',
+            ].join('\n');
+        }
+      },
+    },
+    {
+      name: 'devtools',
+      description: 'Configure developer tools and debugging',
+      usage: '/devtools [on|off|status|ws|datadog|sentry] [args]',
+      aliases: ['debug', 'dev'],
+      handler: async (args, ctx) => {
+        const trading = (ctx as any).trading;
+        if (!trading?.devtools) {
+          return 'DevTools not initialized. Enable in trading config: devtools: { enabled: true }';
+        }
+
+        const parts = args.trim().split(/\s+/);
+        const subcommand = parts[0]?.toLowerCase() || 'status';
+        const rest = parts.slice(1);
+
+        switch (subcommand) {
+          case 'status': {
+            const config = trading.devtools.getConfig();
+            const stats = trading.devtools.getStats();
+
+            const lines = [
+              'DevTools Status',
+              '',
+              `Console: ${config.console?.enabled ? '🟢 ON' : '⚪ OFF'}`,
+              `WebSocket: ${config.websocket?.enabled ? `🟢 ON (port ${config.websocket.port})` : '⚪ OFF'}`,
+              `Datadog: ${config.datadog?.enabled ? '🟢 ON' : '⚪ OFF'}`,
+              `Sentry: ${config.sentry?.enabled ? '🟢 ON' : '⚪ OFF'}`,
+              '',
+              'Stats:',
+              `  Events recorded: ${stats.eventsRecorded}`,
+              `  Profiler calls: ${stats.profilerCalls}`,
+              `  WS clients: ${stats.wsClients}`,
+            ];
+
+            return lines.join('\n');
+          }
+
+          case 'on': {
+            trading.devtools.enable();
+            return 'DevTools enabled. Console logging active.';
+          }
+
+          case 'off': {
+            trading.devtools.disable();
+            return 'DevTools disabled.';
+          }
+
+          case 'console': {
+            const level = rest[0]?.toLowerCase() || 'info';
+            const colors = rest.includes('colors') || rest.includes('color');
+
+            trading.devtools.configure({
+              console: {
+                enabled: true,
+                level: level as 'debug' | 'info' | 'warn' | 'error',
+                colors,
+              },
+            });
+
+            return `Console logging: ${level}${colors ? ' with colors' : ''}`;
+          }
+
+          case 'ws': {
+            const port = parseInt(rest[0], 10) || 9229;
+
+            trading.devtools.configure({
+              websocket: { enabled: true, port },
+            });
+
+            return [
+              `WebSocket server starting on port ${port}`,
+              '',
+              'Connect with:',
+              `  ws://localhost:${port}`,
+              '',
+              'Or use browser DevTools WebSocket client.',
+            ].join('\n');
+          }
+
+          case 'datadog': {
+            const apiKey = rest[0];
+            if (!apiKey) {
+              return 'Usage: /devtools datadog <api-key> [service-name]';
+            }
+
+            const service = rest[1] || 'clodds-trading';
+
+            trading.devtools.configure({
+              datadog: { enabled: true, apiKey, service },
+            });
+
+            return `Datadog integration enabled (service: ${service})`;
+          }
+
+          case 'sentry': {
+            const dsn = rest[0];
+            if (!dsn) {
+              return 'Usage: /devtools sentry <dsn>';
+            }
+
+            trading.devtools.configure({
+              sentry: { enabled: true, dsn },
+            });
+
+            return 'Sentry error tracking enabled.';
+          }
+
+          case 'profile': {
+            const operation = rest.join(' ') || 'test_profile';
+
+            // Start profiling
+            const profile = trading.devtools.startProfile(operation);
+
+            // Simulate some work
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            // End profiling
+            const result = trading.devtools.endProfile(profile.id);
+
+            return [
+              'Profile Result',
+              '',
+              `Operation: ${operation}`,
+              `Duration: ${result.duration.toFixed(2)}ms`,
+              `Memory delta: ${result.memoryDelta ? `${(result.memoryDelta / 1024).toFixed(2)}KB` : 'n/a'}`,
+            ].join('\n');
+          }
+
+          case 'events': {
+            const limit = parseInt(rest[0], 10) || 10;
+            const events = trading.devtools.getRecentEvents(limit);
+
+            if (events.length === 0) {
+              return 'No events recorded yet.';
+            }
+
+            const lines = [`Recent Events (${events.length})`, ''];
+            for (const event of events.slice(0, 10)) {
+              const time = event.timestamp.toISOString().slice(11, 19);
+              lines.push(`[${time}] ${event.type}: ${event.message || JSON.stringify(event.data).slice(0, 50)}`);
+            }
+
+            return lines.join('\n');
+          }
+
+          case 'clear': {
+            trading.devtools.clearEvents();
+            return 'Event history cleared.';
+          }
+
+          default:
+            return [
+              'Usage: /devtools [command]',
+              '',
+              'Commands:',
+              '  status            - Show DevTools status',
+              '  on                - Enable DevTools',
+              '  off               - Disable DevTools',
+              '  console [level]   - Configure console logging',
+              '  ws [port]         - Start WebSocket server',
+              '  datadog <key>     - Enable Datadog integration',
+              '  sentry <dsn>      - Enable Sentry error tracking',
+              '  profile [name]    - Run a profile measurement',
+              '  events [limit]    - Show recent events',
+              '  clear             - Clear event history',
+            ].join('\n');
+        }
+      },
+    },
+    {
+      name: 'opportunity',
+      description: 'Find arbitrage and edge opportunities across platforms',
+      usage: '/opportunity [scan|active|link|stats|pairs] [args]',
+      aliases: ['opp', 'arb', 'find'],
+      handler: async (args, ctx) => {
+        const finder = ctx.opportunityFinder;
+        if (!finder) {
+          return 'Opportunity finder not initialized. Enable in config.';
+        }
+
+        const parts = args.trim().split(/\s+/);
+        const subcommand = parts[0]?.toLowerCase() || 'scan';
+        const rest = parts.slice(1);
+
+        switch (subcommand) {
+          case 'scan': {
+            // Parse options
+            let query: string | undefined;
+            let minEdge = 0.5;
+            let limit = 20;
+            const platforms: string[] = [];
+            const types: Array<'internal' | 'cross_platform' | 'edge'> = [];
+
+            for (const part of rest) {
+              const lower = part.toLowerCase();
+              if (lower.startsWith('minedge=')) {
+                minEdge = parseFloat(lower.slice(8)) || 0.5;
+              } else if (lower.startsWith('limit=')) {
+                limit = parseInt(lower.slice(6), 10) || 20;
+              } else if (lower.startsWith('platforms=')) {
+                platforms.push(...lower.slice(10).split(','));
+              } else if (lower.startsWith('types=')) {
+                types.push(...lower.slice(6).split(',') as typeof types);
+              } else if (!query) {
+                query = part;
+              }
+            }
+
+            const opportunities = await finder.scan({
+              query,
+              minEdge,
+              limit,
+              platforms: platforms.length > 0 ? platforms : undefined,
+              types: types.length > 0 ? types : undefined,
+              sortBy: 'score',
+            });
+
+            if (opportunities.length === 0) {
+              return `No opportunities found above ${minEdge}% edge.`;
+            }
+
+            const lines = [`Opportunities Found: ${opportunities.length}`, ''];
+
+            for (const opp of opportunities.slice(0, 10)) {
+              const typeEmoji = opp.type === 'internal' ? '🔄' :
+                                opp.type === 'cross_platform' ? '🌐' : '📊';
+
+              lines.push(`${typeEmoji} **${opp.edgePct.toFixed(2)}% edge** (score: ${opp.score})`);
+
+              for (const market of opp.markets) {
+                const action = market.action === 'buy' ? '🟢 BUY' : '🔴 SELL';
+                lines.push(`   ${action} ${market.outcome} @ ${(market.price * 100).toFixed(1)}c`);
+                lines.push(`   ${market.platform} - ${market.question.slice(0, 50)}...`);
+              }
+
+              lines.push(`   💰 Profit/$100: $${opp.profitPer100.toFixed(2)} | Kelly: ${(opp.kellyFraction * 100).toFixed(1)}%`);
+              lines.push(`   ⚠️ Slippage: ~${opp.estimatedSlippage.toFixed(1)}% | Liq: $${opp.totalLiquidity.toFixed(0)}`);
+              lines.push('');
+            }
+
+            if (opportunities.length > 10) {
+              lines.push(`...and ${opportunities.length - 10} more. Use limit= to see more.`);
+            }
+
+            return lines.join('\n');
+          }
+
+          case 'active': {
+            const active = finder.getActive();
+
+            if (active.length === 0) {
+              return 'No active opportunities. Run /opportunity scan to find some.';
+            }
+
+            const lines = [`Active Opportunities: ${active.length}`, ''];
+
+            for (const opp of active.slice(0, 10)) {
+              const age = Math.round((Date.now() - opp.discoveredAt.getTime()) / 1000);
+              const ttl = Math.round((opp.expiresAt.getTime() - Date.now()) / 1000);
+
+              lines.push(`**${opp.id.slice(0, 20)}...**`);
+              lines.push(`  Type: ${opp.type} | Edge: ${opp.edgePct.toFixed(2)}%`);
+              lines.push(`  Age: ${age}s | TTL: ${ttl}s | Status: ${opp.status}`);
+            }
+
+            return lines.join('\n');
+          }
+
+          case 'link': {
+            // /opportunity link polymarket:abc kalshi:xyz [confidence]
+            const marketA = rest[0];
+            const marketB = rest[1];
+            const confidence = parseFloat(rest[2]) || 1.0;
+
+            if (!marketA || !marketB) {
+              return [
+                'Usage: /opportunity link <market_a> <market_b> [confidence]',
+                '',
+                'Market format: platform:marketId',
+                '',
+                'Example:',
+                '  /opportunity link polymarket:0x123 kalshi:fed-rate-jan',
+              ].join('\n');
+            }
+
+            finder.linkMarkets(marketA, marketB, confidence);
+            return `Linked ${marketA} <-> ${marketB} (confidence: ${confidence})`;
+          }
+
+          case 'unlink': {
+            const marketA = rest[0];
+            const marketB = rest[1];
+
+            if (!marketA || !marketB) {
+              return 'Usage: /opportunity unlink <market_a> <market_b>';
+            }
+
+            finder.unlinkMarkets(marketA, marketB);
+            return `Unlinked ${marketA} <-> ${marketB}`;
+          }
+
+          case 'links': {
+            const marketKey = rest[0];
+
+            if (!marketKey) {
+              // Show all links
+              const stats = finder.linker.getStats();
+              const allLinks = finder.linker.getAllLinks({ minConfidence: 0.5 });
+
+              const lines = [
+                'Market Links',
+                '',
+                `Total: ${stats.totalLinks}`,
+                `By source: ${Object.entries(stats.bySource).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+                `Avg confidence: ${stats.avgConfidence.toFixed(2)}`,
+                '',
+                'Recent links:',
+              ];
+
+              for (const link of allLinks.slice(0, 10)) {
+                lines.push(`  ${link.marketA} <-> ${link.marketB}`);
+                lines.push(`    Confidence: ${link.confidence.toFixed(2)} | Source: ${link.source}`);
+              }
+
+              return lines.join('\n');
+            }
+
+            // Show links for specific market
+            const links = finder.getLinkedMarkets(marketKey);
+
+            if (links.length === 0) {
+              return `No links found for ${marketKey}`;
+            }
+
+            const lines = [`Links for ${marketKey}`, ''];
+            for (const link of links) {
+              const other = link.marketA === marketKey ? link.marketB : link.marketA;
+              lines.push(`  -> ${other} (${link.confidence.toFixed(2)}, ${link.source})`);
+            }
+
+            return lines.join('\n');
+          }
+
+          case 'stats': {
+            const days = parseInt(rest[0], 10) || 30;
+            const stats = finder.getAnalytics({ days });
+
+            const lines = [
+              `Opportunity Stats (${days} days)`,
+              '',
+              `Found: ${stats.totalFound}`,
+              `Taken: ${stats.taken}`,
+              `Win Rate: ${stats.winRate.toFixed(1)}%`,
+              `Total Profit: $${stats.totalProfit.toFixed(2)}`,
+              `Avg Edge: ${stats.avgEdge.toFixed(2)}%`,
+              '',
+              'By Type:',
+            ];
+
+            for (const [type, data] of Object.entries(stats.byType)) {
+              lines.push(`  ${type}: ${data.count} found, ${data.taken} taken, ${data.winRate.toFixed(1)}% WR, $${data.profit.toFixed(2)} profit`);
+            }
+
+            if (stats.bestPlatformPair) {
+              const bp = stats.bestPlatformPair;
+              lines.push('');
+              lines.push(`Best Pair: ${bp.platforms.join(' <-> ')}`);
+              lines.push(`  ${bp.winRate.toFixed(1)}% WR, $${bp.profit.toFixed(2)} profit, ${bp.count} opportunities`);
+            }
+
+            return lines.join('\n');
+          }
+
+          case 'pairs': {
+            const pairs = finder.getPlatformPairs();
+
+            if (pairs.length === 0) {
+              return 'No platform pair data yet. Run scans to build up data.';
+            }
+
+            const lines = ['Platform Pair Performance', ''];
+
+            for (const pair of pairs.slice(0, 10)) {
+              const winRate = pair.taken > 0 ? (pair.wins / pair.taken) * 100 : 0;
+              lines.push(`**${pair.platforms.join(' <-> ')}**`);
+              lines.push(`  Opportunities: ${pair.count} | Taken: ${pair.taken}`);
+              lines.push(`  Win Rate: ${winRate.toFixed(1)}% | Profit: $${pair.totalProfit.toFixed(2)}`);
+              lines.push(`  Avg Edge: ${pair.avgEdge.toFixed(2)}%`);
+              lines.push('');
+            }
+
+            return lines.join('\n');
+          }
+
+          case 'realtime': {
+            const action = rest[0]?.toLowerCase() || 'status';
+
+            if (action === 'start') {
+              await finder.startRealtime();
+              return 'Real-time opportunity scanning started.';
+            }
+
+            if (action === 'stop') {
+              finder.stopRealtime();
+              return 'Real-time scanning stopped.';
+            }
+
+            return [
+              'Usage: /opportunity realtime [start|stop]',
+              '',
+              'Start real-time scanning to get live opportunity alerts.',
+            ].join('\n');
+          }
+
+          case 'take': {
+            const oppId = rest[0];
+            if (!oppId) {
+              return 'Usage: /opportunity take <opportunity-id>';
+            }
+
+            const opp = finder.get(oppId);
+            if (!opp) {
+              return `Opportunity ${oppId} not found or expired.`;
+            }
+
+            finder.markTaken(oppId);
+            return [
+              `Marked opportunity as taken: ${oppId}`,
+              '',
+              'Execution plan:',
+              ...opp.execution.steps.map((s: any) =>
+                `  ${s.order}. ${s.action.toUpperCase()} ${s.outcome} @ ${(s.price * 100).toFixed(1)}c on ${s.platform}`
+              ),
+              '',
+              `Estimated profit: $${opp.execution.estimatedProfit.toFixed(2)}`,
+              `Risk: ${opp.execution.risk}`,
+              ...(opp.execution.warnings.length > 0 ? ['', 'Warnings:', ...opp.execution.warnings.map((w: string) => `  ⚠️ ${w}`)] : []),
+            ].join('\n');
+          }
+
+          default:
+            return [
+              'Usage: /opportunity [command]',
+              '',
+              'Commands:',
+              '  scan [query] [minEdge=0.5] [limit=20]  - Find opportunities',
+              '  active                                  - Show active opportunities',
+              '  link <a> <b> [confidence]              - Link equivalent markets',
+              '  unlink <a> <b>                         - Remove market link',
+              '  links [market]                         - Show market links',
+              '  stats [days=30]                        - Show performance stats',
+              '  pairs                                  - Show platform pair performance',
+              '  realtime [start|stop]                  - Real-time scanning',
+              '  take <id>                              - Mark opportunity as taken',
+              '',
+              'Options:',
+              '  minEdge=N      - Minimum edge % (default: 0.5)',
+              '  limit=N        - Max results (default: 20)',
+              '  platforms=a,b  - Filter platforms',
+              '  types=a,b      - Filter types (internal, cross_platform, edge)',
             ].join('\n');
         }
       },

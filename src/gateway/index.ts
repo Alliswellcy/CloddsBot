@@ -36,6 +36,7 @@ import { createProviders, createProviderHealthMonitor, ProviderHealthMonitor } f
 import { createMonitoringService, MonitoringService } from '../monitoring';
 import { createEmbeddingsService } from '../embeddings';
 import { createMarketIndexService } from '../market-index';
+import { createOpportunityFinder, type OpportunityFinder } from '../opportunity';
 import chokidar, { FSWatcher } from 'chokidar';
 import path from 'path';
 import { loadConfig, CONFIG_FILE } from '../utils/config';
@@ -437,6 +438,22 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   });
   const cronCredentials = createCredentialsManager(db);
   let cronService: CronService | null = null;
+
+  // Create opportunity finder for cross-platform arbitrage detection
+  const opportunityFinder: OpportunityFinder | null = config.opportunityFinder?.enabled !== false
+    ? createOpportunityFinder(db, feeds, embeddings, {
+        minEdge: config.opportunityFinder?.minEdge ?? 0.5,
+        minLiquidity: config.opportunityFinder?.minLiquidity ?? 100,
+        platforms: config.opportunityFinder?.platforms,
+        realtime: config.opportunityFinder?.realtime ?? false,
+        scanIntervalMs: config.opportunityFinder?.scanIntervalMs ?? 10000,
+        semanticMatching: config.opportunityFinder?.semanticMatching ?? true,
+        similarityThreshold: config.opportunityFinder?.similarityThreshold ?? 0.85,
+        includeInternal: config.opportunityFinder?.includeInternal ?? true,
+        includeCross: config.opportunityFinder?.includeCross ?? true,
+        includeEdge: config.opportunityFinder?.includeEdge ?? true,
+      })
+    : null;
 
   const sendMessage = async (message: OutgoingMessage): Promise<string | null> => {
     if (!channels) {
@@ -953,6 +970,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       feeds,
       db,
       memory,
+      opportunityFinder: opportunityFinder ?? undefined,
       send: sendMessage,
     });
 

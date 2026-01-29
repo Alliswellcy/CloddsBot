@@ -11,6 +11,8 @@ import { createFeedManager } from '../../feeds';
 import { createSessionManager } from '../../sessions';
 import { createAgentManager } from '../../agents';
 import { createMemoryService } from '../../memory';
+import { createEmbeddingsService } from '../../embeddings';
+import { createOpportunityFinder } from '../../opportunity';
 import { createCommandRegistry, createDefaultCommands } from '../../commands/registry';
 import { loadConfig } from '../../utils/config';
 import { logger } from '../../utils/logger';
@@ -57,6 +59,14 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
   const feeds = await createFeedManager(config.feeds);
   const sessions = createSessionManager(db, config.session);
   const memory = createMemoryService(db);
+  const embeddings = createEmbeddingsService(db);
+  const opportunityFinder = config.opportunityFinder?.enabled !== false
+    ? createOpportunityFinder(db, feeds, embeddings, {
+        minEdge: config.opportunityFinder?.minEdge ?? 0.5,
+        minLiquidity: config.opportunityFinder?.minLiquidity ?? 100,
+        semanticMatching: config.opportunityFinder?.semanticMatching ?? true,
+      })
+    : null;
 
   const commands = createCommandRegistry();
   commands.registerMany(createDefaultCommands());
@@ -158,6 +168,7 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
       feeds,
       db,
       memory,
+      opportunityFinder: opportunityFinder ?? undefined,
       send: sendMessage,
     });
 

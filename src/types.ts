@@ -543,6 +543,30 @@ export interface Config {
     excludeResolved?: boolean;
     platformWeights?: Partial<Record<'polymarket' | 'kalshi' | 'manifold' | 'metaculus', number>>;
   };
+  opportunityFinder?: {
+    /** Enable opportunity finder (default: true) */
+    enabled?: boolean;
+    /** Minimum edge % to report (default: 0.5) */
+    minEdge?: number;
+    /** Minimum liquidity $ to consider (default: 100) */
+    minLiquidity?: number;
+    /** Platforms to scan */
+    platforms?: Platform[];
+    /** Enable real-time scanning (default: false) */
+    realtime?: boolean;
+    /** Scan interval in ms (default: 10000) */
+    scanIntervalMs?: number;
+    /** Use semantic matching (default: true) */
+    semanticMatching?: boolean;
+    /** Similarity threshold (default: 0.85) */
+    similarityThreshold?: number;
+    /** Include internal arbitrage YES+NO<$1 (default: true) */
+    includeInternal?: boolean;
+    /** Include cross-platform arbitrage (default: true) */
+    includeCross?: boolean;
+    /** Include edge vs fair value (default: true) */
+    includeEdge?: boolean;
+  };
   memory?: {
     auto?: {
       enabled?: boolean;
