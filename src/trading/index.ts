@@ -39,6 +39,7 @@ export * from './risk';
 export * from './state';
 export * from './stream';
 export * from './builder';
+export * from './accounts';
 
 import {
   createTradeLogger,

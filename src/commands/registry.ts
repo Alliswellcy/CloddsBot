@@ -1340,6 +1340,362 @@ export function createDefaultCommands(): CommandDefinition[] {
       },
     },
     {
+      name: 'account',
+      description: 'Manage trading accounts for multi-account/A/B testing',
+      usage: '/account [add|list|remove|switch] [args]',
+      aliases: ['accounts', 'acc'],
+      handler: async (args, ctx) => {
+        const trading = (ctx as any).trading;
+        if (!trading?.accounts) {
+          return 'Account manager not initialized.';
+        }
+
+        const parts = args.trim().split(/\s+/);
+        const subcommand = parts[0]?.toLowerCase() || 'list';
+        const rest = parts.slice(1);
+
+        switch (subcommand) {
+          case 'list': {
+            const accounts = trading.accounts.listAccounts();
+            if (accounts.length === 0) {
+              return [
+                'No trading accounts configured.',
+                '',
+                'Add one with:',
+                '  /account add <name> <platform> [type]',
+                '',
+                'Example:',
+                '  /account add "Main Poly" polymarket live',
+                '  /account add "Test Account" polymarket test_a',
+              ].join('\n');
+            }
+
+            const lines = ['Trading Accounts', ''];
+            for (const acc of accounts) {
+              const status = acc.enabled ? '🟢' : '🔴';
+              const typeLabel = acc.type === 'live' ? '' : ` [${acc.type}]`;
+              lines.push(`${status} **${acc.name}** (${acc.id})${typeLabel}`);
+              lines.push(`   Platform: ${acc.platform} | Max: $${acc.risk.maxOrderSize}`);
+            }
+            return lines.join('\n');
+          }
+
+          case 'add': {
+            const name = rest[0];
+            const platform = rest[1]?.toLowerCase() as Platform;
+            const type = (rest[2]?.toLowerCase() || 'live') as 'live' | 'paper' | 'test_a' | 'test_b';
+
+            if (!name || !platform) {
+              return 'Usage: /account add <name> <platform> [type]\n\nTypes: live, paper, test_a, test_b';
+            }
+
+            const account = trading.accounts.addAccount({
+              name,
+              platform,
+              type,
+              credentials: {}, // User will need to configure separately
+              risk: { maxOrderSize: 100, maxExposure: 1000 },
+              enabled: true,
+            });
+
+            return [
+              `Account Created: ${account.name}`,
+              '',
+              `ID: ${account.id}`,
+              `Platform: ${platform}`,
+              `Type: ${type}`,
+              '',
+              'Configure credentials in clodds.json or via:',
+              `  /account config ${account.id} apiKey=xxx apiSecret=xxx`,
+            ].join('\n');
+          }
+
+          case 'remove': {
+            const accountId = rest[0];
+            if (!accountId) {
+              return 'Usage: /account remove <account-id>';
+            }
+            const removed = trading.accounts.removeAccount(accountId);
+            return removed ? `Account ${accountId} removed.` : `Account ${accountId} not found.`;
+          }
+
+          case 'config': {
+            const accountId = rest[0];
+            if (!accountId) {
+              return 'Usage: /account config <account-id> key=value ...';
+            }
+
+            const account = trading.accounts.getAccount(accountId);
+            if (!account) {
+              return `Account ${accountId} not found.`;
+            }
+
+            // Parse key=value pairs
+            const updates: Record<string, string> = {};
+            for (const pair of rest.slice(1)) {
+              const [key, ...valueParts] = pair.split('=');
+              if (key && valueParts.length > 0) {
+                updates[key] = valueParts.join('=');
+              }
+            }
+
+            if (Object.keys(updates).length === 0) {
+              // Show current config (hide sensitive values)
+              const creds = account.credentials;
+              const lines = [`Account: ${account.name}`, ''];
+              for (const key of Object.keys(creds)) {
+                const value = creds[key];
+                if (value) {
+                  lines.push(`  ${key}: ${value.slice(0, 4)}...${value.slice(-4)}`);
+                }
+              }
+              return lines.join('\n');
+            }
+
+            // Update credentials
+            account.credentials = { ...account.credentials, ...updates };
+            trading.accounts.updateAccount(accountId, { credentials: account.credentials });
+
+            return `Account ${accountId} updated with ${Object.keys(updates).length} credential(s).`;
+          }
+
+          case 'enable': {
+            const accountId = rest[0];
+            if (!accountId) return 'Usage: /account enable <account-id>';
+            const ok = trading.accounts.updateAccount(accountId, { enabled: true });
+            return ok ? `Account ${accountId} enabled.` : `Account not found.`;
+          }
+
+          case 'disable': {
+            const accountId = rest[0];
+            if (!accountId) return 'Usage: /account disable <account-id>';
+            const ok = trading.accounts.updateAccount(accountId, { enabled: false });
+            return ok ? `Account ${accountId} disabled.` : `Account not found.`;
+          }
+
+          default:
+            return [
+              'Usage: /account [command]',
+              '',
+              'Commands:',
+              '  list              - List all accounts',
+              '  add <n> <p> [t]   - Add account (name, platform, type)',
+              '  remove <id>       - Remove account',
+              '  config <id> k=v   - Configure credentials',
+              '  enable <id>       - Enable account',
+              '  disable <id>      - Disable account',
+              '',
+              'Types: live, paper, test_a, test_b',
+            ].join('\n');
+        }
+      },
+    },
+    {
+      name: 'abtest',
+      description: 'Run A/B tests across multiple accounts',
+      usage: '/abtest [create|start|stop|status|results] [args]',
+      aliases: ['ab'],
+      handler: async (args, ctx) => {
+        const trading = (ctx as any).trading;
+        if (!trading?.accounts) {
+          return 'Account manager not initialized.';
+        }
+
+        const parts = args.trim().split(/\s+/);
+        const subcommand = parts[0]?.toLowerCase() || 'list';
+        const rest = parts.slice(1);
+
+        switch (subcommand) {
+          case 'list': {
+            const tests = trading.accounts.listABTests();
+            if (tests.length === 0) {
+              return [
+                'No A/B tests configured.',
+                '',
+                'Create one with:',
+                '  /abtest create <name> <strategy> <accountA> <accountB>',
+              ].join('\n');
+            }
+
+            const lines = ['A/B Tests', ''];
+            for (const test of tests) {
+              const status = test.status === 'running' ? '🟢' : test.status === 'completed' ? '✅' : '⏸️';
+              lines.push(`${status} **${test.name}** (${test.id})`);
+              lines.push(`   Strategy: ${test.strategyId} | Accounts: ${test.accounts.length}`);
+              if (test.results?.significance) {
+                lines.push(`   Winner: ${test.results.significance.winner} (p=${test.results.significance.pValue.toFixed(3)})`);
+              }
+            }
+            return lines.join('\n');
+          }
+
+          case 'create': {
+            // /abtest create "Test Name" strategy_id acc_a acc_b param=valueA,valueB
+            const name = rest[0];
+            const strategyId = rest[1];
+            const accountA = rest[2];
+            const accountB = rest[3];
+            const paramSpec = rest[4]; // e.g., "stopLoss=5,10"
+
+            if (!name || !strategyId || !accountA || !accountB) {
+              return [
+                'Usage: /abtest create <name> <strategy> <accountA> <accountB> [param=valA,valB]',
+                '',
+                'Example:',
+                '  /abtest create "Stop Loss Test" mean-reversion acc_123 acc_456 stopLossPct=5,10',
+              ].join('\n');
+            }
+
+            let varyParam = 'stopLossPct';
+            let valueA: unknown = 5;
+            let valueB: unknown = 10;
+
+            if (paramSpec && paramSpec.includes('=')) {
+              const [param, values] = paramSpec.split('=');
+              const [valA, valB] = values.split(',');
+              varyParam = param;
+              valueA = isNaN(Number(valA)) ? valA : Number(valA);
+              valueB = isNaN(Number(valB)) ? valB : Number(valB);
+            }
+
+            // Import helper
+            const { createQuickABTest } = await import('../trading/accounts');
+            const test = createQuickABTest(trading.accounts, {
+              name,
+              strategyId,
+              accountA,
+              accountB,
+              varyParam,
+              valueA,
+              valueB,
+            });
+
+            return [
+              `A/B Test Created: ${test.name}`,
+              '',
+              `ID: ${test.id}`,
+              `Strategy: ${strategyId}`,
+              '',
+              'Variations:',
+              `  Control (A): ${varyParam}=${JSON.stringify(valueA)} → ${accountA}`,
+              `  Test (B): ${varyParam}=${JSON.stringify(valueB)} → ${accountB}`,
+              '',
+              `Start with: /abtest start ${test.id}`,
+            ].join('\n');
+          }
+
+          case 'start': {
+            const testId = rest[0];
+            if (!testId) return 'Usage: /abtest start <test-id>';
+
+            const started = await trading.accounts.startABTest(testId);
+            return started
+              ? `A/B test ${testId} started. Bots running on all accounts.`
+              : `Failed to start test. Check if test exists and accounts are configured.`;
+          }
+
+          case 'stop': {
+            const testId = rest[0];
+            if (!testId) return 'Usage: /abtest stop <test-id>';
+
+            await trading.accounts.stopABTest(testId);
+            const test = trading.accounts.getABTest(testId);
+
+            if (test?.results) {
+              return [
+                `A/B test ${testId} stopped.`,
+                '',
+                '**Results:**',
+                test.results.summary,
+                '',
+                test.results.significance?.confident
+                  ? `✅ Statistically significant: ${test.results.significance.winner} wins`
+                  : '⚠️ Not enough data for statistical significance',
+              ].join('\n');
+            }
+
+            return `A/B test ${testId} stopped.`;
+          }
+
+          case 'status':
+          case 'results': {
+            const testId = rest[0];
+            if (!testId) return 'Usage: /abtest status <test-id>';
+
+            const test = trading.accounts.getABTest(testId);
+            if (!test) return `Test ${testId} not found.`;
+
+            const results = trading.accounts.calculateResults(testId);
+
+            const lines = [
+              `A/B Test: ${test.name}`,
+              '',
+              `Status: ${test.status}`,
+              `Strategy: ${test.strategyId}`,
+              `Started: ${test.startedAt?.toLocaleString() || 'not started'}`,
+              '',
+              'Variations:',
+            ];
+
+            for (const [name, variation] of Object.entries(test.variations)) {
+              const acc = test.accounts.find((a) => a.variation === name);
+              const stats = results?.byVariation[name];
+              lines.push(`  **${variation.name}** (${acc?.accountId})`);
+              if (stats) {
+                lines.push(`    Trades: ${stats.trades} | Win rate: ${stats.winRate.toFixed(1)}%`);
+                lines.push(`    PnL: $${stats.totalPnL.toFixed(2)} | Avg: $${stats.avgPnL.toFixed(2)}`);
+              }
+            }
+
+            if (results?.significance) {
+              lines.push('');
+              lines.push(`**Winner:** ${results.significance.winner}`);
+              lines.push(`Confidence: ${results.significance.confident ? 'High' : 'Low'} (p=${results.significance.pValue.toFixed(3)})`);
+            }
+
+            return lines.join('\n');
+          }
+
+          case 'compare': {
+            const accountIds = rest;
+            if (accountIds.length < 2) {
+              return 'Usage: /abtest compare <account1> <account2> [account3...]';
+            }
+
+            const comparison = trading.accounts.compareAccounts(accountIds);
+
+            const lines = ['Account Comparison', ''];
+            for (const acc of comparison.accounts) {
+              lines.push(`**${acc.name}** (${acc.id})`);
+              lines.push(`  Trades: ${acc.stats.totalTrades} | Win rate: ${acc.stats.winRate.toFixed(1)}%`);
+              lines.push(`  PnL: $${acc.stats.totalPnL.toFixed(2)}`);
+            }
+
+            if (comparison.best.byPnL) {
+              lines.push('');
+              lines.push(`Best by PnL: ${comparison.best.byPnL}`);
+              lines.push(`Best by Win Rate: ${comparison.best.byWinRate}`);
+            }
+
+            return lines.join('\n');
+          }
+
+          default:
+            return [
+              'Usage: /abtest [command]',
+              '',
+              'Commands:',
+              '  list                              - List all A/B tests',
+              '  create <n> <s> <a> <b> [p=v1,v2]  - Create test',
+              '  start <id>                        - Start test',
+              '  stop <id>                         - Stop test & show results',
+              '  status <id>                       - Show test status',
+              '  compare <acc1> <acc2>             - Compare accounts',
+            ].join('\n');
+        }
+      },
+    },
+    {
       name: 'strategy',
       description: 'Create or manage trading strategies',
       usage: '/strategy [create|list|delete|templates] [args]',
