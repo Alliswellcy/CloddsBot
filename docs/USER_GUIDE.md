@@ -121,6 +121,52 @@ Use `/risk` to control guardrails:
 
 Note: automated stop-loss execution respects `trading.dryRun` in config.
 
+## Advanced Trading Configuration
+
+Configure advanced trading features in `clodds.json`:
+
+```json
+{
+  "whaleTracking": {
+    "enabled": true,
+    "minTradeSize": 10000,
+    "minPositionSize": 50000,
+    "platforms": ["polymarket"],
+    "realtime": true
+  },
+  "copyTrading": {
+    "enabled": true,
+    "dryRun": true,
+    "followedAddresses": ["0x1234..."],
+    "sizingMode": "fixed",
+    "fixedSize": 100,
+    "maxPositionSize": 500,
+    "copyDelayMs": 5000
+  },
+  "smartRouting": {
+    "enabled": true,
+    "mode": "balanced",
+    "platforms": ["polymarket", "kalshi"],
+    "maxSlippage": 1,
+    "preferMaker": true
+  },
+  "evmDex": {
+    "enabled": true,
+    "defaultChain": "ethereum",
+    "slippageBps": 50,
+    "mevProtection": "basic",
+    "maxPriceImpact": 3
+  }
+}
+```
+
+| Config | Options | Description |
+|--------|---------|-------------|
+| `whaleTracking.minTradeSize` | number | Min USD to track (default: 10000) |
+| `copyTrading.sizingMode` | fixed/proportional/percentage | How to size copied trades |
+| `smartRouting.mode` | best_price/best_liquidity/lowest_fee/balanced | Routing strategy |
+| `evmDex.mevProtection` | none/basic/aggressive | MEV protection level |
+
 ## Portfolio and P&L
 
 - `/portfolio` shows current positions and live P&L.

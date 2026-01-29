@@ -464,6 +464,36 @@ trading.stream.addChannel({
     "enabled": true,
     "minEdge": 0.5,
     "semanticMatching": true
+  },
+  "whaleTracking": {
+    "enabled": false,
+    "minTradeSize": 10000,
+    "minPositionSize": 50000,
+    "platforms": ["polymarket"],
+    "realtime": true
+  },
+  "copyTrading": {
+    "enabled": false,
+    "dryRun": true,
+    "followedAddresses": [],
+    "sizingMode": "fixed",
+    "fixedSize": 100,
+    "maxPositionSize": 500,
+    "copyDelayMs": 5000
+  },
+  "smartRouting": {
+    "enabled": true,
+    "mode": "balanced",
+    "platforms": ["polymarket", "kalshi"],
+    "maxSlippage": 1,
+    "preferMaker": true
+  },
+  "evmDex": {
+    "enabled": false,
+    "defaultChain": "ethereum",
+    "slippageBps": 50,
+    "mevProtection": "basic",
+    "maxPriceImpact": 3
   }
 }
 ```
