@@ -220,10 +220,19 @@ export async function createSecretStore(
 
     async delete(key) {
       try {
-        const result = db.run(`DELETE FROM secrets WHERE key = ?`, [key]);
-        const deleted = (result.changes || 0) > 0;
-        logAudit('delete', key, deleted);
-        return deleted;
+        // Check if key exists before deleting
+        const rows = db.query<{ count: number }>(
+          `SELECT COUNT(*) as count FROM secrets WHERE key = ?`,
+          [key]
+        );
+        if (!rows[0]?.count) {
+          logAudit('delete', key, false);
+          return false;
+        }
+
+        db.run(`DELETE FROM secrets WHERE key = ?`, [key]);
+        logAudit('delete', key, true);
+        return true;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         logAudit('delete', key, false, message);

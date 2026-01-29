@@ -265,44 +265,44 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
     },
 
     // Trading - YES side
-    async buyYes(marketIndex, amount, maxPrice) {
+    async buyYes(marketIndex: number, amount: number, maxPrice?: number) {
       return createOrder(marketIndex, 'long', amount, maxPrice || null, 'market');
     },
 
-    async sellYes(marketIndex, amount, minPrice) {
+    async sellYes(marketIndex: number, amount: number, minPrice?: number) {
       return createOrder(marketIndex, 'short', amount, minPrice || null, 'market');
     },
 
-    async limitBuyYes(marketIndex, amount, price) {
+    async limitBuyYes(marketIndex: number, amount: number, price: number) {
       return createOrder(marketIndex, 'long', amount, price, 'limit');
     },
 
-    async limitSellYes(marketIndex, amount, price) {
+    async limitSellYes(marketIndex: number, amount: number, price: number) {
       return createOrder(marketIndex, 'short', amount, price, 'limit');
     },
 
     // Trading - NO side (inverse of YES)
-    async buyNo(marketIndex, amount, maxPrice) {
+    async buyNo(marketIndex: number, amount: number, maxPrice?: number) {
       // Buying NO = selling YES at inverse price
       const inversePrice = maxPrice ? 1 - maxPrice : undefined;
       return createOrder(marketIndex, 'short', amount, inversePrice || null, 'market');
     },
 
-    async sellNo(marketIndex, amount, minPrice) {
+    async sellNo(marketIndex: number, amount: number, minPrice?: number) {
       const inversePrice = minPrice ? 1 - minPrice : undefined;
       return createOrder(marketIndex, 'long', amount, inversePrice || null, 'market');
     },
 
-    async limitBuyNo(marketIndex, amount, price) {
+    async limitBuyNo(marketIndex: number, amount: number, price: number) {
       return createOrder(marketIndex, 'short', amount, 1 - price, 'limit');
     },
 
-    async limitSellNo(marketIndex, amount, price) {
+    async limitSellNo(marketIndex: number, amount: number, price: number) {
       return createOrder(marketIndex, 'long', amount, 1 - price, 'limit');
     },
 
     // Order management
-    async cancelOrder(orderId) {
+    async cancelOrder(orderId: string) {
       const order = openOrders.get(orderId);
       if (!order) return false;
 
@@ -320,7 +320,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
       return true;
     },
 
-    async cancelAllOrders(marketIndex) {
+    async cancelAllOrders(marketIndex?: number) {
       let cancelled = 0;
 
       for (const [orderId, order] of openOrders) {
@@ -335,7 +335,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
       return cancelled;
     },
 
-    async getOpenOrders(marketIndex) {
+    async getOpenOrders(marketIndex?: number) {
       const orders = Array.from(openOrders.values());
 
       if (marketIndex !== undefined) {
@@ -390,7 +390,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
       return result;
     },
 
-    async getPosition(marketIndex) {
+    async getPosition(marketIndex: number) {
       const allPositions = await trading.getPositions();
       return allPositions.find((p) => p.marketIndex === marketIndex) || null;
     },
@@ -414,7 +414,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
     },
 
     // Market data
-    async getMarketPrice(marketIndex) {
+    async getMarketPrice(marketIndex: number) {
       const data = await fetchApi<{
         probability: number;
         lastPrice: number;
@@ -430,7 +430,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
       };
     },
 
-    async getOrderbook(marketIndex) {
+    async getOrderbook(marketIndex: number) {
       const data = await fetchApi<{
         bids: Array<{ price: number; size: number }>;
         asks: Array<{ price: number; size: number }>;
@@ -448,8 +448,4 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
   return trading;
 }
 
-// =============================================================================
-// EXPORTS
-// =============================================================================
-
-export type { DriftTradingConfig, DriftOrder, DriftPosition, DriftBalance };
+// Types already exported at definition above

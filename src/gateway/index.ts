@@ -40,6 +40,8 @@ import { createOpportunityFinder, type OpportunityFinder } from '../opportunity'
 import { createWhaleTracker, type WhaleTracker } from '../feeds/polymarket/whale-tracker';
 import { createCopyTradingService, type CopyTradingService } from '../trading/copy-trading';
 import { createSmartRouter, type SmartRouter } from '../execution/smart-router';
+import { createRealtimeAlertsService, connectWhaleTracker, connectOpportunityFinder, type RealtimeAlertsService } from '../alerts';
+import { createOpportunityExecutor, type OpportunityExecutor } from '../opportunity/executor';
 import chokidar, { FSWatcher } from 'chokidar';
 import path from 'path';
 import { loadConfig, CONFIG_FILE } from '../utils/config';
@@ -495,6 +497,14 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       })
     : null;
 
+  // Realtime alerts service (created after sendMessage is defined)
+  let realtimeAlerts: RealtimeAlertsService | null = null;
+  let whaleTrackerCleanup: (() => void) | null = null;
+  let opportunityFinderCleanup: (() => void) | null = null;
+
+  // Auto-arbitrage executor
+  let arbitrageExecutor: OpportunityExecutor | null = null;
+
   const sendMessage = async (message: OutgoingMessage): Promise<string | null> => {
     if (!channels) {
       logger.warn({ platform: message.platform }, 'Channel manager not ready; dropping message');
@@ -534,6 +544,57 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     }
     return channels.sendPoll(message);
   };
+
+  // Initialize realtime alerts if enabled
+  if (config.realtimeAlerts?.enabled) {
+    realtimeAlerts = createRealtimeAlertsService(sendMessage, {
+      enabled: true,
+      targets: config.realtimeAlerts.targets?.map(t => ({
+        platform: t.platform as any,
+        chatId: t.chatId,
+        accountId: t.accountId,
+      })),
+      whaleTrades: config.realtimeAlerts.whaleTrades,
+      arbitrage: config.realtimeAlerts.arbitrage,
+      priceMovement: config.realtimeAlerts.priceMovement,
+      copyTrading: config.realtimeAlerts.copyTrading,
+    });
+
+    // Connect to whale tracker if available
+    if (whaleTracker) {
+      whaleTrackerCleanup = connectWhaleTracker(realtimeAlerts, whaleTracker);
+    }
+
+    // Connect to opportunity finder if available
+    if (opportunityFinder) {
+      opportunityFinderCleanup = connectOpportunityFinder(realtimeAlerts, opportunityFinder);
+    }
+
+    logger.info({ targets: config.realtimeAlerts.targets?.length ?? 0 }, 'Realtime alerts service initialized');
+  }
+
+  // Initialize auto-arbitrage executor if enabled
+  if (config.arbitrageExecution?.enabled && opportunityFinder) {
+    // Note: Execution service is not wired yet - executor runs in dry-run mode only
+    // To enable real execution, wire up ExecutionService and pass it here
+    const isDryRun = config.arbitrageExecution?.dryRun ?? true;
+    if (!isDryRun) {
+      logger.warn('arbitrageExecution.dryRun=false but no execution service available - forcing dry run');
+    }
+    arbitrageExecutor = createOpportunityExecutor(opportunityFinder, null as any, {
+      dryRun: true, // Always dry run until execution service is wired
+      minEdge: config.arbitrageExecution?.minEdge ?? 1.0,
+      minLiquidity: config.arbitrageExecution?.minLiquidity ?? 500,
+      maxPositionSize: config.arbitrageExecution?.maxPositionSize ?? 100,
+      maxDailyLoss: config.arbitrageExecution?.maxDailyLoss ?? 500,
+      maxConcurrentPositions: config.arbitrageExecution?.maxConcurrentPositions ?? 3,
+      enabledPlatforms: config.arbitrageExecution?.platforms ?? ['polymarket', 'kalshi'],
+      preferMakerOrders: config.arbitrageExecution?.preferMakerOrders ?? true,
+      confirmationDelayMs: config.arbitrageExecution?.confirmationDelayMs ?? 0,
+    });
+
+    logger.info({ dryRun: config.arbitrageExecution?.dryRun ?? true }, 'Arbitrage executor initialized');
+  }
 
   const startMonitoring = () => {
     monitoring?.stop();
@@ -1169,6 +1230,244 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     return { result };
   });
 
+  // Performance dashboard handler
+  httpGateway.setPerformanceDashboardHandler(async (_req) => {
+    // Get trade statistics from database
+    const trades = db.query<{
+      id: string;
+      timestamp: string;
+      market: string;
+      side: string;
+      size: number;
+      entryPrice: number;
+      exitPrice: number | null;
+      pnl: number | null;
+      pnlPct: number | null;
+      status: string;
+      strategy: string | null;
+    }>(`
+      SELECT
+        id,
+        created_at as timestamp,
+        COALESCE(market_question, market_id) as market,
+        side,
+        size,
+        entry_price as entryPrice,
+        exit_price as exitPrice,
+        pnl,
+        pnl_pct as pnlPct,
+        status,
+        strategy
+      FROM trades
+      ORDER BY created_at DESC
+      LIMIT 100
+    `);
+
+    // Calculate stats
+    const closedTrades = trades.filter(t => t.status === 'closed' && t.pnl != null);
+    const winningTrades = closedTrades.filter(t => (t.pnl ?? 0) > 0);
+
+    const totalPnl = closedTrades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+    const avgPnlPct = closedTrades.length > 0
+      ? closedTrades.reduce((sum, t) => sum + (t.pnlPct ?? 0), 0) / closedTrades.length
+      : 0;
+
+    // Calculate Sharpe ratio (simplified - daily returns)
+    const dailyPnl: Record<string, number> = {};
+    for (const t of closedTrades) {
+      const date = t.timestamp.split('T')[0];
+      dailyPnl[date] = (dailyPnl[date] ?? 0) + (t.pnl ?? 0);
+    }
+    const dailyReturns = Object.values(dailyPnl);
+    const avgReturn = dailyReturns.length > 0
+      ? dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length
+      : 0;
+    const stdDev = dailyReturns.length > 1
+      ? Math.sqrt(dailyReturns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / (dailyReturns.length - 1))
+      : 1;
+    const sharpeRatio = stdDev > 0 ? (avgReturn / stdDev) * Math.sqrt(252) : 0;
+
+    // Calculate max drawdown
+    let peak = 0;
+    let maxDrawdown = 0;
+    let cumulative = 0;
+    const dailyData: Array<{ date: string; pnl: number; cumulative: number }> = [];
+
+    const sortedDates = Object.keys(dailyPnl).sort();
+    for (const date of sortedDates) {
+      cumulative += dailyPnl[date];
+      peak = Math.max(peak, cumulative);
+      const drawdown = peak > 0 ? (peak - cumulative) / peak : 0;
+      maxDrawdown = Math.max(maxDrawdown, drawdown);
+      dailyData.push({ date, pnl: dailyPnl[date], cumulative });
+    }
+
+    // Group by strategy
+    const strategyMap: Record<string, { trades: number; wins: number; pnl: number }> = {};
+    for (const t of closedTrades) {
+      const strat = t.strategy ?? 'Unknown';
+      if (!strategyMap[strat]) {
+        strategyMap[strat] = { trades: 0, wins: 0, pnl: 0 };
+      }
+      strategyMap[strat].trades++;
+      if ((t.pnl ?? 0) > 0) strategyMap[strat].wins++;
+      strategyMap[strat].pnl += t.pnl ?? 0;
+    }
+
+    const byStrategy = Object.entries(strategyMap).map(([strategy, data]) => ({
+      strategy,
+      trades: data.trades,
+      winRate: data.trades > 0 ? (data.wins / data.trades) * 100 : 0,
+      pnl: data.pnl,
+    }));
+
+    // Format recent trades
+    const recentTrades = trades.slice(0, 20).map(t => ({
+      id: t.id,
+      timestamp: t.timestamp,
+      market: t.market,
+      side: t.side,
+      size: t.size,
+      entryPrice: t.entryPrice,
+      exitPrice: t.exitPrice ?? undefined,
+      pnl: t.pnl ?? undefined,
+      pnlPct: t.pnlPct ?? undefined,
+      status: t.status === 'closed'
+        ? ((t.pnl ?? 0) > 0 ? 'win' : 'loss')
+        : t.status,
+    }));
+
+    return {
+      stats: {
+        totalTrades: trades.length,
+        winRate: closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0,
+        totalPnl,
+        avgPnlPct,
+        sharpeRatio,
+        maxDrawdown: maxDrawdown * 100,
+      },
+      recentTrades,
+      dailyPnl: dailyData,
+      byStrategy,
+    };
+  });
+
+  // Backtest handler - runs backtest on historical trade data
+  httpGateway.setBacktestHandler(async (req) => {
+    const body = req.body as {
+      strategyId?: string;
+      startDate?: string;
+      endDate?: string;
+      initialCapital?: number;
+      platform?: string;
+      marketId?: string;
+    };
+
+    // Get historical trades for analysis
+    const startDate = body.startDate ? new Date(body.startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const endDate = body.endDate ? new Date(body.endDate) : new Date();
+    const initialCapital = body.initialCapital ?? 10000;
+
+    // Query historical trades
+    const trades = db.query<{
+      created_at: string;
+      side: string;
+      size: number;
+      entry_price: number;
+      exit_price: number | null;
+      pnl: number | null;
+      pnl_pct: number | null;
+      status: string;
+    }>(`
+      SELECT created_at, side, size, entry_price, exit_price, pnl, pnl_pct, status
+      FROM trades
+      WHERE created_at >= ? AND created_at <= ?
+      ${body.platform ? 'AND platform = ?' : ''}
+      ${body.marketId ? 'AND market_id = ?' : ''}
+      ORDER BY created_at
+    `, [
+      startDate.toISOString(),
+      endDate.toISOString(),
+      ...(body.platform ? [body.platform] : []),
+      ...(body.marketId ? [body.marketId] : []),
+    ]);
+
+    // Build equity curve from trades
+    let equity = initialCapital;
+    const equityCurve: Array<{ timestamp: string; equity: number }> = [
+      { timestamp: startDate.toISOString(), equity: initialCapital }
+    ];
+    const dailyPnl: Record<string, number> = {};
+
+    const closedTrades = trades.filter(t => t.status === 'closed' && t.pnl != null);
+
+    for (const trade of closedTrades) {
+      equity += trade.pnl ?? 0;
+      equityCurve.push({ timestamp: trade.created_at, equity });
+
+      const date = trade.created_at.split('T')[0];
+      dailyPnl[date] = (dailyPnl[date] ?? 0) + (trade.pnl ?? 0);
+    }
+
+    // Calculate metrics
+    const wins = closedTrades.filter(t => (t.pnl ?? 0) > 0);
+    const losses = closedTrades.filter(t => (t.pnl ?? 0) < 0);
+    const totalPnl = closedTrades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+    const totalReturnPct = (totalPnl / initialCapital) * 100;
+    const days = (endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000);
+    const annualizedReturnPct = totalReturnPct * (365 / Math.max(1, days));
+
+    // Sharpe & Sortino
+    const dailyReturns = Object.values(dailyPnl).map(pnl => pnl / initialCapital);
+    const avgReturn = dailyReturns.length > 0 ? dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length : 0;
+    const stdDev = dailyReturns.length > 1 ? Math.sqrt(dailyReturns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / (dailyReturns.length - 1)) : 1;
+    const sharpeRatio = stdDev > 0 ? (avgReturn / stdDev) * Math.sqrt(252) : 0;
+
+    const negReturns = dailyReturns.filter(r => r < 0);
+    const downsideDev = negReturns.length > 0 ? Math.sqrt(negReturns.reduce((sum, r) => sum + r * r, 0) / negReturns.length) : 1;
+    const sortinoRatio = downsideDev > 0 ? (avgReturn / downsideDev) * Math.sqrt(252) : 0;
+
+    // Max drawdown
+    let peak = initialCapital;
+    let maxDrawdownPct = 0;
+    for (const point of equityCurve) {
+      if (point.equity > peak) peak = point.equity;
+      const dd = ((peak - point.equity) / peak) * 100;
+      if (dd > maxDrawdownPct) maxDrawdownPct = dd;
+    }
+
+    // Profit factor
+    const grossProfit = wins.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+    const grossLoss = Math.abs(losses.reduce((sum, t) => sum + (t.pnl ?? 0), 0));
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
+
+    return {
+      result: {
+        strategyId: body.strategyId || 'historical',
+        metrics: {
+          totalReturnPct,
+          annualizedReturnPct,
+          totalTrades: trades.length,
+          winRate: closedTrades.length > 0 ? (wins.length / closedTrades.length) * 100 : 0,
+          sharpeRatio,
+          sortinoRatio,
+          maxDrawdownPct,
+          profitFactor: profitFactor === Infinity ? 999 : profitFactor,
+        },
+        trades: trades.slice(0, 50).map(t => ({
+          timestamp: t.created_at,
+          side: t.side,
+          size: t.size,
+          entryPrice: t.entry_price,
+          exitPrice: t.exit_price,
+          pnl: t.pnl,
+        })),
+        equityCurve,
+        dailyReturns: Object.entries(dailyPnl).map(([date, pnl]) => ({ date, return: pnl / initialCapital })),
+      },
+    };
+  });
+
   return {
     async start(): Promise<void> {
       logger.info('Starting gateway services');
@@ -1196,6 +1495,18 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       if (copyTrading) {
         copyTrading.start();
         logger.info('Copy trading service started');
+      }
+
+      // Start realtime alerts if enabled
+      if (realtimeAlerts) {
+        realtimeAlerts.start();
+        logger.info('Realtime alerts service started');
+      }
+
+      // Start arbitrage executor if enabled
+      if (arbitrageExecutor) {
+        arbitrageExecutor.start();
+        logger.info('Arbitrage executor started');
       }
 
       started = true;
@@ -1279,6 +1590,26 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       providerHealth?.stop();
       monitoring?.stop();
       monitoring = null;
+
+      // Stop arbitrage executor
+      if (arbitrageExecutor) {
+        arbitrageExecutor.stop();
+        arbitrageExecutor = null;
+      }
+
+      // Stop realtime alerts and cleanup subscriptions
+      if (realtimeAlerts) {
+        if (whaleTrackerCleanup) {
+          whaleTrackerCleanup();
+          whaleTrackerCleanup = null;
+        }
+        if (opportunityFinderCleanup) {
+          opportunityFinderCleanup();
+          opportunityFinderCleanup = null;
+        }
+        realtimeAlerts.stop();
+        realtimeAlerts = null;
+      }
 
       // Stop copy trading and whale tracker
       if (copyTrading) {

@@ -379,7 +379,7 @@ export async function createKalshiFeed(config?: {
       const noBids = parseOrderbookSide(orderbook.no);
 
       const asks: Array<[number, number]> = noBids
-        .map(([price, size]) => [Number((1 - price).toFixed(4)), size])
+        .map(([price, size]): [number, number] => [Number((1 - price).toFixed(4)), size])
         .filter(([price]) => price > 0 && price < 1)
         .sort((a, b) => a[0] - b[0]);
 

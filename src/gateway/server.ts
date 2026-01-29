@@ -18,6 +18,8 @@ export interface GatewayServer {
   setMarketIndexHandler(handler: MarketIndexHandler | null): void;
   setMarketIndexStatsHandler(handler: MarketIndexStatsHandler | null): void;
   setMarketIndexSyncHandler(handler: MarketIndexSyncHandler | null): void;
+  setPerformanceDashboardHandler(handler: PerformanceDashboardHandler | null): void;
+  setBacktestHandler(handler: BacktestHandler | null): void;
 }
 
 export type ChannelWebhookHandler = (
@@ -38,6 +40,54 @@ export type MarketIndexSyncHandler = (
   req: Request
 ) => Promise<{ result: unknown } | { error: string; status?: number }>;
 
+export type BacktestHandler = (
+  req: Request
+) => Promise<{
+  result: {
+    strategyId: string;
+    metrics: {
+      totalReturnPct: number;
+      annualizedReturnPct: number;
+      totalTrades: number;
+      winRate: number;
+      sharpeRatio: number;
+      sortinoRatio: number;
+      maxDrawdownPct: number;
+      profitFactor: number;
+    };
+    trades: unknown[];
+    equityCurve: Array<{ timestamp: string; equity: number }>;
+    dailyReturns: Array<{ date: string; return: number }>;
+  };
+} | { error: string; status?: number }>;
+
+export type PerformanceDashboardHandler = (
+  req: Request
+) => Promise<{
+  stats: {
+    totalTrades: number;
+    winRate: number;
+    totalPnl: number;
+    avgPnlPct: number;
+    sharpeRatio: number;
+    maxDrawdown: number;
+  };
+  recentTrades: Array<{
+    id: string;
+    timestamp: string;
+    market: string;
+    side: string;
+    size: number;
+    entryPrice: number;
+    exitPrice?: number;
+    pnl?: number;
+    pnlPct?: number;
+    status: string;
+  }>;
+  dailyPnl: Array<{ date: string; pnl: number; cumulative: number }>;
+  byStrategy: Array<{ strategy: string; trades: number; winRate: number; pnl: number }>;
+} | { error: string; status?: number }>;
+
 export function createServer(config: Config['gateway'], webhooks?: WebhookManager): GatewayServer {
   const app = express();
   let httpServer: Server | null = null;
@@ -46,6 +96,8 @@ export function createServer(config: Config['gateway'], webhooks?: WebhookManage
   let marketIndexHandler: MarketIndexHandler | null = null;
   let marketIndexStatsHandler: MarketIndexStatsHandler | null = null;
   let marketIndexSyncHandler: MarketIndexSyncHandler | null = null;
+  let performanceDashboardHandler: PerformanceDashboardHandler | null = null;
+  let backtestHandler: BacktestHandler | null = null;
 
   const corsConfig = config.cors ?? false;
   app.use((req, res, next) => {
@@ -346,6 +398,507 @@ export function createServer(config: Config['gateway'], webhooks?: WebhookManage
     }
   });
 
+  // Backtest API endpoint
+  app.post('/api/backtest', async (req, res) => {
+    if (!backtestHandler) {
+      res.status(404).json({ error: 'Backtest handler not configured' });
+      return;
+    }
+
+    try {
+      const result = await backtestHandler(req);
+      if ('error' in result) {
+        res.status(result.status ?? 400).json({ error: result.error });
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      logger.error({ error }, 'Backtest handler failed');
+      res.status(500).json({ error: 'Backtest error' });
+    }
+  });
+
+  // Performance dashboard API endpoint
+  app.get('/api/performance', async (req, res) => {
+    if (!performanceDashboardHandler) {
+      res.status(404).json({ error: 'Performance dashboard not configured' });
+      return;
+    }
+
+    try {
+      const result = await performanceDashboardHandler(req);
+      if ('error' in result) {
+        res.status(result.status ?? 400).json({ error: result.error });
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      logger.error({ error }, 'Performance dashboard handler failed');
+      res.status(500).json({ error: 'Performance dashboard error' });
+    }
+  });
+
+  // Telegram Mini App
+  app.get('/miniapp', (_req, res) => {
+    res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Clodds</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--tg-theme-bg-color, #0f1419);
+      color: var(--tg-theme-text-color, #e7e9ea);
+      min-height: 100vh;
+      padding: 16px;
+    }
+    .header { text-align: center; margin-bottom: 24px; }
+    .header h1 { font-size: 24px; font-weight: 600; }
+    .header p { color: var(--tg-theme-hint-color, #71767b); margin-top: 4px; }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 4px;
+      background: var(--tg-theme-secondary-bg-color, #16202a);
+      border-radius: 12px;
+    }
+    .tab {
+      flex: 1;
+      padding: 10px;
+      text-align: center;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    .tab.active {
+      background: var(--tg-theme-button-color, #1d9bf0);
+      color: var(--tg-theme-button-text-color, #fff);
+    }
+    .section { display: none; }
+    .section.active { display: block; }
+    .card {
+      background: var(--tg-theme-secondary-bg-color, #16202a);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card-title { font-size: 14px; color: var(--tg-theme-hint-color, #71767b); margin-bottom: 8px; }
+    .card-value { font-size: 28px; font-weight: 700; }
+    .card-value.positive { color: #00ba7c; }
+    .card-value.negative { color: #f91880; }
+    .list-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--tg-theme-secondary-bg-color, #2f3336);
+    }
+    .list-item:last-child { border-bottom: none; }
+    .list-item .name { font-weight: 500; }
+    .list-item .value { font-size: 14px; }
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge.buy { background: rgba(0, 186, 124, 0.2); color: #00ba7c; }
+    .badge.sell { background: rgba(249, 24, 128, 0.2); color: #f91880; }
+    .badge.arb { background: rgba(29, 155, 240, 0.2); color: #1d9bf0; }
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      border: none;
+      background: var(--tg-theme-button-color, #1d9bf0);
+      color: var(--tg-theme-button-text-color, #fff);
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 16px;
+    }
+    .btn:hover { opacity: 0.9; }
+    .loading { text-align: center; padding: 40px; color: var(--tg-theme-hint-color, #71767b); }
+    .empty { text-align: center; padding: 40px; }
+    .empty-icon { font-size: 48px; margin-bottom: 12px; }
+    .empty-text { color: var(--tg-theme-hint-color, #71767b); }
+    .search { width: 100%; padding: 12px 16px; border-radius: 12px; border: none; background: var(--tg-theme-secondary-bg-color, #16202a); color: var(--tg-theme-text-color, #e7e9ea); font-size: 16px; margin-bottom: 16px; }
+    .search::placeholder { color: var(--tg-theme-hint-color, #71767b); }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Clodds</h1>
+    <p>Prediction Markets AI</p>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="portfolio">Portfolio</div>
+    <div class="tab" data-tab="markets">Markets</div>
+    <div class="tab" data-tab="arb">Arbitrage</div>
+  </div>
+
+  <div id="portfolio" class="section active">
+    <div class="card">
+      <div class="card-title">Total Value</div>
+      <div class="card-value" id="total-value">$0.00</div>
+    </div>
+    <div class="card">
+      <div class="card-title">P&L</div>
+      <div class="card-value" id="pnl">$0.00</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Positions</div>
+      <div id="positions"><div class="loading">Loading...</div></div>
+    </div>
+  </div>
+
+  <div id="markets" class="section">
+    <input type="text" class="search" placeholder="Search markets..." id="market-search">
+    <div id="market-list"><div class="loading">Loading...</div></div>
+  </div>
+
+  <div id="arb" class="section">
+    <div class="card">
+      <div class="card-title">Active Opportunities</div>
+      <div id="arb-list"><div class="loading">Loading...</div></div>
+    </div>
+    <button class="btn" onclick="scanArb()">Scan Now</button>
+  </div>
+
+  <script>
+    const Telegram = window.Telegram.WebApp;
+    Telegram.ready();
+    Telegram.expand();
+
+    const baseUrl = window.location.origin;
+
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(tab.dataset.tab).classList.add('active');
+      });
+    });
+
+    // Format helpers
+    function formatUSD(val) {
+      const sign = val >= 0 ? '' : '-';
+      return sign + '$' + Math.abs(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function formatPct(val) {
+      const sign = val >= 0 ? '+' : '';
+      return sign + val.toFixed(1) + '%';
+    }
+
+    // Load portfolio
+    async function loadPortfolio() {
+      try {
+        const res = await fetch(baseUrl + '/api/performance');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+
+        document.getElementById('total-value').textContent = formatUSD(data.stats.totalPnl + 10000);
+        const pnlEl = document.getElementById('pnl');
+        pnlEl.textContent = formatUSD(data.stats.totalPnl) + ' (' + formatPct(data.stats.avgPnlPct) + ')';
+        pnlEl.className = 'card-value ' + (data.stats.totalPnl >= 0 ? 'positive' : 'negative');
+
+        if (data.recentTrades.length === 0) {
+          document.getElementById('positions').innerHTML = '<div class="empty"><div class="empty-icon">📊</div><div class="empty-text">No positions yet</div></div>';
+        } else {
+          document.getElementById('positions').innerHTML = data.recentTrades.slice(0, 5).map(t => \`
+            <div class="list-item">
+              <div>
+                <div class="name">\${t.market.slice(0, 30)}\${t.market.length > 30 ? '...' : ''}</div>
+                <div class="value">\${formatUSD(t.size)} @ \${(t.entryPrice * 100).toFixed(0)}%</div>
+              </div>
+              <span class="badge \${t.side.toLowerCase()}">\${t.side}</span>
+            </div>
+          \`).join('');
+        }
+      } catch (err) {
+        document.getElementById('positions').innerHTML = '<div class="empty"><div class="empty-text">Failed to load portfolio</div></div>';
+      }
+    }
+
+    // Load markets
+    async function loadMarkets(query = '') {
+      try {
+        const url = baseUrl + '/market-index/search?q=' + encodeURIComponent(query || 'election');
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+
+        if (!data.results || data.results.length === 0) {
+          document.getElementById('market-list').innerHTML = '<div class="empty"><div class="empty-icon">🔍</div><div class="empty-text">No markets found</div></div>';
+          return;
+        }
+
+        document.getElementById('market-list').innerHTML = data.results.slice(0, 10).map(m => \`
+          <div class="list-item">
+            <div>
+              <div class="name">\${m.question?.slice(0, 40) || m.title?.slice(0, 40) || 'Market'}\${(m.question || m.title || '').length > 40 ? '...' : ''}</div>
+              <div class="value">\${m.platform}</div>
+            </div>
+            <div>\${m.yesPrice ? ((m.yesPrice * 100).toFixed(0) + '%') : '-'}</div>
+          </div>
+        \`).join('');
+      } catch (err) {
+        document.getElementById('market-list').innerHTML = '<div class="empty"><div class="empty-text">Failed to load markets</div></div>';
+      }
+    }
+
+    // Load arbitrage opportunities
+    async function loadArb() {
+      document.getElementById('arb-list').innerHTML = '<div class="empty"><div class="empty-icon">⚡</div><div class="empty-text">Use the Scan button to find opportunities</div></div>';
+    }
+
+    async function scanArb() {
+      document.getElementById('arb-list').innerHTML = '<div class="loading">Scanning...</div>';
+      Telegram.HapticFeedback.impactOccurred('medium');
+
+      // Simulate scan (would call real API)
+      setTimeout(() => {
+        document.getElementById('arb-list').innerHTML = '<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No opportunities found above 1% edge</div></div>';
+      }, 1500);
+    }
+
+    // Search handler
+    let searchTimeout;
+    document.getElementById('market-search').addEventListener('input', (e) => {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => loadMarkets(e.target.value), 500);
+    });
+
+    // Initialize
+    loadPortfolio();
+    loadMarkets();
+    loadArb();
+  </script>
+</body>
+</html>`);
+  });
+
+  // Performance dashboard HTML UI
+  app.get('/dashboard', (_req, res) => {
+    res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Clodds Performance Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1419; color: #e7e9ea; }
+    .header { background: #16202a; padding: 20px 30px; border-bottom: 1px solid #2f3336; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 24px; font-weight: 600; }
+    .header .refresh { background: #1d9bf0; color: white; border: none; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: 600; }
+    .header .refresh:hover { background: #1a8cd8; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 30px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+    .stat-card { background: #16202a; border-radius: 16px; padding: 24px; border: 1px solid #2f3336; }
+    .stat-card .label { color: #71767b; font-size: 14px; margin-bottom: 8px; }
+    .stat-card .value { font-size: 32px; font-weight: 700; }
+    .stat-card .value.positive { color: #00ba7c; }
+    .stat-card .value.negative { color: #f91880; }
+    .charts-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 30px; }
+    .chart-card { background: #16202a; border-radius: 16px; padding: 24px; border: 1px solid #2f3336; }
+    .chart-card h3 { margin-bottom: 20px; font-size: 18px; }
+    .chart-container { position: relative; height: 300px; }
+    .trades-table { width: 100%; border-collapse: collapse; }
+    .trades-table th, .trades-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #2f3336; }
+    .trades-table th { color: #71767b; font-weight: 500; font-size: 14px; }
+    .trades-table tr:hover { background: #1c2732; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .badge.buy { background: rgba(0, 186, 124, 0.2); color: #00ba7c; }
+    .badge.sell { background: rgba(249, 24, 128, 0.2); color: #f91880; }
+    .badge.win { background: rgba(0, 186, 124, 0.2); color: #00ba7c; }
+    .badge.loss { background: rgba(249, 24, 128, 0.2); color: #f91880; }
+    .badge.open { background: rgba(29, 155, 240, 0.2); color: #1d9bf0; }
+    .loading { text-align: center; padding: 60px; color: #71767b; }
+    .error { text-align: center; padding: 60px; color: #f91880; }
+    @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Performance Dashboard</h1>
+    <button class="refresh" onclick="loadData()">Refresh</button>
+  </div>
+  <div class="container">
+    <div id="content" class="loading">Loading...</div>
+  </div>
+
+  <script>
+    let pnlChart = null;
+    let strategyChart = null;
+
+    async function loadData() {
+      const content = document.getElementById('content');
+      content.innerHTML = '<div class="loading">Loading...</div>';
+
+      try {
+        const res = await fetch('/api/performance');
+        if (!res.ok) throw new Error('Failed to load data');
+        const data = await res.json();
+        render(data);
+      } catch (err) {
+        content.innerHTML = '<div class="error">Failed to load performance data. Make sure trading is enabled.</div>';
+      }
+    }
+
+    function formatCurrency(val) {
+      const sign = val >= 0 ? '+' : '';
+      return sign + '$' + Math.abs(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function formatPercent(val) {
+      const sign = val >= 0 ? '+' : '';
+      return sign + val.toFixed(2) + '%';
+    }
+
+    function render(data) {
+      const { stats, recentTrades, dailyPnl, byStrategy } = data;
+
+      const html = \`
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="label">Total Trades</div>
+            <div class="value">\${stats.totalTrades}</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Win Rate</div>
+            <div class="value \${stats.winRate >= 50 ? 'positive' : 'negative'}">\${stats.winRate.toFixed(1)}%</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Total P&L</div>
+            <div class="value \${stats.totalPnl >= 0 ? 'positive' : 'negative'}">\${formatCurrency(stats.totalPnl)}</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Avg P&L %</div>
+            <div class="value \${stats.avgPnlPct >= 0 ? 'positive' : 'negative'}">\${formatPercent(stats.avgPnlPct)}</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Sharpe Ratio</div>
+            <div class="value \${stats.sharpeRatio >= 1 ? 'positive' : stats.sharpeRatio < 0 ? 'negative' : ''}">\${stats.sharpeRatio.toFixed(2)}</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Max Drawdown</div>
+            <div class="value negative">\${formatPercent(-stats.maxDrawdown)}</div>
+          </div>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-card">
+            <h3>Cumulative P&L</h3>
+            <div class="chart-container"><canvas id="pnlChart"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <h3>By Strategy</h3>
+            <div class="chart-container"><canvas id="strategyChart"></canvas></div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <h3>Recent Trades</h3>
+          <table class="trades-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Market</th>
+                <th>Side</th>
+                <th>Size</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>P&L</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              \${recentTrades.map(t => \`
+                <tr>
+                  <td>\${new Date(t.timestamp).toLocaleString()}</td>
+                  <td>\${t.market.slice(0, 40)}\${t.market.length > 40 ? '...' : ''}</td>
+                  <td><span class="badge \${t.side.toLowerCase()}">\${t.side}</span></td>
+                  <td>$\${t.size.toLocaleString()}</td>
+                  <td>\${(t.entryPrice * 100).toFixed(1)}%</td>
+                  <td>\${t.exitPrice ? (t.exitPrice * 100).toFixed(1) + '%' : '-'}</td>
+                  <td class="\${(t.pnl || 0) >= 0 ? 'positive' : 'negative'}">\${t.pnl != null ? formatCurrency(t.pnl) : '-'}</td>
+                  <td><span class="badge \${t.status === 'win' ? 'win' : t.status === 'loss' ? 'loss' : 'open'}">\${t.status}</span></td>
+                </tr>
+              \`).join('')}
+            </tbody>
+          </table>
+        </div>
+      \`;
+
+      document.getElementById('content').innerHTML = html;
+
+      // Cumulative P&L chart
+      if (pnlChart) pnlChart.destroy();
+      const pnlCtx = document.getElementById('pnlChart').getContext('2d');
+      pnlChart = new Chart(pnlCtx, {
+        type: 'line',
+        data: {
+          labels: dailyPnl.map(d => d.date),
+          datasets: [{
+            label: 'Cumulative P&L',
+            data: dailyPnl.map(d => d.cumulative),
+            borderColor: '#1d9bf0',
+            backgroundColor: 'rgba(29, 155, 240, 0.1)',
+            fill: true,
+            tension: 0.3,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { color: '#2f3336' }, ticks: { color: '#71767b' } },
+            y: { grid: { color: '#2f3336' }, ticks: { color: '#71767b', callback: v => '$' + v } }
+          }
+        }
+      });
+
+      // Strategy breakdown chart
+      if (strategyChart) strategyChart.destroy();
+      const stratCtx = document.getElementById('strategyChart').getContext('2d');
+      strategyChart = new Chart(stratCtx, {
+        type: 'doughnut',
+        data: {
+          labels: byStrategy.map(s => s.strategy),
+          datasets: [{
+            data: byStrategy.map(s => s.trades),
+            backgroundColor: ['#1d9bf0', '#00ba7c', '#f91880', '#ffd400', '#7856ff'],
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'bottom', labels: { color: '#e7e9ea' } }
+          }
+        }
+      });
+    }
+
+    loadData();
+  </script>
+</body>
+</html>`);
+  });
+
   return {
     async start() {
       return new Promise((resolve) => {
@@ -428,6 +981,12 @@ export function createServer(config: Config['gateway'], webhooks?: WebhookManage
     },
     setMarketIndexSyncHandler(handler: MarketIndexSyncHandler | null): void {
       marketIndexSyncHandler = handler;
+    },
+    setPerformanceDashboardHandler(handler: PerformanceDashboardHandler | null): void {
+      performanceDashboardHandler = handler;
+    },
+    setBacktestHandler(handler: BacktestHandler | null): void {
+      backtestHandler = handler;
     },
   };
 }

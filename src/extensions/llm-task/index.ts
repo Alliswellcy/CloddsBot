@@ -124,7 +124,7 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
       }
 
       task.status = 'completed';
-      task.result = result.result;
+      task.result = 'result' in result ? result.result : undefined;
       task.completedAt = Date.now();
       task.progress = 100;
 
@@ -137,7 +137,7 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
       notifyWaiters(taskId, {
         taskId,
         success: true,
-        result: result.result,
+        result: 'result' in result ? result.result : undefined,
         duration: task.completedAt - (task.startedAt || 0),
       });
     } catch (error) {
@@ -189,7 +189,7 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
     }
   }
 
-  return {
+  const extension: LLMTaskExtension = {
     async createTask(
       name: string,
       prompt: string,
@@ -226,7 +226,7 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
         throw new Error(`Parent task ${parentId} not found`);
       }
 
-      const id = await this.createTask(name, prompt, { parentId });
+      const id = await extension.createTask(name, prompt, { parentId });
       const task = tasks.get(id)!;
       task.parentId = parentId;
 
@@ -370,4 +370,6 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
       };
     },
   };
+
+  return extension;
 }

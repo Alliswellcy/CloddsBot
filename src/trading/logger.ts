@@ -29,7 +29,12 @@ export interface Trade {
   size: number;
   filled: number;
   cost: number;
+  /** Fees paid (positive) or rebates earned (negative) */
   fees?: number;
+  /** Whether this was a maker order (earned rebate) */
+  isMaker?: boolean;
+  /** Maker rebate earned (positive number, subset of fees) */
+  makerRebate?: number;
   orderId?: string;
   status: 'pending' | 'partial' | 'filled' | 'cancelled' | 'failed';
   /** Strategy/bot that placed this trade */
@@ -78,8 +83,41 @@ export interface TradeStats {
   profitFactor: number;
   totalVolume: number;
   totalFees: number;
+  /** Total maker rebates earned */
+  totalMakerRebates: number;
+  /** Net fees (fees paid - rebates earned) */
+  netFees: number;
+  /** Number of maker vs taker trades */
+  makerTrades: number;
+  takerTrades: number;
   byPlatform: Record<Platform, { trades: number; pnl: number }>;
   byStrategy: Record<string, { trades: number; pnl: number; winRate: number }>;
+}
+
+/** Fee rates by platform (in basis points) */
+export const PLATFORM_FEES = {
+  polymarket: { takerFeeBps: 200, makerRebateBps: 50 },
+  kalshi: { takerFeeBps: 100, makerRebateBps: 0 },
+  betfair: { takerFeeBps: 200, makerRebateBps: 0 },
+  smarkets: { takerFeeBps: 200, makerRebateBps: 0 },
+  manifold: { takerFeeBps: 0, makerRebateBps: 0 },
+} as const;
+
+/** Calculate fees for a trade */
+export function calculateTradeFees(
+  platform: Platform,
+  cost: number,
+  isMaker: boolean
+): { fees: number; makerRebate: number } {
+  const rates = PLATFORM_FEES[platform as keyof typeof PLATFORM_FEES] || { takerFeeBps: 0, makerRebateBps: 0 };
+
+  if (isMaker && rates.makerRebateBps > 0) {
+    const rebate = (cost * rates.makerRebateBps) / 10000;
+    return { fees: -rebate, makerRebate: rebate };
+  }
+
+  const fee = (cost * rates.takerFeeBps) / 10000;
+  return { fees: fee, makerRebate: 0 };
 }
 
 export interface TradeLogger extends EventEmitter {
@@ -146,6 +184,8 @@ export function createTradeLogger(db: Database): TradeLogger {
       filled REAL NOT NULL DEFAULT 0,
       cost REAL NOT NULL DEFAULT 0,
       fees REAL,
+      is_maker INTEGER DEFAULT 0,
+      maker_rebate REAL DEFAULT 0,
       order_id TEXT,
       status TEXT NOT NULL,
       strategy_id TEXT,
@@ -160,6 +200,14 @@ export function createTradeLogger(db: Database): TradeLogger {
       meta_json TEXT
     )
   `);
+
+  // Migration: add new columns if they don't exist
+  try {
+    db.run(`ALTER TABLE trades ADD COLUMN is_maker INTEGER DEFAULT 0`);
+  } catch { /* column exists */ }
+  try {
+    db.run(`ALTER TABLE trades ADD COLUMN maker_rebate REAL DEFAULT 0`);
+  } catch { /* column exists */ }
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_trades_platform ON trades(platform)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market_id)`);
@@ -195,6 +243,8 @@ export function createTradeLogger(db: Database): TradeLogger {
       filled: row.filled,
       cost: row.cost,
       fees: row.fees,
+      isMaker: row.is_maker === 1,
+      makerRebate: row.maker_rebate || 0,
       orderId: row.order_id,
       status: row.status,
       strategyId: row.strategy_id,
@@ -216,9 +266,9 @@ export function createTradeLogger(db: Database): TradeLogger {
     db.run(
       `INSERT OR REPLACE INTO trades
        (id, platform, market_id, market_question, outcome, side, order_type, price, size, filled, cost, fees,
-        order_id, status, strategy_id, strategy_name, tags_json, exit_trade_id, entry_trade_id,
+        is_maker, maker_rebate, order_id, status, strategy_id, strategy_name, tags_json, exit_trade_id, entry_trade_id,
         realized_pnl, realized_pnl_pct, created_at, filled_at, meta_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         trade.id,
         trade.platform,
@@ -232,6 +282,8 @@ export function createTradeLogger(db: Database): TradeLogger {
         trade.filled,
         trade.cost,
         trade.fees || null,
+        trade.isMaker ? 1 : 0,
+        trade.makerRebate || 0,
         trade.orderId || null,
         trade.status,
         trade.strategyId || null,
@@ -255,12 +307,28 @@ export function createTradeLogger(db: Database): TradeLogger {
   // Attach methods
   Object.assign(emitter, {
     logTrade(tradeData) {
+      const cost = tradeData.cost ?? tradeData.price * tradeData.size;
+      const isMaker = tradeData.orderType === 'maker' || tradeData.isMaker === true;
+
+      // Auto-calculate fees if not provided
+      let fees = tradeData.fees;
+      let makerRebate = tradeData.makerRebate ?? 0;
+
+      if (fees === undefined) {
+        const feeCalc = calculateTradeFees(tradeData.platform, cost, isMaker);
+        fees = feeCalc.fees;
+        makerRebate = feeCalc.makerRebate;
+      }
+
       const trade: Trade = {
         ...tradeData,
         id: generateId(),
         createdAt: new Date(),
         filled: tradeData.filled ?? 0,
-        cost: tradeData.cost ?? tradeData.price * tradeData.size,
+        cost,
+        fees,
+        isMaker,
+        makerRebate,
         status: tradeData.status ?? 'pending',
       };
 
@@ -274,6 +342,9 @@ export function createTradeLogger(db: Database): TradeLogger {
           side: trade.side,
           price: trade.price,
           size: trade.size,
+          isMaker: trade.isMaker,
+          fees: trade.fees,
+          makerRebate: trade.makerRebate,
           strategy: trade.strategyName,
         },
         'Trade logged'
@@ -455,6 +526,12 @@ export function createTradeLogger(db: Database): TradeLogger {
         byStrategy[key].winRate = stratTrades.length > 0 ? (stratWins.length / stratTrades.length) * 100 : 0;
       }
 
+      // Calculate maker/taker stats
+      const makerTrades = allTrades.filter((t) => t.isMaker);
+      const takerTrades = allTrades.filter((t) => !t.isMaker);
+      const totalMakerRebates = allTrades.reduce((sum, t) => sum + (t.makerRebate || 0), 0);
+      const totalFees = allTrades.reduce((sum, t) => sum + (t.fees || 0), 0);
+
       return {
         totalTrades: allTrades.length,
         winningTrades: wins.length,
@@ -468,7 +545,11 @@ export function createTradeLogger(db: Database): TradeLogger {
         largestLoss: losses.length > 0 ? Math.min(...losses.map((t) => t.realizedPnL || 0)) : 0,
         profitFactor: totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0,
         totalVolume: allTrades.reduce((sum, t) => sum + t.cost, 0),
-        totalFees: allTrades.reduce((sum, t) => sum + (t.fees || 0), 0),
+        totalFees,
+        totalMakerRebates,
+        netFees: totalFees - totalMakerRebates,
+        makerTrades: makerTrades.length,
+        takerTrades: takerTrades.length,
         byPlatform: byPlatform as any,
         byStrategy,
       };
@@ -510,13 +591,22 @@ export function createTradeLogger(db: Database): TradeLogger {
     },
 
     cleanup(olderThanDays) {
-      const result = db.run(
-        `DELETE FROM trades WHERE created_at < datetime('now', '-' || ? || ' days')`,
+      // Count trades to be deleted first
+      const countRows = db.query<{ count: number }>(
+        `SELECT COUNT(*) as count FROM trades WHERE created_at < datetime('now', '-' || ? || ' days')`,
         [olderThanDays]
       );
+      const count = countRows[0]?.count || 0;
 
-      logger.info({ olderThanDays, deleted: result.changes }, 'Cleaned up old trades');
-      return result.changes || 0;
+      if (count > 0) {
+        db.run(
+          `DELETE FROM trades WHERE created_at < datetime('now', '-' || ? || ' days')`,
+          [olderThanDays]
+        );
+      }
+
+      logger.info({ olderThanDays, deleted: count }, 'Cleaned up old trades');
+      return count;
     },
   } as Partial<TradeLogger>);
 

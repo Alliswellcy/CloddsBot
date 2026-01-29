@@ -145,7 +145,7 @@ const TEMPLATES: Record<StrategyTemplate, { description: string; defaultParams: 
     description: 'Buy when price falls below threshold, sell when above',
     defaultParams: {
       entry: [{ type: 'price_below', value: 0.3 }],
-      exit: [{ type: 'price_above', value: 0.6 }, { type: 'stop_loss', value: 0.1 }],
+      exit: [{ type: 'price_target', value: 0.6 }, { type: 'stop_loss', value: 0.1 }],
       risk: { maxPositionSize: 100, stopLossPct: 10, takeProfitPct: 30 },
       intervalMs: 300000,
     },
@@ -506,7 +506,7 @@ export function createStrategyBuilder(db: Database): StrategyBuilder {
       }));
     },
 
-    getTemplateParams(template) {
+    getTemplateParams(template): Record<string, { type: string; default: unknown; description: string }> {
       const tmpl = TEMPLATES[template];
       if (!tmpl) return {};
 
@@ -546,12 +546,22 @@ export function createStrategyBuilder(db: Database): StrategyBuilder {
     },
 
     deleteDefinition(userId, definitionId) {
-      const result = db.run(
+      // Check if definition exists before deleting
+      const existing = db.query<any>(
+        `SELECT id FROM user_strategies WHERE id = ? AND user_id = ?`,
+        [definitionId, userId]
+      );
+
+      if (existing.length === 0) {
+        return false;
+      }
+
+      db.run(
         `DELETE FROM user_strategies WHERE id = ? AND user_id = ?`,
         [definitionId, userId]
       );
 
-      return (result.changes || 0) > 0;
+      return true;
     },
   };
 }

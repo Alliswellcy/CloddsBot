@@ -150,7 +150,7 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
     };
   }
 
-  return {
+  const extension: LobsterExtension = {
     async getHottest(page?: number): Promise<LobsterStory[]> {
       const path = page && page > 1 ? `/page/${page}` : '';
       const data = await fetchJSON<any[]>(path || '/hottest');
@@ -235,7 +235,7 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
       const seenIds = new Set<string>();
 
       // Get hottest stories and filter
-      const hottest = await this.getHottest();
+      const hottest = await extension.getHottest();
       for (const story of hottest) {
         const titleLower = story.title.toLowerCase();
         const descLower = (story.description || '').toLowerCase();
@@ -253,7 +253,7 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
       const relevantTags = ['crypto', 'finance', 'law', 'politics'];
       for (const tag of relevantTags) {
         try {
-          const tagStories = await this.getByTag(tag);
+          const tagStories = await extension.getByTag(tag);
           for (const story of tagStories.slice(0, 5)) {
             if (!seenIds.has(story.shortId)) {
               seenIds.add(story.shortId);
@@ -268,4 +268,6 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
       return relevantStories.sort((a, b) => b.score - a.score).slice(0, 20);
     },
   };
+
+  return extension;
 }

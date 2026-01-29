@@ -54,6 +54,7 @@ export interface Database {
     chatType: 'dm' | 'group';
     updatedAt: Date;
   } | undefined;
+  getLatestSessionForChat(platform: string, chatId: string): Session | undefined;
   createSession(session: Session): void;
   updateSession(session: Session): void;
   deleteSession(key: string): void;

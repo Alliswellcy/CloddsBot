@@ -123,7 +123,7 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
       throw new Error(`OpenAI API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as { data: Array<{ embedding: number[] }> };
     return data.data[0].embedding;
   }
 
@@ -149,7 +149,7 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
       throw new Error(`Cohere API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as { embeddings: number[][] };
     return data.embeddings[0];
   }
 
@@ -182,7 +182,7 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
     return `mem_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  return {
+  const extension: LanceDBExtension = {
     async initialize(): Promise<void> {
       try {
         // Dynamic import for LanceDB
@@ -249,13 +249,13 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
 
         // Real LanceDB initialization
         db = await lancedb.connect(dbPath);
-        const tables = await db.tableNames();
+        const tables = await db!.tableNames();
 
         if (tables.includes(tableName)) {
-          table = await db.openTable(tableName);
+          table = await db!.openTable(tableName);
         } else {
           // Create table with initial schema
-          table = await db.createTable(tableName, [
+          table = await db!.createTable(tableName, [
             {
               id: 'init',
               content: '',
@@ -330,7 +330,7 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
     async updateImportance(id: string, importance: number): Promise<void> {
       if (!table) throw new Error('Database not initialized');
 
-      const memory = await this.getMemory(id);
+      const memory = await extension.getMemory(id);
       if (memory) {
         memory.importance = importance;
         await table.delete(`id = '${id}'`);
@@ -403,6 +403,8 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
       logger.info('LanceDB closed');
     },
   };
+
+  return extension;
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {

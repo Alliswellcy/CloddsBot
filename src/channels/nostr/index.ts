@@ -294,7 +294,7 @@ export async function createNostrChannel(
     async sendMessage(message: OutgoingMessage): Promise<string | null> {
       try {
         if (message.chatId === 'public') {
-          return await sendNote(message.text, message.replyToMessageId);
+          return await sendNote(message.text, message.thread?.replyToMessageId);
         } else {
           return await sendDM(message.chatId, message.text);
         }

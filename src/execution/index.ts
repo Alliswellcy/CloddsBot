@@ -344,7 +344,7 @@ async function placeKalshiOrder(
     count,
   };
 
-  const headers = buildKalshiHeadersForUrl(auth, 'POST', url, order);
+  const headers = buildKalshiHeadersForUrl(auth, 'POST', url);
 
   try {
     const response = await fetch(url, {

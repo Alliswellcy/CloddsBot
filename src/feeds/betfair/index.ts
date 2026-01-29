@@ -484,7 +484,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
       return auth !== null;
     },
 
-    async searchMarkets(query, options = {}) {
+    async searchMarkets(query: string, options: { marketTypes?: string[]; eventTypeIds?: string[] } = {}) {
       if (!auth) return [];
 
       try {
@@ -534,7 +534,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
       }
     },
 
-    async getMarket(marketId) {
+    async getMarket(marketId: string) {
       if (!auth) return null;
 
       try {
@@ -561,7 +561,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
       }
     },
 
-    async getMarketBook(marketId) {
+    async getMarketBook(marketId: string) {
       if (!auth) return null;
 
       try {
@@ -585,7 +585,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
       }
     },
 
-    async getOrderbook(marketId, selectionId) {
+    async getOrderbook(marketId: string, selectionId: number) {
       if (!auth) return null;
 
       try {
@@ -622,17 +622,17 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
       }
     },
 
-    subscribeToMarket(marketId) {
+    subscribeToMarket(marketId: string) {
       subscribedMarkets.add(marketId);
       subscribeMarketStream(marketId);
     },
 
-    unsubscribeFromMarket(marketId) {
+    unsubscribeFromMarket(marketId: string) {
       subscribedMarkets.delete(marketId);
       priceCache.delete(marketId);
     },
 
-    async placeBackOrder(marketId, selectionId, price, size) {
+    async placeBackOrder(marketId: string, selectionId: number, price: number, size: number) {
       if (!auth) return null;
 
       try {
@@ -679,7 +679,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
       }
     },
 
-    async placeLayOrder(marketId, selectionId, price, size) {
+    async placeLayOrder(marketId: string, selectionId: number, price: number, size: number) {
       if (!auth) return null;
 
       try {
@@ -726,7 +726,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
       }
     },
 
-    async cancelOrder(marketId, betId) {
+    async cancelOrder(marketId: string, betId: string) {
       if (!auth) return false;
 
       try {
@@ -747,7 +747,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
       }
     },
 
-    async cancelAllOrders(marketId) {
+    async cancelAllOrders(marketId?: string) {
       if (!auth) return 0;
 
       try {
@@ -767,7 +767,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
       }
     },
 
-    async getOpenOrders(marketId) {
+    async getOpenOrders(marketId?: string) {
       if (!auth) return [];
 
       try {

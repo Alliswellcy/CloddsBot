@@ -541,6 +541,10 @@ export function createAccountManager(db: Database): AccountManager {
           profitFactor: 0,
           totalVolume: 0,
           totalFees: 0,
+          totalMakerRebates: 0,
+          netFees: 0,
+          makerTrades: 0,
+          takerTrades: 0,
           byPlatform: {} as any,
           byStrategy: {},
         };

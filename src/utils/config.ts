@@ -181,6 +181,18 @@ const DEFAULT_CONFIG: Config = {
     maxDailyLoss: 200,
     stopLossCooldownMs: 10 * 60 * 1000,
   },
+  arbitrageExecution: {
+    enabled: false,
+    dryRun: true,
+    minEdge: 1.0,
+    minLiquidity: 500,
+    maxPositionSize: 100,
+    maxDailyLoss: 500,
+    maxConcurrentPositions: 3,
+    platforms: ['polymarket', 'kalshi'],
+    preferMakerOrders: true,
+    confirmationDelayMs: 0,
+  },
   whaleTracking: {
     enabled: false,
     minTradeSize: 10000,
@@ -214,6 +226,30 @@ const DEFAULT_CONFIG: Config = {
     slippageBps: 50,
     mevProtection: 'basic',
     maxPriceImpact: 3,
+  },
+  realtimeAlerts: {
+    enabled: false,
+    targets: [],
+    whaleTrades: {
+      enabled: true,
+      minSize: 50000,
+      cooldownMs: 300000,
+    },
+    arbitrage: {
+      enabled: true,
+      minEdge: 2,
+      cooldownMs: 600000,
+    },
+    priceMovement: {
+      enabled: true,
+      minChangePct: 5,
+      windowMs: 300000,
+    },
+    copyTrading: {
+      enabled: true,
+      onCopied: true,
+      onFailed: true,
+    },
   },
   alerts: {
     priceChange: { threshold: 5, windowSecs: 600 },

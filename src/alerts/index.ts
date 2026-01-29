@@ -179,7 +179,14 @@ export function createAlertService(
 
     // Load existing alerts
     try {
-      const rows = db.query<Alert & { createdAt: string; triggeredAt: string | null; lastTriggeredAt: string | null; oneTime: number }>(
+      // Raw DB row type (SQLite stores bools as integers, dates as strings)
+      type AlertRow = Omit<Alert, 'createdAt' | 'triggeredAt' | 'lastTriggeredAt' | 'oneTime'> & {
+        createdAt: string;
+        triggeredAt: string | null;
+        lastTriggeredAt: string | null;
+        oneTime: number;
+      };
+      const rows = db.query<AlertRow>(
         "SELECT * FROM alerts WHERE status = 'active'"
       );
       for (const row of rows) {
@@ -530,3 +537,16 @@ export function createAlertService(
 
   return emitter;
 }
+
+// =============================================================================
+// REALTIME ALERTS EXPORTS
+// =============================================================================
+
+export {
+  createRealtimeAlertsService,
+  connectWhaleTracker,
+  connectOpportunityFinder,
+  type RealtimeAlertsConfig,
+  type RealtimeAlertsService,
+  type AlertTarget,
+} from './realtime';

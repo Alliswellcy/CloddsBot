@@ -567,6 +567,28 @@ export interface Config {
     /** Include edge vs fair value (default: true) */
     includeEdge?: boolean;
   };
+  arbitrageExecution?: {
+    /** Enable auto-execution of arbitrage opportunities (default: false) */
+    enabled?: boolean;
+    /** Dry run mode - log but don't execute (default: true) */
+    dryRun?: boolean;
+    /** Minimum edge % to execute (default: 1.0) */
+    minEdge?: number;
+    /** Minimum liquidity $ (default: 500) */
+    minLiquidity?: number;
+    /** Maximum position size per trade $ (default: 100) */
+    maxPositionSize?: number;
+    /** Maximum daily loss $ (default: 500) */
+    maxDailyLoss?: number;
+    /** Maximum concurrent positions (default: 3) */
+    maxConcurrentPositions?: number;
+    /** Platforms to execute on */
+    platforms?: Platform[];
+    /** Use maker orders when possible (default: true) */
+    preferMakerOrders?: boolean;
+    /** Confirmation delay ms before executing (default: 0) */
+    confirmationDelayMs?: number;
+  };
   whaleTracking?: {
     /** Enable whale tracking (default: false) */
     enabled?: boolean;
@@ -626,6 +648,48 @@ export interface Config {
     mevProtection?: 'none' | 'basic' | 'aggressive';
     /** Max price impact in percent (default: 3) */
     maxPriceImpact?: number;
+  };
+  realtimeAlerts?: {
+    /** Enable real-time alerts (default: false) */
+    enabled?: boolean;
+    /** Alert targets - where to send notifications */
+    targets?: Array<{
+      platform: string;
+      chatId: string;
+      accountId?: string;
+    }>;
+    /** Whale trade alerts config */
+    whaleTrades?: {
+      enabled?: boolean;
+      /** Min trade size to alert (default: 50000) */
+      minSize?: number;
+      /** Cooldown per address in ms (default: 300000 = 5 min) */
+      cooldownMs?: number;
+    };
+    /** Arbitrage opportunity alerts config */
+    arbitrage?: {
+      enabled?: boolean;
+      /** Min edge % to alert (default: 2) */
+      minEdge?: number;
+      /** Cooldown per opportunity in ms (default: 600000 = 10 min) */
+      cooldownMs?: number;
+    };
+    /** Price movement alerts config */
+    priceMovement?: {
+      enabled?: boolean;
+      /** Min price change % to alert (default: 5) */
+      minChangePct?: number;
+      /** Time window in ms (default: 300000 = 5 min) */
+      windowMs?: number;
+    };
+    /** Copy trading alerts config */
+    copyTrading?: {
+      enabled?: boolean;
+      /** Alert on trade copied */
+      onCopied?: boolean;
+      /** Alert on copy failed */
+      onFailed?: boolean;
+    };
   };
   memory?: {
     auto?: {

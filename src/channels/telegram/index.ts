@@ -881,7 +881,8 @@ export async function createTelegramChannel(
         logger.warn({ chatId: message.chatId, messageId: message.messageId }, 'Invalid Telegram reaction target');
         return;
       }
-      const reaction = message.remove ? [] : [{ type: 'emoji' as const, emoji: message.emoji }];
+      // Cast emoji to the strict Telegram type (grammyJS uses a union of valid emojis)
+      const reaction = message.remove ? [] : [{ type: 'emoji' as const, emoji: message.emoji as '👍' }];
       await callTelegramApi(chatId, 'setMessageReaction', () =>
         bot.api.setMessageReaction(chatId, messageId, reaction)
       );

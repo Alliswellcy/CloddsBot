@@ -31,10 +31,17 @@ import { Database } from '../db/index';
 import { logger } from '../utils/logger';
 import type { Platform } from '../types';
 
-// Re-export sub-modules
+// Re-export sub-modules (avoiding duplicate exports)
 export * from './logger';
 export * from './bots/index';
-export * from '../execution/index';
+export {
+  createExecutionService,
+  type ExecutionService,
+  type ExecutionConfig,
+  type OrderRequest,
+  type OrderResult,
+  type OpenOrder,
+} from '../execution/index';
 export * from './risk';
 export * from './state';
 export * from './stream';
@@ -43,7 +50,13 @@ export * from './accounts';
 export * from './safety';
 export * from './resilience';
 export * from './secrets';
-export * from './backtest';
+export {
+  createBacktestEngine,
+  type BacktestEngine,
+  type BacktestConfig,
+  type BacktestResult,
+  type BacktestMetrics,
+} from './backtest';
 export * from './tracking';
 export * from './devtools';
 export * from './copy-trading';
@@ -158,7 +171,7 @@ export function createTradingSystem(db: Database, config: TradingSystemConfig = 
 
       // Convert signal to order request
       const orderRequest: OrderRequest = {
-        platform: signal.platform,
+        platform: signal.platform as 'polymarket' | 'kalshi',
         marketId: signal.marketId,
         tokenId: signal.meta?.tokenId as string,
         outcome: signal.outcome,
@@ -337,7 +350,9 @@ function wrapExecutionWithLogging(
           orderId: result.orderId,
           status: result.status === 'filled' ? 'filled'
             : result.status === 'open' ? 'pending'
-            : result.status || 'pending',
+            : result.status === 'cancelled' ? 'cancelled'
+            : result.status === 'expired' || result.status === 'rejected' ? 'failed'
+            : 'pending',
           meta: {
             transactionHash: result.transactionHash,
             avgFillPrice: result.avgFillPrice,
@@ -374,17 +389,7 @@ export {
   createArbitrageStrategy,
 };
 
-// Re-export types
-export type {
-  Trade,
-  TradeFilter,
-  TradeStats,
-  TradeLogger,
-  Strategy,
-  StrategyConfig,
-  Signal,
-  BotManager,
-  OpenOrder,
-  OrderRequest,
-  OrderResult,
-};
+// Re-export types (only those not already exported via export *)
+// Note: Trade, TradeFilter, TradeStats, TradeLogger are from ./logger
+// Strategy, StrategyConfig, Signal, BotManager are from ./bots/index
+// OpenOrder, OrderRequest, OrderResult are from ../execution/index (explicitly exported above)

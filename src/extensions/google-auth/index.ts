@@ -152,7 +152,7 @@ export async function createGoogleAuthExtension(
         return null;
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as { access_token: string; expires_in: number; token_type?: string };
       return {
         accessToken: data.access_token,
         expiresAt: Date.now() + data.expires_in * 1000,
@@ -187,7 +187,7 @@ export async function createGoogleAuthExtension(
         return null;
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as { access_token: string; expires_in: number; token_type?: string };
       return {
         accessToken: data.access_token,
         expiresAt: Date.now() + data.expires_in * 1000,
@@ -210,7 +210,7 @@ export async function createGoogleAuthExtension(
       );
 
       if (response.ok) {
-        const data = await response.json();
+        const data = (await response.json()) as { access_token: string; expires_in: number; token_type?: string };
         return {
           accessToken: data.access_token,
           expiresAt: Date.now() + data.expires_in * 1000,
@@ -253,7 +253,7 @@ export async function createGoogleAuthExtension(
         return null;
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as { access_token: string; expires_in?: number };
       return {
         accessToken: data.access_token,
         expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
@@ -280,7 +280,7 @@ export async function createGoogleAuthExtension(
     }
   }
 
-  return {
+  const extension: GoogleAuthExtension = {
     async getAccessToken(): Promise<string | null> {
       if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) {
         return cachedToken.accessToken;
@@ -300,7 +300,7 @@ export async function createGoogleAuthExtension(
     },
 
     async request<T>(url: string, options?: RequestInit): Promise<T> {
-      const token = await this.getAccessToken();
+      const token = await extension.getAccessToken();
       if (!token) {
         throw new Error('No Google access token available');
       }
@@ -317,13 +317,12 @@ export async function createGoogleAuthExtension(
     },
 
     getGeminiClient(): GeminiClient {
-      const self = this;
       return {
         async generateContent(prompt: string, options?: GeminiOptions): Promise<string> {
           const model = options?.model || 'gemini-pro';
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-          const result = await self.request<{ candidates: Array<{ content: { parts: Array<{ text: string }> } }> }>(
+          const result = await extension.request<{ candidates: Array<{ content: { parts: Array<{ text: string }> } }> }>(
             url,
             {
               method: 'POST',
@@ -345,7 +344,7 @@ export async function createGoogleAuthExtension(
 
         async *streamGenerateContent(prompt: string, options?: GeminiOptions): AsyncGenerator<string> {
           const model = options?.model || 'gemini-pro';
-          const token = await self.getAccessToken();
+          const token = await extension.getAccessToken();
           if (!token) throw new Error('No token');
 
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
@@ -394,8 +393,7 @@ export async function createGoogleAuthExtension(
     },
 
     getVertexClient(): VertexClient {
-      const self = this;
-      const projectId = config.projectId;
+            const projectId = config.projectId;
       const region = config.region || 'us-central1';
 
       return {
@@ -403,7 +401,7 @@ export async function createGoogleAuthExtension(
           const model = options?.model || 'gemini-1.0-pro';
           const url = `https://${region}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/google/models/${model}:generateContent`;
 
-          const result = await self.request<{ candidates: Array<{ content: { parts: Array<{ text: string }> } }> }>(
+          const result = await extension.request<{ candidates: Array<{ content: { parts: Array<{ text: string }> } }> }>(
             url,
             {
               method: 'POST',
@@ -427,7 +425,7 @@ export async function createGoogleAuthExtension(
         async getEmbeddings(texts: string[]): Promise<number[][]> {
           const url = `https://${region}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/google/models/textembedding-gecko:predict`;
 
-          const result = await self.request<{ predictions: Array<{ embeddings: { values: number[] } }> }>(url, {
+          const result = await extension.request<{ predictions: Array<{ embeddings: { values: number[] } }> }>(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -435,9 +433,11 @@ export async function createGoogleAuthExtension(
             }),
           });
 
-          return result.predictions.map((p) => p.embeddings.values);
+          return result.predictions.map((p: { embeddings: { values: number[] } }) => p.embeddings.values);
         },
       };
     },
   };
+
+  return extension;
 }

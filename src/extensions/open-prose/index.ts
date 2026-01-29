@@ -122,7 +122,7 @@ export async function createOpenProseExtension(config: OpenProseConfig): Promise
     }
   }
 
-  return {
+  const extension: OpenProseExtension = {
     async createDocument(
       title: string,
       content?: string,
@@ -345,7 +345,9 @@ export async function createOpenProseExtension(config: OpenProseConfig): Promise
           break;
       }
 
-      return this.createDocument(title, textContent, 'markdown');
+      return extension.createDocument(title, textContent, 'markdown');
     },
   };
+
+  return extension;
 }

@@ -322,7 +322,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       emitter.emit('disconnected');
     },
 
-    async searchMarkets(query, options = {}) {
+    async searchMarkets(query: string, options: Record<string, unknown> = {}) {
       // Search events
       const eventsData = await apiRequest<{ events: SmarketsEvent[] }>(
         `/events/?search=${encodeURIComponent(query)}&state=live,upcoming&limit=50`
@@ -364,7 +364,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       return results;
     },
 
-    async getMarket(marketId) {
+    async getMarket(marketId: string) {
       // Try cache first
       const cached = marketCache.get(marketId);
 
@@ -404,12 +404,12 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       return convertToMarket(marketData.market, eventData.event, contracts, quotesData?.quotes);
     },
 
-    async getQuotes(marketId) {
+    async getQuotes(marketId: string) {
       const data = await apiRequest<{ quotes: SmarketsQuote[] }>(`/markets/${marketId}/quotes/`);
       return data?.quotes || [];
     },
 
-    async getOrderbook(marketId, contractId) {
+    async getOrderbook(marketId: string, contractId: string) {
       const quotes = await feed.getQuotes(marketId);
       const quote = quotes.find((q) => q.contract_id === contractId);
 
@@ -438,17 +438,17 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       };
     },
 
-    subscribeToMarket(marketId) {
+    subscribeToMarket(marketId: string) {
       subscribedMarkets.add(marketId);
       subscribeMarketStream(marketId);
     },
 
-    unsubscribeFromMarket(marketId) {
+    unsubscribeFromMarket(marketId: string) {
       subscribedMarkets.delete(marketId);
       priceCache.delete(marketId);
     },
 
-    async placeBuyOrder(marketId, contractId, price, quantity) {
+    async placeBuyOrder(marketId: string, contractId: string, price: number, quantity: number) {
       if (!sessionToken) {
         logger.error('Smarkets: Session token required for trading');
         return null;
@@ -472,7 +472,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       return data?.order || null;
     },
 
-    async placeSellOrder(marketId, contractId, price, quantity) {
+    async placeSellOrder(marketId: string, contractId: string, price: number, quantity: number) {
       if (!sessionToken) {
         logger.error('Smarkets: Session token required for trading');
         return null;
@@ -496,7 +496,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       return data?.order || null;
     },
 
-    async cancelOrder(orderId) {
+    async cancelOrder(orderId: string) {
       if (!sessionToken) return false;
 
       const response = await apiRequest<{}>(`/orders/${orderId}/`, {
@@ -506,7 +506,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       return response !== null;
     },
 
-    async cancelAllOrders(marketId) {
+    async cancelAllOrders(marketId?: string) {
       if (!sessionToken) return 0;
 
       const endpoint = marketId ? `/orders/?market_id=${marketId}` : '/orders/';
@@ -524,7 +524,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       return cancelled;
     },
 
-    async getOpenOrders(marketId) {
+    async getOpenOrders(marketId?: string) {
       if (!sessionToken) return [];
 
       const endpoint = marketId

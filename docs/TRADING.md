@@ -389,17 +389,73 @@ const result = await measure(devtools, 'order_execution', async () => {
 Test strategies on historical data.
 
 ```typescript
-const engine = createBacktestEngine(db, {
+import { createBacktestEngine } from './trading';
+
+const engine = createBacktestEngine(db);
+
+const result = await engine.run(myStrategy, {
   startDate: new Date('2024-01-01'),
   endDate: new Date('2024-12-31'),
   initialCapital: 10000,
+  commissionPct: 0.1,
+  slippagePct: 0.05,
+  riskFreeRate: 5,
 });
 
-const result = await engine.run(myStrategy, historicalPrices);
-
 console.log('Sharpe:', result.metrics.sharpeRatio);
+console.log('Sortino:', result.metrics.sortinoRatio);
+console.log('Calmar:', result.metrics.calmarRatio);
 console.log('Max DD:', result.metrics.maxDrawdownPct);
 console.log('Win Rate:', result.metrics.winRate);
+console.log('Profit Factor:', result.metrics.profitFactor);
+```
+
+### Backtest Metrics
+
+| Metric | Description |
+|--------|-------------|
+| totalReturnPct | Total return over period |
+| annualizedReturnPct | Annualized return |
+| sharpeRatio | Risk-adjusted return (vs risk-free rate) |
+| sortinoRatio | Downside risk-adjusted return |
+| calmarRatio | Return / max drawdown |
+| maxDrawdownPct | Maximum peak-to-trough decline |
+| profitFactor | Gross profit / gross loss |
+| winRate | Percentage of winning trades |
+
+### Monte Carlo Simulation
+
+```typescript
+const monte = engine.monteCarlo(result, 10000);
+
+console.log('Prob of Profit:', monte.probabilityOfProfit);
+console.log('5th percentile:', monte.percentiles.p5);
+console.log('Expected value:', monte.expectedValue);
+```
+
+### Compare Strategies
+
+```typescript
+const comparison = await engine.compare(
+  [strategy1, strategy2, strategy3],
+  config
+);
+
+console.log('Ranking:', comparison.ranking); // Best to worst by Sharpe
+```
+
+### API Endpoint
+
+```bash
+POST /api/backtest
+Content-Type: application/json
+
+{
+  "strategyId": "mean-reversion",
+  "startDate": "2024-01-01",
+  "endDate": "2024-12-31",
+  "initialCapital": 10000
+}
 ```
 
 ## Bot State Persistence
@@ -494,6 +550,28 @@ trading.stream.addChannel({
     "slippageBps": 50,
     "mevProtection": "basic",
     "maxPriceImpact": 3
+  },
+  "realtimeAlerts": {
+    "enabled": false,
+    "targets": [
+      { "platform": "telegram", "chatId": "123456789" }
+    ],
+    "whaleTrades": { "enabled": true, "minSize": 50000, "cooldownMs": 300000 },
+    "arbitrage": { "enabled": true, "minEdge": 2, "cooldownMs": 600000 },
+    "priceMovement": { "enabled": true, "minChangePct": 5, "windowMs": 300000 },
+    "copyTrading": { "enabled": true, "onCopied": true, "onFailed": true }
+  },
+  "arbitrageExecution": {
+    "enabled": false,
+    "dryRun": true,
+    "minEdge": 1.0,
+    "minLiquidity": 500,
+    "maxPositionSize": 100,
+    "maxDailyLoss": 500,
+    "maxConcurrentPositions": 3,
+    "platforms": ["polymarket", "kalshi"],
+    "preferMakerOrders": true,
+    "confirmationDelayMs": 0
   }
 }
 ```

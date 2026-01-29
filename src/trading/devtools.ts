@@ -562,7 +562,12 @@ export function createDevTools(config: DevToolsConfig = {}): DevTools {
 
       profiles.delete(name);
 
-      this.logPerf(`profile.${name}`, duration, { unit: 'ms' });
+      // Log perf metric directly via processEvent
+      processEvent({
+        type: 'perf',
+        timestamp: new Date(),
+        data: { metric: `profile.${name}`, value: duration, tags: { unit: 'ms' } },
+      });
 
       return { duration, memory };
     },

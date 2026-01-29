@@ -1993,8 +1993,8 @@ export function createDefaultCommands(): CommandDefinition[] {
               'Variations:',
             ];
 
-            for (const [name, variation] of Object.entries(test.variations)) {
-              const acc = test.accounts.find((a) => a.variation === name);
+            for (const [name, variation] of Object.entries(test.variations) as [string, { name: string }][]) {
+              const acc = test.accounts.find((a: { variation: string; accountId?: string }) => a.variation === name);
               const stats = results?.byVariation[name];
               lines.push(`  **${variation.name}** (${acc?.accountId})`);
               if (stats) {
@@ -2475,7 +2475,7 @@ export function createDefaultCommands(): CommandDefinition[] {
               query,
               minEdge,
               limit,
-              platforms: platforms.length > 0 ? platforms : undefined,
+              platforms: platforms.length > 0 ? platforms as Platform[] : undefined,
               types: types.length > 0 ? types : undefined,
               sortBy: 'score',
             });
@@ -2623,14 +2623,14 @@ export function createDefaultCommands(): CommandDefinition[] {
             ];
 
             for (const [type, data] of Object.entries(stats.byType)) {
-              lines.push(`  ${type}: ${data.count} found, ${data.taken} taken, ${data.winRate.toFixed(1)}% WR, $${data.profit.toFixed(2)} profit`);
+              lines.push(`  ${type}: ${data.count} found, ${data.winRate.toFixed(1)}% WR, $${data.profit.toFixed(2)} profit`);
             }
 
             if (stats.bestPlatformPair) {
               const bp = stats.bestPlatformPair;
               lines.push('');
               lines.push(`Best Pair: ${bp.platforms.join(' <-> ')}`);
-              lines.push(`  ${bp.winRate.toFixed(1)}% WR, $${bp.profit.toFixed(2)} profit, ${bp.count} opportunities`);
+              lines.push(`  ${bp.winRate.toFixed(1)}% WR, $${bp.profit.toFixed(2)} profit`);
             }
 
             return lines.join('\n');
@@ -2646,10 +2646,8 @@ export function createDefaultCommands(): CommandDefinition[] {
             const lines = ['Platform Pair Performance', ''];
 
             for (const pair of pairs.slice(0, 10)) {
-              const winRate = pair.taken > 0 ? (pair.wins / pair.taken) * 100 : 0;
               lines.push(`**${pair.platforms.join(' <-> ')}**`);
-              lines.push(`  Opportunities: ${pair.count} | Taken: ${pair.taken}`);
-              lines.push(`  Win Rate: ${winRate.toFixed(1)}% | Profit: $${pair.totalProfit.toFixed(2)}`);
+              lines.push(`  Opportunities: ${pair.count}`);
               lines.push(`  Avg Edge: ${pair.avgEdge.toFixed(2)}%`);
               lines.push('');
             }

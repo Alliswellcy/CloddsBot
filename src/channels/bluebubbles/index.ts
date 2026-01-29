@@ -83,7 +83,7 @@ export async function createBlueBubblesChannel(
   async function apiRequest<T>(
     endpoint: string,
     method: string = 'GET',
-    body?: unknown
+    body?: Record<string, unknown>
   ): Promise<T> {
     const url = `${baseUrl}/api/v1${endpoint}`;
     const headers: Record<string, string> = {
@@ -96,15 +96,15 @@ export async function createBlueBubblesChannel(
     const response = await fetch(fullUrl, {
       method,
       headers,
-      body: method !== 'GET' ? JSON.stringify({ ...body, password: config.password }) : undefined,
+      body: method !== 'GET' ? JSON.stringify({ ...(body ?? {}), password: config.password }) : undefined,
     });
 
     if (!response.ok) {
       throw new Error(`BlueBubbles API error: ${response.status} ${response.statusText}`);
     }
 
-    const json = await response.json();
-    return json.data as T;
+    const json = (await response.json()) as { data: T };
+    return json.data;
   }
 
   async function sendText(chatGuid: string, message: string): Promise<void> {

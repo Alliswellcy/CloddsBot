@@ -36,3 +36,4 @@ coverage/
 # Local config (user's personal settings)
 # Note: clodds.json is the main config, don't commit with secrets
 workspace/pm-indexer
+.vercel

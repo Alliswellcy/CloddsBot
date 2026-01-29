@@ -32,6 +32,7 @@ export interface DiscordChannel {
   sendMessage(msg: OutgoingMessage): Promise<string | null>;
   editMessage?: (msg: OutgoingMessage & { messageId: string }) => Promise<void>;
   deleteMessage?: (msg: OutgoingMessage & { messageId: string }) => Promise<void>;
+  reactMessage?: (msg: ReactionMessage) => Promise<void>;
 }
 
 export interface ChannelCallbacks {

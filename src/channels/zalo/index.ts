@@ -90,7 +90,7 @@ export async function createZaloChannel(
         }),
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as { error: number; message?: string; data?: { message_id?: string } };
       if (data.error !== 0) {
         logger.error({ error: data.message }, 'Zalo API error');
         return null;

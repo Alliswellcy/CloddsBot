@@ -3,7 +3,7 @@ import type { Platform, Position, UserSettings, User } from '../types';
 export interface RiskContext {
   tradingContext?: {
     maxOrderSize?: number;
-  };
+  } | null;
   db: {
     getUser: (userId: string) => User | undefined;
     getPositions: (userId: string) => Position[];

@@ -577,8 +577,8 @@ export function createX402Server(
 export function createPaidFetch(config: X402Config): typeof fetch {
   const client = createX402Client(config);
 
-  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === 'string' ? input : input.toString();
+  return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     return client.fetch(url, init);
   };
 }

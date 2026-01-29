@@ -84,7 +84,11 @@ export async function createCopilotProxyExtension(
         return null;
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as {
+        token: string;
+        expires_in?: number;
+        endpoints?: { api?: string; proxy?: string; telemetry?: string };
+      };
 
       return {
         token: data.token,
@@ -119,7 +123,7 @@ export async function createCopilotProxyExtension(
     return cache.refreshInProgress;
   }
 
-  return {
+  const extension: CopilotProxyExtension = {
     async getToken(): Promise<CopilotToken | null> {
       // Check if we have a valid cached token
       if (cache.copilotToken && cache.copilotToken.expiresAt > Date.now() + 60000) {
@@ -131,7 +135,7 @@ export async function createCopilotProxyExtension(
     },
 
     async proxyRequest(path: string, options?: RequestInit): Promise<Response> {
-      const token = await this.getToken();
+      const token = await extension.getToken();
       if (!token) {
         throw new Error('No Copilot token available');
       }
@@ -149,7 +153,7 @@ export async function createCopilotProxyExtension(
     },
 
     async getCompletions(prompt: string, options?: CompletionOptions): Promise<string[]> {
-      const response = await this.proxyRequest('/v1/engines/copilot-codex/completions', {
+      const response = await extension.proxyRequest('/v1/engines/copilot-codex/completions', {
         method: 'POST',
         body: JSON.stringify({
           prompt,
@@ -165,8 +169,8 @@ export async function createCopilotProxyExtension(
         throw new Error(`Copilot API error: ${response.status}`);
       }
 
-      const data = await response.json();
-      return (data.choices || []).map((c: { text: string }) => c.text);
+      const data = (await response.json()) as { choices?: Array<{ text: string }> };
+      return (data.choices || []).map((c) => c.text);
     },
 
     async startProxy(): Promise<void> {
@@ -190,7 +194,7 @@ export async function createCopilotProxyExtension(
         }
 
         try {
-          const token = await this.getToken();
+          const token = await extension.getToken();
           if (!token) {
             res.writeHead(401);
             res.end(JSON.stringify({ error: 'No Copilot token available' }));
@@ -202,7 +206,7 @@ export async function createCopilotProxyExtension(
           req.on('end', async () => {
             try {
               const path = req.url || '/';
-              const response = await this.proxyRequest(path, {
+              const response = await extension.proxyRequest(path, {
                 method: req.method || 'GET',
                 body: body || undefined,
               });
@@ -238,4 +242,6 @@ export async function createCopilotProxyExtension(
       }
     },
   };
+
+  return extension;
 }

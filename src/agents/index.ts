@@ -13330,7 +13330,7 @@ async function executeTool(
               amount,
             });
 
-            if (comparison.best === 'uniswap' && comparison.uniswap) {
+            if (comparison.best === 'uniswap' && comparison.uniswapQuote) {
               const result = await executeUniswapSwap({
                 chain: chain as any,
                 inputToken,
@@ -13339,7 +13339,7 @@ async function executeTool(
                 slippageBps,
               });
               return JSON.stringify({ ...result, routedVia: 'uniswap', comparison });
-            } else if (comparison.oneinch) {
+            } else if (comparison.oneInchQuote) {
               const result = await executeOneInchSwap({
                 chain: chain as any,
                 fromToken: inputToken,
@@ -13407,7 +13407,7 @@ async function executeTool(
           const balances: Record<string, string> = {};
           for (const token of tokens) {
             try {
-              const balance = await getEvmBalance(chain as any, token);
+              const balance = await getEvmBalance(token, chain as any);
               balances[token] = balance;
             } catch {
               balances[token] = 'error';

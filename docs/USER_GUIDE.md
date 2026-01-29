@@ -166,6 +166,106 @@ Configure advanced trading features in `clodds.json`:
 | `copyTrading.sizingMode` | fixed/proportional/percentage | How to size copied trades |
 | `smartRouting.mode` | best_price/best_liquidity/lowest_fee/balanced | Routing strategy |
 | `evmDex.mevProtection` | none/basic/aggressive | MEV protection level |
+| `realtimeAlerts.enabled` | boolean | Enable push notifications (default: false) |
+| `realtimeAlerts.whaleTrades.minSize` | number | Min whale trade to alert (default: 50000) |
+| `realtimeAlerts.arbitrage.minEdge` | number | Min arb edge % to alert (default: 2) |
+| `arbitrageExecution.enabled` | boolean | Enable auto-execution (default: false) |
+| `arbitrageExecution.dryRun` | boolean | Simulate without executing (default: true) |
+| `arbitrageExecution.minEdge` | number | Min edge % to execute (default: 1.0) |
+
+## Auto-Arbitrage Execution
+
+Automatically execute detected arbitrage opportunities:
+
+```json
+{
+  "arbitrageExecution": {
+    "enabled": true,
+    "dryRun": true,
+    "minEdge": 1.0,
+    "minLiquidity": 500,
+    "maxPositionSize": 100,
+    "maxDailyLoss": 500,
+    "maxConcurrentPositions": 3,
+    "platforms": ["polymarket", "kalshi"],
+    "preferMakerOrders": true,
+    "confirmationDelayMs": 0
+  }
+}
+```
+
+| Setting | Description |
+|---------|-------------|
+| dryRun | Simulate trades without executing (recommended for testing) |
+| minEdge | Minimum edge % to trigger execution |
+| maxPositionSize | Max USD per trade |
+| maxDailyLoss | Stop executing if daily loss exceeds this |
+| maxConcurrentPositions | Maximum simultaneous positions |
+| confirmationDelayMs | Wait time before executing (allows price recheck) |
+
+The executor listens for opportunities from the opportunity finder and automatically places orders when criteria are met. Always test with `dryRun: true` first.
+
+## Real-time Alerts
+
+Push notifications for trading events. Configure in `clodds.json`:
+
+```json
+{
+  "realtimeAlerts": {
+    "enabled": true,
+    "targets": [
+      { "platform": "telegram", "chatId": "123456789" }
+    ],
+    "whaleTrades": {
+      "enabled": true,
+      "minSize": 50000,
+      "cooldownMs": 300000
+    },
+    "arbitrage": {
+      "enabled": true,
+      "minEdge": 2,
+      "cooldownMs": 600000
+    },
+    "priceMovement": {
+      "enabled": true,
+      "minChangePct": 5,
+      "windowMs": 300000
+    },
+    "copyTrading": {
+      "enabled": true,
+      "onCopied": true,
+      "onFailed": true
+    }
+  }
+}
+```
+
+| Alert Type | Trigger |
+|------------|---------|
+| Whale Trade | Large trades above minSize threshold |
+| Arbitrage | Opportunities above minEdge % |
+| Price Movement | Price changes above minChangePct % |
+| Copy Trading | When trades are copied or fail |
+
+## Performance Dashboard
+
+Access the web-based performance dashboard at:
+
+```
+http://127.0.0.1:18789/dashboard
+```
+
+The dashboard shows:
+- Total trades and win rate
+- Cumulative P&L with interactive chart
+- Sharpe ratio and max drawdown
+- Strategy breakdown with P&L per strategy
+- Recent trades table with entry/exit prices
+
+API endpoint for programmatic access:
+```
+GET /api/performance
+```
 
 ## Portfolio and P&L
 
@@ -286,6 +386,83 @@ MEV protection is automatically enabled for swaps:
 - **Ethereum**: Flashbots Protect, MEV Blocker
 - **Solana**: Jito bundles
 - **L2s**: Sequencer protection (built-in)
+
+## Telegram Mini App
+
+Access Clodds as a Telegram Mini App (Web App) for mobile-friendly portfolio and market access.
+
+### Setup
+
+1. Register your Mini App with BotFather:
+```
+/newapp
+```
+
+2. Set the Web App URL to your gateway:
+```
+https://your-domain.com/miniapp
+```
+
+3. Users can access via the menu button in your bot's chat.
+
+### Features
+
+- **Portfolio**: View total value, P&L, and recent positions
+- **Markets**: Search prediction markets across platforms
+- **Arbitrage**: Scan for opportunities with one tap
+
+The Mini App uses Telegram's native theming and haptic feedback for a native experience.
+
+### Direct Link
+
+Share the Mini App directly:
+```
+https://t.me/YourBot/app
+```
+
+## Data Sources
+
+Clodds integrates multiple external data sources for edge detection and trading signals.
+
+### News Feed
+
+RSS feeds from political and financial news sources:
+- Reuters Politics
+- NPR Politics
+- Politico
+- FiveThirtyEight
+
+Twitter/X integration (requires `X_BEARER_TOKEN` or `TWITTER_BEARER_TOKEN`):
+```json
+{
+  "feeds": {
+    "news": {
+      "enabled": true,
+      "twitter": {
+        "accounts": ["nikiivan", "NateSilver538", "redistrict"]
+      }
+    }
+  }
+}
+```
+
+### External Probability Sources
+
+Edge detection compares market prices to external data:
+
+| Source | Env Var | Description |
+|--------|---------|-------------|
+| CME FedWatch | `CME_FEDWATCH_ACCESS_TOKEN` | Fed rate probabilities |
+| FiveThirtyEight | `FIVETHIRTYEIGHT_FORECAST_URL` | Election model |
+| Silver Bulletin | `SILVER_BULLETIN_FORECAST_URL` | Nate Silver's model |
+| Odds API | `ODDS_API_KEY` | Sports betting odds |
+
+### Crypto Price Feed
+
+Real-time prices via Binance WebSocket with Coinbase/CoinGecko fallback:
+- BTC, ETH, SOL, XRP, DOGE, ADA, AVAX, MATIC, DOT, LINK
+- 24h volume and price changes
+- OHLCV historical data
 
 ## Tips
 

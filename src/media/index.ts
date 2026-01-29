@@ -716,7 +716,9 @@ export interface ImageProcessingService {
 async function loadSharp() {
   try {
     const mod = await import('sharp');
-    return (mod as { default?: typeof import('sharp') }).default ?? (mod as typeof import('sharp'));
+    // Handle both ESM and CJS module formats
+    const sharpMod = (mod as unknown as { default?: typeof import('sharp') }).default ?? (mod as unknown as typeof import('sharp'));
+    return sharpMod;
   } catch (error) {
     throw new Error(
       'Image processing requires the "sharp" package. Install it with: npm install sharp'
