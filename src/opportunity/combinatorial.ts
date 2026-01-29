@@ -11,8 +11,8 @@
  * 4. Order book imbalance signals
  */
 
-import type { Database } from 'better-sqlite3';
-import type { FeedManager } from '../feeds/types';
+import type { Database } from '../db/index';
+import type { FeedManager } from '../feeds/index';
 
 // ============================================================================
 // Types
@@ -882,7 +882,7 @@ export async function scanCombinatorialArbitrage(
 // ============================================================================
 
 export function initCombinatorialTables(db: Database): void {
-  db.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS combinatorial_opportunities (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
@@ -897,7 +897,7 @@ export function initCombinatorialTables(db: Database): void {
     )
   `);
 
-  db.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS market_clusters (
       id TEXT PRIMARY KEY,
       topic TEXT NOT NULL,
@@ -907,11 +907,11 @@ export function initCombinatorialTables(db: Database): void {
     )
   `);
 
-  db.exec(`
+  db.run(`
     CREATE INDEX IF NOT EXISTS idx_comb_opp_type ON combinatorial_opportunities(type)
   `);
 
-  db.exec(`
+  db.run(`
     CREATE INDEX IF NOT EXISTS idx_comb_opp_edge ON combinatorial_opportunities(edge_pct)
   `);
 }
@@ -922,11 +922,11 @@ export function saveCombinatorialOpportunity(
 ): void {
   const id = `comb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  db.prepare(`
+  db.run(`
     INSERT INTO combinatorial_opportunities
     (id, type, markets_json, relationship, edge_pct, confidence, strategy_json, discovered_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `, [
     id,
     opp.type,
     JSON.stringify('market' in opp ? [opp.market] : opp.markets),
@@ -935,5 +935,5 @@ export function saveCombinatorialOpportunity(
     opp.confidence,
     'strategy' in opp ? JSON.stringify(opp.strategy) : null,
     new Date().toISOString()
-  );
+  ]);
 }
