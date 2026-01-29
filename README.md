@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alsk1992/CloddsBot/actions"><img src="https://img.shields.io/github/actions/workflow/status/alsk1992/CloddsBot/ci.yml?style=for-the-badge&label=CI" alt="CI"></a>
-  <a href="https://github.com/alsk1992/CloddsBot/releases"><img src="https://img.shields.io/github/v/release/alsk1992/CloddsBot?style=for-the-badge" alt="Release"></a>
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/Node.js-20%2B-brightgreen?style=for-the-badge" alt="Node.js 20+">
-  <img src="https://img.shields.io/badge/TypeScript-5.3-blue?style=for-the-badge" alt="TypeScript">
+  <a href="https://github.com/alsk1992/CloddsBot/actions"><img src="https://img.shields.io/github/actions/workflow/status/alsk1992/CloddsBot/ci.yml?label=CI" alt="CI"></a>
+  <a href="https://github.com/alsk1992/CloddsBot/releases"><img src="https://img.shields.io/github/v/release/alsk1992/CloddsBot" alt="GitHub release"></a>
+  <a href="https://deepwiki.com/alsk1992/CloddsBot"><img src="https://img.shields.io/badge/DeepWiki-alsk1992%2FCloddsBot-blue" alt="DeepWiki"></a>
+  <a href="https://discord.gg/clodds"><img src="https://img.shields.io/discord/1234567890?label=Discord&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
 </p>
 
 <p align="center">
