@@ -164,3 +164,348 @@ Attachment fields (if provided):
 - `type`: `image|video|audio|document|voice|sticker`
 - `url` or `data` (base64)
 - `mimeType`, `filename`, `size`, `width`, `height`, `duration`, `caption`
+
+---
+
+## Cloudflare Worker API
+
+The lightweight Clodds Worker (`apps/clodds-worker`) exposes a separate REST API on Cloudflare's edge network.
+
+### Base URL
+
+```
+https://clodds-worker.<account>.workers.dev
+```
+
+### GET /api/health
+
+Health check with service status.
+
+Response:
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "timestamp": "2026-01-29T...",
+  "services": {
+    "telegram": true,
+    "discord": false,
+    "slack": false,
+    "kalshi": true,
+    "anthropic": true
+  }
+}
+```
+
+### GET /api/markets/search
+
+Search markets across platforms.
+
+Query parameters:
+- `q` or `query` (string, required): search text
+- `platform` (string, optional): `polymarket|kalshi|manifold`
+- `limit` (number, optional, max 50)
+
+Response:
+```json
+{
+  "markets": [
+    {
+      "id": "...",
+      "platform": "polymarket",
+      "question": "Will X happen?",
+      "outcomes": [{ "id": "...", "name": "Yes", "price": 0.45 }],
+      "volume24h": 12345,
+      "url": "https://polymarket.com/..."
+    }
+  ],
+  "count": 10
+}
+```
+
+### GET /api/markets/:platform/:id
+
+Get a specific market by platform and ID.
+
+Response:
+```json
+{ "market": { ... } }
+```
+
+### GET /api/markets/:platform/:id/orderbook
+
+Get orderbook for a market (Polymarket, Kalshi only).
+
+Response:
+```json
+{
+  "orderbook": {
+    "platform": "polymarket",
+    "marketId": "...",
+    "bids": [[0.45, 1000], [0.44, 500]],
+    "asks": [[0.46, 800], [0.47, 1200]],
+    "spread": 0.01,
+    "midPrice": 0.455,
+    "timestamp": 1706500000000
+  }
+}
+```
+
+### GET /api/arbitrage/scan
+
+Scan for arbitrage opportunities.
+
+Query parameters:
+- `min_edge` (number, optional): minimum edge % (default 1)
+- `platforms` (string, optional): comma-separated list
+- `limit` (number, optional, max 50)
+
+Response:
+```json
+{
+  "opportunities": [
+    {
+      "id": "polymarket-abc123",
+      "platform": "polymarket",
+      "marketId": "abc123",
+      "marketQuestion": "Will X?",
+      "yesPrice": 0.48,
+      "noPrice": 0.49,
+      "edgePct": 0.03,
+      "mode": "internal",
+      "foundAt": 1706500000000
+    }
+  ],
+  "count": 5,
+  "scannedPlatforms": ["polymarket", "kalshi"],
+  "minEdge": 1
+}
+```
+
+### GET /api/arbitrage/recent
+
+Get recently found arbitrage opportunities from database.
+
+Query parameters:
+- `limit` (number, optional, max 100)
+
+### Webhook endpoints
+
+- `POST /webhook/telegram` - Telegram Bot API webhook
+- `POST /webhook/discord` - Discord Interactions endpoint
+- `POST /webhook/slack` - Slack Events API endpoint
+
+See [apps/clodds-worker/README.md](../apps/clodds-worker/README.md) for webhook setup instructions.
+
+---
+
+## Programmatic Trading Modules
+
+The following modules can be imported and used directly in your TypeScript/JavaScript code.
+
+### EVM DEX Trading
+
+```typescript
+import { executeUniswapSwap, getUniswapQuote, executeOneInchSwap, compareDexRoutes } from 'clodds/evm';
+
+// Get quote from Uniswap V3
+const quote = await getUniswapQuote({
+  chain: 'ethereum', // 'ethereum' | 'arbitrum' | 'optimism' | 'base' | 'polygon'
+  inputToken: 'USDC',
+  outputToken: 'WETH',
+  amount: '1000',
+  slippageBps: 50,
+});
+
+// Execute swap with MEV protection
+const result = await executeUniswapSwap({
+  chain: 'ethereum',
+  inputToken: 'USDC',
+  outputToken: 'WETH',
+  amount: '1000',
+});
+
+// Compare Uniswap vs 1inch for best route
+const comparison = await compareDexRoutes({
+  chain: 'ethereum',
+  fromToken: 'USDC',
+  toToken: 'WETH',
+  amount: '1000',
+});
+console.log(`Best route: ${comparison.best}, saves ${comparison.savings}`);
+```
+
+### MEV Protection
+
+```typescript
+import { createMevProtectionService, sendFlashbotsProtect, submitJitoBundle } from 'clodds/execution/mev-protection';
+
+// Create protection service
+const mev = createMevProtectionService({
+  level: 'aggressive', // 'none' | 'basic' | 'aggressive'
+  maxPriceImpact: 3,
+  jitoTipLamports: 10000,
+});
+
+// Send EVM transaction via Flashbots Protect
+const result = await mev.sendEvmTransaction('ethereum', signedTx);
+
+// Submit Solana bundle via Jito
+const bundle = await mev.createSolanaBundle(transactions, payerPubkey);
+await mev.submitSolanaBundle(bundle);
+```
+
+### Whale Tracking
+
+```typescript
+import { createWhaleTracker, getMarketWhaleActivity } from 'clodds/feeds/polymarket/whale-tracker';
+
+const tracker = createWhaleTracker({
+  minTradeSize: 10000,    // $10k minimum
+  minPositionSize: 50000, // $50k to track
+  enableRealtime: true,
+});
+
+tracker.on('trade', (trade) => {
+  console.log(`Whale ${trade.side} $${trade.usdValue} on ${trade.marketQuestion}`);
+});
+
+tracker.on('positionOpened', (position) => {
+  console.log(`New position: ${position.address} - $${position.usdValue}`);
+});
+
+await tracker.start();
+
+// Get whale activity for a specific market
+const activity = await getMarketWhaleActivity(marketId);
+console.log(`Buy volume: $${activity.buyVolume}, Sell volume: $${activity.sellVolume}`);
+```
+
+### Copy Trading
+
+```typescript
+import { createCopyTradingService, findBestAddressesToCopy } from 'clodds/trading/copy-trading';
+
+// Find profitable addresses to copy
+const topTraders = await findBestAddressesToCopy(whaleTracker, {
+  minWinRate: 55,
+  minTrades: 10,
+  minAvgReturn: 5,
+});
+
+const copyTrader = createCopyTradingService(whaleTracker, execution, {
+  followedAddresses: topTraders.map(t => t.address),
+  sizingMode: 'fixed',    // 'fixed' | 'proportional' | 'percentage'
+  fixedSize: 100,         // $100 per trade
+  maxPositionSize: 500,   // Max $500 per market
+  copyDelayMs: 5000,      // 5s delay before copying
+  dryRun: true,           // Start in dry run mode
+});
+
+copyTrader.on('tradeCopied', (trade) => {
+  console.log(`Copied: ${trade.side} ${trade.size} @ ${trade.entryPrice}`);
+});
+
+copyTrader.start();
+
+// Follow/unfollow addresses dynamically
+copyTrader.follow('0x...');
+copyTrader.unfollow('0x...');
+```
+
+### Smart Order Routing
+
+```typescript
+import { createSmartRouter, quickPriceCompare } from 'clodds/execution/smart-router';
+
+const router = createSmartRouter(feeds, {
+  mode: 'balanced',  // 'best_price' | 'best_liquidity' | 'lowest_fee' | 'balanced'
+  enabledPlatforms: ['polymarket', 'kalshi'],
+  maxSlippage: 1,
+  preferMaker: true,
+  allowSplitting: true,
+});
+
+// Find best route for an order
+const result = await router.findBestRoute({
+  marketId: 'trump-win-2024',
+  side: 'buy',
+  size: 1000,
+  limitPrice: 0.52,
+});
+
+console.log(`Best platform: ${result.bestRoute.platform}`);
+console.log(`Net price: ${result.bestRoute.netPrice}`);
+console.log(`Savings: $${result.totalSavings}`);
+
+// Quick price comparison
+const prices = await quickPriceCompare(feeds, 'trump-win-2024');
+console.log(prices); // { polymarket: 0.52, kalshi: 0.54 }
+```
+
+### Auto-Arbitrage Execution
+
+```typescript
+import { createOpportunityExecutor } from 'clodds/opportunity/executor';
+
+const executor = createOpportunityExecutor(finder, execution, {
+  minEdge: 1.0,           // Minimum 1% edge
+  minLiquidity: 500,      // Minimum $500 liquidity
+  maxPositionSize: 100,   // Max $100 per trade
+  maxDailyLoss: 500,      // Stop after $500 daily loss
+  maxConcurrentPositions: 3,
+  preferMakerOrders: true,
+  dryRun: true,           // Start in dry run mode
+});
+
+executor.on('executed', (opp, result) => {
+  console.log(`Executed: ${opp.id}, profit: $${result.actualProfit}`);
+});
+
+executor.on('skipped', (opp, reason) => {
+  console.log(`Skipped: ${reason}`);
+});
+
+executor.start();
+
+// View stats
+const stats = executor.getStats();
+console.log(`Win rate: ${stats.winRate}%, Total P&L: $${stats.totalProfit - stats.totalLoss}`);
+```
+
+### External Data Feeds
+
+```typescript
+import {
+  getFedWatchProbabilities,
+  get538Probability,
+  getRCPPollingAverage,
+  analyzeEdge,
+  calculateKelly
+} from 'clodds/feeds/external';
+
+// Get Fed rate probabilities
+const fedWatch = await getFedWatchProbabilities();
+console.log(fedWatch.get('January 2026')); // 0.85
+
+// Get election model probability
+const model = await get538Probability('Trump president');
+console.log(model?.probability); // 0.52
+
+// Get polling average
+const polls = await getRCPPollingAverage('Trump vs Biden');
+console.log(polls?.probability); // 0.48
+
+// Analyze edge vs market price
+const edge = await analyzeEdge(
+  'market-123',
+  'Will Trump win?',
+  0.45,  // market price
+  'politics'
+);
+console.log(`Fair value: ${edge.fairValue}, Edge: ${edge.edgePct}%`);
+
+// Calculate Kelly bet size
+const kelly = calculateKelly(0.45, 0.52, 10000);
+console.log(`Half Kelly: $${kelly.halfKelly}`);
+```

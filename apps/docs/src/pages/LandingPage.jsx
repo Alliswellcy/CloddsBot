@@ -17,26 +17,36 @@ const features = [
     description: 'Cross-platform, internal, and combinatorial arbitrage based on arXiv:2508.03474.',
   },
   {
-    icon: '🤖',
-    title: '21 AI Tools',
-    description: 'Trading, research, browser automation, code execution, and more.',
+    icon: '🐋',
+    title: 'Whale Tracking & Copy Trading',
+    description: 'Monitor large trades, follow successful wallets, and automatically mirror positions.',
   },
   {
     icon: '⚡',
-    title: 'Solana DeFi',
-    description: 'Jupiter, Raydium, Orca, Meteora, Pump.fun integration for token swaps.',
+    title: 'Multi-Chain DeFi',
+    description: 'Solana (Jupiter, Raydium) + EVM (Uniswap, 1inch) with MEV protection.',
+  },
+  {
+    icon: '🧠',
+    title: 'Smart Order Routing',
+    description: 'Auto-route to best price/liquidity. Maker rebates. Auto-arbitrage execution.',
   },
   {
     icon: '🛡️',
     title: 'Safety Controls',
     description: 'Circuit breakers, drawdown limits, position limits, and kill switches.',
   },
+  {
+    icon: '📡',
+    title: 'External Data Feeds',
+    description: 'CME FedWatch, 538, Silver Bulletin, RCP polls for edge detection.',
+  },
 ];
 
 const stats = [
   { value: '22', label: 'Channels' },
   { value: '9', label: 'Markets' },
-  { value: '21', label: 'Tools' },
+  { value: '10', label: 'Chains' },
   { value: '$40M+', label: 'Arb Found*' },
 ];
 
@@ -52,6 +62,15 @@ cp .env.example .env
 npm run build && npm start
 
 # Chat at http://localhost:18789/webchat`;
+
+const workerCodeExample = `# Cloudflare Workers (no server needed)
+cd apps/clodds-worker && npm install
+npx wrangler d1 create clodds
+npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler deploy
+
+# Set Telegram webhook
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://clodds-worker.<account>.workers.dev/webhook/telegram"`;
 
 export default function LandingPage() {
   return (
@@ -140,26 +159,54 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Code Example */}
+      {/* Deployment Options */}
       <section className="py-20 px-6">
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-5xl mx-auto">
           <h2 className="text-3xl font-bold text-white text-center mb-4">
-            Up and running in 2 minutes
+            Two ways to deploy
           </h2>
           <p className="text-slate-400 text-center mb-10">
-            Clone, configure, run. No complex setup required.
+            Full self-hosted or lightweight edge deployment. Choose what fits your needs.
           </p>
 
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 overflow-hidden">
-            <div className="flex items-center gap-2 px-4 py-3 bg-slate-800 border-b border-slate-700">
-              <div className="w-3 h-3 rounded-full bg-red-500"></div>
-              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-              <div className="w-3 h-3 rounded-full bg-green-500"></div>
-              <span className="ml-2 text-slate-400 text-sm">Terminal</span>
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Self-hosted */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 overflow-hidden">
+              <div className="px-6 py-4 bg-slate-800 border-b border-slate-700">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-white">Self-Hosted</h3>
+                    <p className="text-slate-400 text-sm">Full features, your server</p>
+                  </div>
+                  <span className="px-3 py-1 bg-cyan-500/20 text-cyan-400 text-xs rounded-full">Recommended</span>
+                </div>
+              </div>
+              <pre className="p-4 overflow-x-auto">
+                <code className="text-xs text-slate-300 font-mono whitespace-pre">{codeExample}</code>
+              </pre>
+              <div className="px-6 py-3 bg-slate-800/50 border-t border-slate-700 text-xs text-slate-400">
+                22 channels • 9 markets • Trading • DeFi • Bots
+              </div>
             </div>
-            <pre className="p-6 overflow-x-auto">
-              <code className="text-sm text-slate-300 font-mono whitespace-pre">{codeExample}</code>
-            </pre>
+
+            {/* Cloudflare Worker */}
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 overflow-hidden">
+              <div className="px-6 py-4 bg-slate-800 border-b border-slate-700">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-white">Cloudflare Worker</h3>
+                    <p className="text-slate-400 text-sm">Edge deployment, no server</p>
+                  </div>
+                  <span className="px-3 py-1 bg-purple-500/20 text-purple-400 text-xs rounded-full">Lightweight</span>
+                </div>
+              </div>
+              <pre className="p-4 overflow-x-auto">
+                <code className="text-xs text-slate-300 font-mono whitespace-pre">{workerCodeExample}</code>
+              </pre>
+              <div className="px-6 py-3 bg-slate-800/50 border-t border-slate-700 text-xs text-slate-400">
+                3 webhook channels • Market search • Arbitrage • Alerts
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -247,8 +294,93 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* CTA */}
+      {/* Advanced Trading */}
       <section className="py-20 px-6">
+        <div className="max-w-5xl mx-auto">
+          <h2 className="text-3xl font-bold text-white text-center mb-4">
+            Advanced Trading Features
+          </h2>
+          <p className="text-slate-400 text-center mb-10">
+            Professional-grade tools for serious traders.
+          </p>
+
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Whale Tracking */}
+            <div className="p-6 bg-slate-800/50 rounded-xl border border-slate-700">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-2xl">🐋</span>
+                <h3 className="text-lg font-semibold text-white">Whale Tracking</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-slate-400">
+                <li>• Monitor trades &gt;$10k in real-time</li>
+                <li>• Track specific wallet addresses</li>
+                <li>• View top traders leaderboard</li>
+                <li>• Position history and PnL analysis</li>
+              </ul>
+            </div>
+
+            {/* Copy Trading */}
+            <div className="p-6 bg-slate-800/50 rounded-xl border border-slate-700">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-2xl">📋</span>
+                <h3 className="text-lg font-semibold text-white">Copy Trading</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-slate-400">
+                <li>• Auto-mirror whale positions</li>
+                <li>• Configurable sizing modes</li>
+                <li>• Copy delay to avoid detection</li>
+                <li>• Built-in risk limits</li>
+              </ul>
+            </div>
+
+            {/* Smart Routing */}
+            <div className="p-6 bg-slate-800/50 rounded-xl border border-slate-700">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-2xl">🧭</span>
+                <h3 className="text-lg font-semibold text-white">Smart Order Routing</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-slate-400">
+                <li>• Best price across platforms</li>
+                <li>• Maker order preference (-0.5% rebate)</li>
+                <li>• Liquidity-aware execution</li>
+                <li>• Auto-split large orders</li>
+              </ul>
+            </div>
+
+            {/* MEV Protection */}
+            <div className="p-6 bg-slate-800/50 rounded-xl border border-slate-700">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-2xl">🛡️</span>
+                <h3 className="text-lg font-semibold text-white">MEV Protection</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-slate-400">
+                <li>• Flashbots Protect (Ethereum)</li>
+                <li>• Jito bundles (Solana)</li>
+                <li>• L2 sequencer protection</li>
+                <li>• Price impact limits</li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Chains */}
+          <div className="mt-10">
+            <h3 className="text-lg font-semibold text-white text-center mb-4">Supported Chains</h3>
+            <div className="flex flex-wrap justify-center gap-3">
+              {['Ethereum', 'Arbitrum', 'Optimism', 'Base', 'Polygon', 'Solana'].map((chain) => (
+                <span
+                  key={chain}
+                  className="px-4 py-2 bg-slate-800 border border-slate-700 rounded-full text-slate-300 text-sm"
+                >
+                  {chain}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* CTA */}
+      <section className="py-20 px-6 bg-slate-800/30">
         <div className="max-w-2xl mx-auto text-center">
           <h2 className="text-3xl font-bold text-white mb-4">
             Ready to start trading?

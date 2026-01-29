@@ -825,7 +825,7 @@ export async function scanCombinatorialArbitrage(
 
       for (const m of markets.slice(0, 200)) {
         // Convert to MarketCondition format
-        const yesPrice = m.lastPrice ?? m.probability ?? 0.5;
+        const yesPrice = m.outcomes?.[0]?.price ?? 0.5;
         allMarkets.push({
           platform,
           marketId: m.id,

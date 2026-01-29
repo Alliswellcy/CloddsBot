@@ -46,6 +46,7 @@ export * from './secrets';
 export * from './backtest';
 export * from './tracking';
 export * from './devtools';
+export * from './copy-trading';
 
 import {
   createTradeLogger,

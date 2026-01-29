@@ -644,3 +644,7 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
 
 // Export types
 export type { PolymarketApiKeyAuth, KalshiApiKeyAuth };
+
+// Re-export sub-modules
+export * from './smart-router';
+export * from './mev-protection';

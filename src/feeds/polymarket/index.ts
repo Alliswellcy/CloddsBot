@@ -468,3 +468,7 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
 
   return emitter;
 }
+
+export * from './whale-tracker';
+export * from './user-ws';
+export * from './rtds';

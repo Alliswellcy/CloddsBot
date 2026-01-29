@@ -81,6 +81,15 @@ Send these in any supported channel (Telegram, Discord, WebChat, etc.):
 - `/safety status` - safety controls
 - `/safety kill` - emergency stop
 
+**Advanced Trading:**
+- `/whale track <address>` - follow a whale address
+- `/whale top [limit]` - top traders by volume
+- `/whale activity <market>` - whale activity for market
+- `/copy start <address>` - start copy trading
+- `/copy stop` - stop copy trading
+- `/route <market> <side> <size>` - find best execution route
+- `/swap <chain> <from> <to> <amount>` - EVM DEX swap
+
 **Portfolio & Risk:**
 - `/portfolio` - show positions and P&L
 - `/pnl [24h|7d|30m] [limit=50]` - historical P&L snapshots
@@ -183,6 +192,54 @@ recent session for that chat (when available).
 
 You can also specify per-account WhatsApp DM policies under
 `channels.whatsapp.accounts.<id>.dmPolicy` (e.g. `pairing` vs `open`).
+
+## Advanced Trading Features
+
+### Whale Tracking
+
+Monitor large trades on Polymarket:
+
+```
+/whale track 0x1234...  # Follow a specific address
+/whale top 10           # Top 10 traders by volume
+/whale activity trump   # Whale activity for Trump markets
+```
+
+### Copy Trading
+
+Automatically mirror trades from successful wallets:
+
+```
+/copy start 0x1234...   # Start copying an address
+/copy config size=100   # Set copy size to $100
+/copy stop              # Stop copy trading
+```
+
+### Smart Order Routing
+
+Find the best execution across platforms:
+
+```
+/route trump buy 1000   # Find best route for $1000 buy
+```
+
+### EVM DEX Trading
+
+Trade on Uniswap/1inch across EVM chains:
+
+```
+/swap ethereum USDC WETH 1000   # Swap $1000 USDC for WETH
+/swap base USDC ETH 500         # Swap on Base
+```
+
+Supported chains: ethereum, arbitrum, optimism, base, polygon
+
+### MEV Protection
+
+MEV protection is automatically enabled for swaps:
+- **Ethereum**: Flashbots Protect, MEV Blocker
+- **Solana**: Jito bundles
+- **L2s**: Sequencer protection (built-in)
 
 ## Tips
 

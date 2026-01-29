@@ -34,6 +34,13 @@ Built on Claude with cross-platform arbitrage detection based on [arXiv:2508.034
 
 ---
 
+## Deployment Options
+
+| Option | Best For | Setup Time | Features |
+|--------|----------|------------|----------|
+| **[Self-Hosted](#quick-start)** | Full control, all features | 5 min | 22 channels, trading, DeFi, bots |
+| **[Cloudflare Worker](#cloudflare-worker)** | Lightweight, edge deployment | 2 min | 3 webhook channels, market data, arbitrage |
+
 ## Quick Start
 
 ```bash
@@ -48,6 +55,25 @@ npm run build && npm start
 Open `http://localhost:18789/webchat` — no account needed.
 
 For Telegram: add `TELEGRAM_BOT_TOKEN` to `.env` and message your bot.
+
+## Cloudflare Worker
+
+For a lightweight edge deployment without dedicated hardware:
+
+```bash
+cd apps/clodds-worker
+npm install
+npx wrangler d1 create clodds
+npx wrangler kv:namespace create CACHE
+# Update wrangler.toml with IDs
+npx wrangler d1 migrations apply clodds
+npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler deploy
+```
+
+Worker supports: Telegram, Discord, Slack webhooks | Market search | Arbitrage scanning | Price alerts
+
+See [apps/clodds-worker/README.md](./apps/clodds-worker/README.md) for full setup.
 
 ---
 
@@ -127,6 +153,8 @@ clodds version                  # Show version
 | **Arbitrage** | Cross-platform detection, combinatorial analysis, semantic matching, real-time scanning |
 | **AI** | 6 LLM providers, 4 specialized agents, semantic memory, 21 tools |
 | **Solana DeFi** | Jupiter, Raydium, Orca, Meteora, Pump.fun integration |
+| **EVM DeFi** | Uniswap V3, 1inch aggregator (ETH, ARB, OP, Base, Polygon) |
+| **Smart Trading** | Whale tracking, copy trading, smart routing, MEV protection |
 | **Payments** | x402 protocol for machine-to-machine USDC payments (Base + Solana) |
 | **Bridging** | Wormhole cross-chain token transfers |
 | **Automation** | Trading bots, cron jobs, webhooks, skills system |
@@ -194,12 +222,15 @@ Connect via any platform you already use:
 | **PredictIt** | REST | US Politics |
 
 ### Trading Features
-- Limit, market, GTC, FOK orders
+- Limit, market, GTC, FOK, POST_ONLY orders
+- Maker order rebates (Polymarket: -0.5% rebate)
 - Real-time orderbook data
 - Position tracking with cost basis
 - P&L calculation (realized + unrealized)
 - Trade history with fill prices
 - Portfolio snapshots over time
+- Auto-arbitrage execution with risk limits
+- Smart order routing (best price/liquidity)
 
 ---
 
@@ -219,6 +250,24 @@ Via Binance WebSocket with Coinbase/CoinGecko fallback.
 | **Orca** | Whirlpool concentrated liquidity |
 | **Meteora** | DLMM dynamic pools |
 | **Pump.fun** | Token launch protocol |
+
+### EVM DEX Integration (5 chains)
+
+| Chain | DEXes | Features |
+|-------|-------|----------|
+| **Ethereum** | Uniswap V3, 1inch | Full MEV protection via Flashbots |
+| **Arbitrum** | Uniswap V3, 1inch | L2 sequencer protection |
+| **Optimism** | Uniswap V3, 1inch | L2 sequencer protection |
+| **Base** | Uniswap V3, 1inch | L2 sequencer protection |
+| **Polygon** | Uniswap V3, 1inch | Standard routing |
+
+### MEV Protection
+
+| Network | Protection Method |
+|---------|------------------|
+| **Ethereum** | Flashbots Protect, MEV Blocker |
+| **Solana** | Jito bundles, tip instructions |
+| **L2s** | Sequencer-protected by default |
 
 ### Wormhole Bridging
 Cross-chain transfers between:
@@ -334,6 +383,45 @@ Edge: 7% (buy YES)
 - **Real-time scanning** — WebSocket price subscriptions
 - **Heuristic reduction** — O(2^n+m) → O(n·k) via topic clustering
 - **Win rate tracking** — Performance analytics by platform pair
+
+---
+
+## Advanced Trading
+
+### Whale Tracking (Polymarket)
+Monitor large trades and positions to identify market-moving activity:
+- Track trades >$10k automatically
+- Follow specific wallet addresses
+- Real-time WebSocket notifications
+- Position history and PnL tracking
+- Top trader leaderboard
+
+### Copy Trading
+Automatically mirror trades from successful wallets:
+- Follow multiple addresses
+- Configurable sizing (fixed, proportional, % of portfolio)
+- Copy delay to avoid detection
+- Risk limits (max position, daily loss)
+- Stop loss / take profit automation
+
+### Smart Order Routing
+Automatically route orders to the best venue:
+- **Best price** — Route to lowest ask / highest bid
+- **Best liquidity** — Route to deepest orderbook
+- **Lowest fees** — Factor in maker/taker fees
+- **Balanced** — Weighted optimization of all factors
+- **Split orders** — Execute across multiple platforms
+
+### External Data Feeds
+Compare market prices to external sources for edge detection:
+
+| Source | Type | Data |
+|--------|------|------|
+| **CME FedWatch** | Official | Fed rate probabilities |
+| **FiveThirtyEight** | Model | Election forecasts |
+| **Silver Bulletin** | Model | Nate Silver's forecasts |
+| **RealClearPolitics** | Poll | Polling averages |
+| **The Odds API** | Betting | Sports odds |
 
 ---
 
@@ -634,6 +722,7 @@ Built-in at `http://localhost:18789/webchat` — no setup needed.
 | [Trading System](./docs/TRADING.md) | Execution, bots, safety |
 | [API Reference](./docs/API.md) | HTTP endpoints |
 | [Deployment](./docs/DEPLOYMENT_GUIDE.md) | Production setup |
+| [Worker Deployment](./apps/clodds-worker/README.md) | Cloudflare Workers setup |
 
 ---
 

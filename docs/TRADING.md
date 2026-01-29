@@ -468,6 +468,142 @@ trading.stream.addChannel({
 }
 ```
 
+## Advanced Features
+
+### Whale Tracking
+
+Monitor large trades on Polymarket to identify market-moving activity.
+
+```typescript
+import { createWhaleTracker } from './feeds/polymarket/whale-tracker';
+
+const tracker = createWhaleTracker({
+  minTradeSize: 10000,    // Track trades > $10k
+  minPositionSize: 50000, // Track positions > $50k
+});
+
+tracker.on('trade', (trade) => {
+  console.log(`Whale ${trade.side}: $${trade.usdValue} on "${trade.marketQuestion}"`);
+});
+
+tracker.on('positionOpened', (position) => {
+  console.log(`New whale position: ${position.address}`);
+});
+
+await tracker.start();
+```
+
+### Copy Trading
+
+Automatically mirror trades from successful wallets.
+
+```typescript
+import { createCopyTradingService } from './trading/copy-trading';
+
+const copier = createCopyTradingService(whaleTracker, execution, {
+  followedAddresses: ['0x...', '0x...'],
+  sizingMode: 'fixed',  // 'fixed' | 'proportional' | 'percentage'
+  fixedSize: 100,       // $100 per copied trade
+  maxPositionSize: 500,
+  copyDelayMs: 5000,    // Wait 5s before copying
+  dryRun: true,
+});
+
+copier.on('tradeCopied', (trade) => console.log('Copied:', trade.id));
+copier.start();
+```
+
+### Smart Order Routing
+
+Route orders to the platform with best price/liquidity.
+
+```typescript
+import { createSmartRouter } from './execution/smart-router';
+
+const router = createSmartRouter(feeds, {
+  mode: 'balanced',  // 'best_price' | 'best_liquidity' | 'lowest_fee' | 'balanced'
+  enabledPlatforms: ['polymarket', 'kalshi'],
+  preferMaker: true,
+});
+
+const result = await router.findBestRoute({
+  marketId: 'trump-2024',
+  side: 'buy',
+  size: 1000,
+});
+
+console.log(`Best: ${result.bestRoute.platform} @ ${result.bestRoute.netPrice}`);
+console.log(`Savings: $${result.totalSavings}`);
+```
+
+### Auto-Arbitrage Execution
+
+Automatically execute detected arbitrage opportunities.
+
+```typescript
+import { createOpportunityExecutor } from './opportunity/executor';
+
+const executor = createOpportunityExecutor(finder, execution, {
+  minEdge: 1.0,              // Min 1% edge
+  maxPositionSize: 100,      // Max $100/trade
+  maxDailyLoss: 500,         // Stop at $500 loss
+  maxConcurrentPositions: 3,
+  dryRun: true,              // Test mode
+});
+
+executor.on('executed', (opp, result) => {
+  console.log(`Executed ${opp.id}: profit $${result.actualProfit}`);
+});
+
+executor.start();
+```
+
+### EVM DEX Trading
+
+Trade on Uniswap V3 and 1inch across EVM chains.
+
+```typescript
+import { executeUniswapSwap, compareDexRoutes } from './evm';
+
+// Compare Uniswap vs 1inch
+const comparison = await compareDexRoutes({
+  chain: 'ethereum',
+  fromToken: 'USDC',
+  toToken: 'WETH',
+  amount: '1000',
+});
+
+console.log(`Best route: ${comparison.best}, saves ${comparison.savings}`);
+
+// Execute with MEV protection
+const result = await executeUniswapSwap({
+  chain: 'ethereum',
+  inputToken: 'USDC',
+  outputToken: 'WETH',
+  amount: '1000',
+});
+```
+
+### MEV Protection
+
+Protect swaps from sandwich attacks and front-running.
+
+```typescript
+import { createMevProtectionService } from './execution/mev-protection';
+
+const mev = createMevProtectionService({
+  level: 'aggressive',  // 'none' | 'basic' | 'aggressive'
+  maxPriceImpact: 3,
+});
+
+// EVM: uses Flashbots Protect / MEV Blocker
+await mev.sendEvmTransaction('ethereum', signedTx);
+
+// Solana: uses Jito bundles
+const bundle = await mev.createSolanaBundle(transactions, payer);
+await mev.submitSolanaBundle(bundle);
+```
+
 ## API Reference
 
 See individual module docs:

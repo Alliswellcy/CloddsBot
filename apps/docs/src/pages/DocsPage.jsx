@@ -44,6 +44,17 @@ const navigation = [
     ],
   },
   {
+    title: 'Advanced Trading',
+    items: [
+      { id: 'whale-tracking', name: 'Whale Tracking' },
+      { id: 'copy-trading', name: 'Copy Trading' },
+      { id: 'smart-routing', name: 'Smart Order Routing' },
+      { id: 'evm-dex', name: 'EVM DEX Trading' },
+      { id: 'mev-protection', name: 'MEV Protection' },
+      { id: 'external-feeds', name: 'External Data Feeds' },
+    ],
+  },
+  {
     title: 'AI System',
     items: [
       { id: 'ai-providers', name: 'LLM Providers (6)' },
@@ -67,6 +78,14 @@ const navigation = [
       { id: 'cron-jobs', name: 'Cron Jobs' },
       { id: 'webhooks', name: 'Webhooks' },
       { id: 'extensions', name: 'Extensions (8)' },
+    ],
+  },
+  {
+    title: 'Deployment',
+    items: [
+      { id: 'deploy-options', name: 'Deployment Options' },
+      { id: 'deploy-self-hosted', name: 'Self-Hosted' },
+      { id: 'deploy-worker', name: 'Cloudflare Worker' },
     ],
   },
   {
@@ -255,7 +274,7 @@ export default function DocsPage() {
               <Badge color="green">9 Markets</Badge>
               <Badge color="purple">21 Tools</Badge>
               <Badge color="yellow">13 Skills</Badge>
-              <Badge color="orange">5 Solana DEX</Badge>
+              <Badge color="orange">10 Chains</Badge>
               <Badge color="pink">x402 Payments</Badge>
             </div>
             <p className="text-slate-500 text-sm">
@@ -946,6 +965,220 @@ Example Mispricing:
             </Subsection>
           </Section>
 
+          {/* Whale Tracking */}
+          <Section id="whale-tracking" title="Whale Tracking">
+            <p className="text-slate-400 mb-4">Monitor large trades and positions on Polymarket to identify market-moving activity.</p>
+
+            <Subsection title="Features">
+              <ul className="list-disc list-inside text-slate-400 space-y-1">
+                <li><strong>Real-time Monitoring:</strong> WebSocket stream for instant trade alerts</li>
+                <li><strong>Large Trade Detection:</strong> Track trades above configurable threshold (default $10k)</li>
+                <li><strong>Position Tracking:</strong> Monitor whale positions above threshold (default $50k)</li>
+                <li><strong>Market Activity:</strong> Aggregate whale activity per market</li>
+                <li><strong>Top Traders:</strong> Rank addresses by volume, win rate, and returns</li>
+              </ul>
+            </Subsection>
+
+            <Subsection title="Chat Commands">
+              <CodeBlock>
+{`/whale track 0x1234...  # Follow a specific address
+/whale top 10           # Top 10 traders by volume
+/whale activity trump   # Whale activity for Trump markets`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Programmatic Usage">
+              <CodeBlock title="TypeScript">
+{`import { createWhaleTracker } from 'clodds/feeds/polymarket/whale-tracker';
+
+const tracker = createWhaleTracker({
+  minTradeSize: 10000,    // $10k minimum
+  minPositionSize: 50000, // $50k to track
+  enableRealtime: true,
+});
+
+tracker.on('trade', (trade) => {
+  console.log(\`Whale \${trade.side} $\${trade.usdValue} on \${trade.marketQuestion}\`);
+});
+
+tracker.on('positionOpened', (position) => {
+  console.log(\`New position: \${position.address}\`);
+});
+
+await tracker.start();`}
+              </CodeBlock>
+            </Subsection>
+          </Section>
+
+          {/* Copy Trading */}
+          <Section id="copy-trading" title="Copy Trading">
+            <p className="text-slate-400 mb-4">Automatically mirror trades from successful wallets with configurable sizing.</p>
+
+            <Subsection title="Sizing Modes">
+              <Table
+                headers={['Mode', 'Description', 'Example']}
+                rows={[
+                  ['Fixed', 'Same size for all copied trades', '$100 per trade'],
+                  ['Proportional', 'Scale based on whale trade size', '10% of whale size'],
+                  ['Percentage', 'Percentage of your portfolio', '1% per trade'],
+                ]}
+              />
+            </Subsection>
+
+            <Subsection title="Chat Commands">
+              <CodeBlock>
+{`/copy start 0x1234...   # Start copying an address
+/copy config size=100   # Set copy size to $100
+/copy config mode=fixed # Set sizing mode
+/copy stop              # Stop copy trading`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Safety Features">
+              <ul className="list-disc list-inside text-slate-400 space-y-1">
+                <li><strong>Copy Delay:</strong> Configurable delay before copying (default 5s)</li>
+                <li><strong>Max Position Size:</strong> Limit per-market exposure</li>
+                <li><strong>Dry Run Mode:</strong> Test without real trades</li>
+                <li><strong>Filtering:</strong> Skip trades below minimum confidence</li>
+              </ul>
+            </Subsection>
+          </Section>
+
+          {/* Smart Order Routing */}
+          <Section id="smart-routing" title="Smart Order Routing">
+            <p className="text-slate-400 mb-4">Route orders to the platform with best price, liquidity, or lowest fees.</p>
+
+            <Subsection title="Routing Modes">
+              <Table
+                headers={['Mode', 'Optimizes For', 'Best When']}
+                rows={[
+                  ['best_price', 'Lowest net price after fees', 'Small orders'],
+                  ['best_liquidity', 'Maximum available depth', 'Large orders'],
+                  ['lowest_fee', 'Minimum platform fees', 'High-frequency trading'],
+                  ['balanced', 'Weighted combination', 'General use'],
+                ]}
+              />
+            </Subsection>
+
+            <Subsection title="Chat Commands">
+              <CodeBlock>
+{`/route trump buy 1000   # Find best route for $1000 buy
+/compare "fed rate"     # Compare prices across platforms`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Features">
+              <ul className="list-disc list-inside text-slate-400 space-y-1">
+                <li><strong>Cross-Platform:</strong> Polymarket, Kalshi, Betfair, Smarkets</li>
+                <li><strong>Slippage Estimation:</strong> Orderbook depth analysis</li>
+                <li><strong>Fee Comparison:</strong> Platform fee calculation</li>
+                <li><strong>Order Splitting:</strong> Split across platforms for better fill</li>
+              </ul>
+            </Subsection>
+          </Section>
+
+          {/* EVM DEX Trading */}
+          <Section id="evm-dex" title="EVM DEX Trading">
+            <p className="text-slate-400 mb-4">Trade on Uniswap V3 and 1inch across 5 EVM chains.</p>
+
+            <Subsection title="Supported Chains">
+              <Table
+                headers={['Chain', 'RPC', 'Tokens']}
+                rows={[
+                  ['Ethereum', 'ETHEREUM_RPC_URL', 'USDC, WETH, USDT, DAI'],
+                  ['Arbitrum', 'ARBITRUM_RPC_URL', 'USDC, WETH, ARB'],
+                  ['Optimism', 'OPTIMISM_RPC_URL', 'USDC, WETH, OP'],
+                  ['Base', 'BASE_RPC_URL', 'USDC, WETH'],
+                  ['Polygon', 'POLYGON_RPC_URL', 'USDC, WETH, MATIC'],
+                ]}
+              />
+            </Subsection>
+
+            <Subsection title="Chat Commands">
+              <CodeBlock>
+{`/swap ethereum USDC WETH 1000   # Swap $1000 USDC for WETH
+/swap base USDC ETH 500         # Swap on Base
+/swap arbitrum USDT USDC 2000   # Swap on Arbitrum`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Features">
+              <ul className="list-disc list-inside text-slate-400 space-y-1">
+                <li><strong>Route Comparison:</strong> Compare Uniswap vs 1inch for best price</li>
+                <li><strong>Slippage Protection:</strong> Configurable slippage tolerance (default 0.5%)</li>
+                <li><strong>Fee Tiers:</strong> Auto-select optimal Uniswap V3 fee tier</li>
+                <li><strong>Gas Estimation:</strong> Accurate gas cost calculation</li>
+              </ul>
+            </Subsection>
+          </Section>
+
+          {/* MEV Protection */}
+          <Section id="mev-protection" title="MEV Protection">
+            <p className="text-slate-400 mb-4">Protect swaps from sandwich attacks and front-running.</p>
+
+            <Subsection title="Protection by Chain">
+              <Table
+                headers={['Chain', 'Method', 'Description']}
+                rows={[
+                  ['Ethereum', 'Flashbots Protect', 'Private transaction pool'],
+                  ['Ethereum', 'MEV Blocker', 'Rebate-based protection'],
+                  ['Solana', 'Jito Bundles', 'Priority inclusion bundles'],
+                  ['L2s', 'Sequencer', 'Built-in ordering protection'],
+                ]}
+              />
+            </Subsection>
+
+            <Subsection title="Protection Levels">
+              <Table
+                headers={['Level', 'Description']}
+                rows={[
+                  ['none', 'No MEV protection (fastest)'],
+                  ['basic', 'Private mempool submission'],
+                  ['aggressive', 'Full protection + price impact limits'],
+                ]}
+              />
+            </Subsection>
+
+            <Alert type="info">MEV protection is automatically enabled for all EVM swaps. Set <code>MEV_PROTECTION_LEVEL</code> in config to adjust.</Alert>
+          </Section>
+
+          {/* External Data Feeds */}
+          <Section id="external-feeds" title="External Data Feeds">
+            <p className="text-slate-400 mb-4">Compare market prices against external models and polls for edge detection.</p>
+
+            <Subsection title="Supported Sources">
+              <Table
+                headers={['Source', 'Data Type', 'Use Case']}
+                rows={[
+                  ['CME FedWatch', 'Rate probabilities', 'Fed decision markets'],
+                  ['538/Silver', 'Election model', 'Political markets'],
+                  ['RealClearPolitics', 'Polling averages', 'Election markets'],
+                  ['PredictIt', 'Market prices', 'Cross-platform arb'],
+                  ['Metaculus', 'Community forecasts', 'Long-term predictions'],
+                ]}
+              />
+            </Subsection>
+
+            <Subsection title="Edge Detection">
+              <CodeBlock title="TypeScript">
+{`import { analyzeEdge, calculateKelly } from 'clodds/feeds/external';
+
+// Analyze edge vs external models
+const edge = await analyzeEdge(
+  'market-123',
+  'Will Trump win?',
+  0.45,  // market price
+  'politics'
+);
+console.log(\`Fair value: \${edge.fairValue}, Edge: \${edge.edgePct}%\`);
+
+// Calculate Kelly bet size
+const kelly = calculateKelly(0.45, 0.52, 10000);
+console.log(\`Half Kelly: $\${kelly.halfKelly}\`);`}
+              </CodeBlock>
+            </Subsection>
+          </Section>
+
           {/* LLM Providers */}
           <Section id="ai-providers" title="LLM Providers (6)">
             <Table
@@ -1270,6 +1503,150 @@ X402_DRY_RUN=false             # Set true for testing`}
             />
           </Section>
 
+          {/* Deployment Options */}
+          <Section id="deploy-options" title="Deployment Options">
+            <p className="text-slate-400 mb-4">Choose the deployment method that fits your needs:</p>
+            <Table
+              headers={['Option', 'Best For', 'Features', 'Infrastructure']}
+              rows={[
+                ['Self-Hosted', 'Full control, all features', '22 channels, trading, DeFi, bots', 'VPS/Server'],
+                ['Docker', 'Containerized environments', 'All features', 'Docker host'],
+                ['Cloudflare Worker', 'Lightweight edge deployment', '3 channels, market data, alerts', 'Cloudflare free tier'],
+              ]}
+            />
+            <Alert type="info">
+              For most users, the self-hosted option provides the full experience. Use the Cloudflare Worker for a quick, lightweight deployment without dedicated hardware.
+            </Alert>
+          </Section>
+
+          {/* Self-Hosted */}
+          <Section id="deploy-self-hosted" title="Self-Hosted Deployment">
+            <Subsection title="Node.js">
+              <CodeBlock title="Terminal">
+{`npm ci
+npm run build
+node dist/index.js`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Docker">
+              <CodeBlock title="Terminal">
+{`docker build -t clodds .
+docker run --rm -p 18789:18789 \\
+  -e ANTHROPIC_API_KEY=... \\
+  -e TELEGRAM_BOT_TOKEN=... \\
+  -v clodds_data:/data \\
+  clodds`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Docker Compose">
+              <CodeBlock title="Terminal">
+{`docker compose up -d --build`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="systemd (Linux)">
+              <CodeBlock title="/etc/systemd/system/clodds.service">
+{`[Unit]
+Description=Clodds Gateway
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/clodds
+EnvironmentFile=/etc/clodds/clodds.env
+ExecStart=/usr/bin/node /opt/clodds/dist/index.js
+Restart=on-failure
+User=clodds
+
+[Install]
+WantedBy=multi-user.target`}
+              </CodeBlock>
+            </Subsection>
+          </Section>
+
+          {/* Cloudflare Worker */}
+          <Section id="deploy-worker" title="Cloudflare Worker">
+            <p className="text-slate-400 mb-4">
+              Lightweight edge deployment for webhook-based channels. No dedicated server required.
+            </p>
+
+            <Subsection title="Features">
+              <FeatureGrid items={[
+                'Telegram Webhook',
+                'Discord Interactions',
+                'Slack Events API',
+                'Market Search',
+                'Price Alerts',
+                'Arbitrage Scanning',
+                'REST API',
+                'D1 Database',
+              ]} />
+            </Subsection>
+
+            <Subsection title="Limitations vs Full">
+              <Table
+                headers={['Feature', 'Full', 'Worker']}
+                rows={[
+                  ['Channels', '22', '3 (webhook-based)'],
+                  ['Markets', '9', '3 (Poly, Kalshi, Manifold)'],
+                  ['Trading', 'Full execution', 'Read-only'],
+                  ['Real-time', 'WebSocket feeds', 'Polling/cron'],
+                  ['DeFi', 'Solana integration', 'None'],
+                  ['Tools', '21', '10'],
+                ]}
+              />
+            </Subsection>
+
+            <Subsection title="Quick Setup">
+              <CodeBlock title="Terminal">
+{`cd apps/clodds-worker
+npm install
+
+# Create Cloudflare resources
+npx wrangler d1 create clodds
+npx wrangler kv:namespace create CACHE
+
+# Update wrangler.toml with returned IDs
+
+# Run migrations
+npx wrangler d1 migrations apply clodds
+
+# Set secrets
+npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put TELEGRAM_BOT_TOKEN  # optional
+
+# Deploy
+npx wrangler deploy`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Set Up Telegram Webhook">
+              <CodeBlock title="Terminal">
+{`curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://clodds-worker.<account>.workers.dev/webhook/telegram"`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="REST API Endpoints">
+              <Table
+                headers={['Endpoint', 'Description']}
+                rows={[
+                  ['GET /api/health', 'Health check with service status'],
+                  ['GET /api/markets/search?q=...', 'Search markets across platforms'],
+                  ['GET /api/markets/:platform/:id', 'Get specific market details'],
+                  ['GET /api/markets/:platform/:id/orderbook', 'Get orderbook (Poly/Kalshi)'],
+                  ['GET /api/arbitrage/scan', 'Scan for arbitrage opportunities'],
+                  ['GET /api/arbitrage/recent', 'Get recent opportunities from DB'],
+                ]}
+              />
+            </Subsection>
+
+            <Alert type="info">
+              See <a href="https://github.com/alsk1992/CloddsBot/tree/main/apps/clodds-worker" className="text-cyan-400 hover:underline">apps/clodds-worker/README.md</a> for full documentation.
+            </Alert>
+          </Section>
+
           {/* Architecture */}
           <Section id="architecture" title="Architecture">
             <CodeBlock>
@@ -1416,6 +1793,7 @@ CLODDS_MEMORY_EXTRACT_MODEL=claude-3-5-haiku-20241022`}
                 ['Bundled Skills', '13'],
                 ['LLM Providers', '6'],
                 ['Solana DEX Protocols', '5'],
+                ['EVM Chains', '5'],
                 ['Trading Strategies', '3'],
                 ['Extensions', '8'],
                 ['Agent Types', '4'],
