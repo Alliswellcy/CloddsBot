@@ -87,6 +87,71 @@ export interface CanvasTool {
 export function createCanvasTool(): CanvasTool {
   const nodes = new Map<string, CanvasNode>();
   let currentState: CanvasState | null = null;
+  const nodeQueues = new Map<string, Array<{ message: Record<string, unknown>; attempts: number }>>();
+  const broadcastQueue: Array<{ message: Record<string, unknown>; attempts: number }> = [];
+
+  const DEFAULT_SEND_RETRIES = 3;
+  const DEFAULT_SEND_RETRY_DELAY_MS = 200;
+  const DEFAULT_RESPONSE_TIMEOUT_MS = 30_000;
+
+  function isWsOpen(ws: WebSocket): boolean {
+    // 1 === WebSocket.OPEN
+    return ws.readyState === 1;
+  }
+
+  function enqueueForNode(nodeId: string, message: Record<string, unknown>, attempts = 0): void {
+    if (!nodeQueues.has(nodeId)) {
+      nodeQueues.set(nodeId, []);
+    }
+    nodeQueues.get(nodeId)!.push({ message, attempts });
+  }
+
+  function enqueueBroadcast(message: Record<string, unknown>, attempts = 0): void {
+    broadcastQueue.push({ message, attempts });
+  }
+
+  async function sendWithRetry(
+    node: CanvasNode,
+    payload: string,
+    message: Record<string, unknown>,
+    attempts = 0
+  ): Promise<void> {
+    if (!isWsOpen(node.ws)) {
+      enqueueForNode(node.id, message, attempts);
+      return;
+    }
+
+    try {
+      node.ws.send(payload);
+    } catch (error) {
+      if (attempts + 1 >= DEFAULT_SEND_RETRIES) {
+        logger.error({ error, nodeId: node.id }, 'Canvas send failed after retries');
+        enqueueForNode(node.id, message, attempts + 1);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, DEFAULT_SEND_RETRY_DELAY_MS));
+      await sendWithRetry(node, payload, message, attempts + 1);
+    }
+  }
+
+  async function flushNodeQueue(node: CanvasNode): Promise<void> {
+    const queued = nodeQueues.get(node.id);
+    if (!queued || queued.length === 0) return;
+
+    nodeQueues.delete(node.id);
+    for (const entry of queued) {
+      const payload = JSON.stringify(entry.message);
+      await sendWithRetry(node, payload, entry.message, entry.attempts);
+    }
+  }
+
+  async function flushBroadcastQueue(node: CanvasNode): Promise<void> {
+    if (broadcastQueue.length === 0) return;
+    for (const entry of broadcastQueue) {
+      const payload = JSON.stringify(entry.message);
+      await sendWithRetry(node, payload, entry.message, entry.attempts);
+    }
+  }
 
   /** Send message to node(s) */
   async function sendToNodes(
@@ -99,14 +164,22 @@ export function createCanvasTool(): CanvasTool {
 
     if (targets.length === 0) {
       logger.warn('No canvas nodes connected');
+      if (nodeId) {
+        enqueueForNode(nodeId, message);
+      } else {
+        enqueueBroadcast(message);
+      }
       return;
     }
 
     const payload = JSON.stringify(message);
     for (const node of targets) {
-      if (node && node.ws.readyState === 1) {
-        node.ws.send(payload);
+      if (!node) continue;
+      if (!isWsOpen(node.ws)) {
+        enqueueForNode(node.id, message);
+        continue;
       }
+      await sendWithRetry(node, payload, message);
     }
   }
 
@@ -114,7 +187,7 @@ export function createCanvasTool(): CanvasTool {
   async function waitForResponse<T>(
     node: CanvasNode,
     requestId: string,
-    timeout = 30000
+    timeout = DEFAULT_RESPONSE_TIMEOUT_MS
   ): Promise<T> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -187,13 +260,14 @@ export function createCanvasTool(): CanvasTool {
       const node = targetNodes[0];
       const requestId = Date.now().toString(36);
 
-      node.ws.send(JSON.stringify({
+      const message = {
         type: 'canvas.eval',
         requestId,
         payload: { script },
-      }));
+      };
+      await sendToNodes(message, node.id);
 
-      return waitForResponse<T>(node, requestId);
+      return waitForResponse<T>(node, requestId, DEFAULT_RESPONSE_TIMEOUT_MS);
     },
 
     async snapshot(nodeId?) {
@@ -208,16 +282,17 @@ export function createCanvasTool(): CanvasTool {
       const node = targetNodes[0];
       const requestId = Date.now().toString(36);
 
-      node.ws.send(JSON.stringify({
+      const message = {
         type: 'canvas.snapshot',
         requestId,
-      }));
+      };
+      await sendToNodes(message, node.id);
 
       const result = await waitForResponse<{
         image: string;
         width: number;
         height: number;
-      }>(node, requestId);
+      }>(node, requestId, DEFAULT_RESPONSE_TIMEOUT_MS);
 
       return {
         ...result,
@@ -267,18 +342,25 @@ export function createCanvasTool(): CanvasTool {
 
       logger.info({ nodeId: info.id, type: info.type }, 'Canvas node registered');
 
+      // Flush any queued messages first.
+      void flushBroadcastQueue(node);
+      void flushNodeQueue(node);
+
       // Send current state if any
       if (currentState) {
-        ws.send(JSON.stringify({
-          type: 'canvas.present',
-          requestId: 'sync',
-          payload: {
-            contentType: currentState.type,
-            content: currentState.content,
-            styles: currentState.styles,
-            scripts: currentState.scripts,
+        void sendToNodes(
+          {
+            type: 'canvas.present',
+            requestId: 'sync',
+            payload: {
+              contentType: currentState.type,
+              content: currentState.content,
+              styles: currentState.styles,
+              scripts: currentState.scripts,
+            },
           },
-        }));
+          node.id
+        );
       }
     },
 

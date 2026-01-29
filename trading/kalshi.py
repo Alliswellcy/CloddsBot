@@ -121,32 +121,132 @@ import os
 import sys
 import json
 import time
+import base64
 import requests
 from typing import Optional, List, Dict, Any
+from urllib.parse import urlparse
 
 # Credentials from environment
+KALSHI_API_KEY_ID = os.getenv("KALSHI_API_KEY_ID")
+KALSHI_PRIVATE_KEY = os.getenv("KALSHI_PRIVATE_KEY")
+KALSHI_PRIVATE_KEY_PATH = os.getenv("KALSHI_PRIVATE_KEY_PATH")
 KALSHI_EMAIL = os.getenv("KALSHI_EMAIL")
 KALSHI_PASSWORD = os.getenv("KALSHI_PASSWORD")
 
 # API URL
-BASE_URL = "https://trading-api.kalshi.com/trade-api/v2"
+BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 
 # Auth state
 _token = None
 _token_expiry = 0
+_api_auth_ready = False
+
+session = session.Session()
+
+
+def _normalize_pem(value: str) -> str:
+    if not value:
+        return value
+    trimmed = value.strip()
+    if trimmed.startswith("-----BEGIN"):
+        return trimmed
+    # Allow newline-escaped PEM
+    if "\\n" in trimmed and "BEGIN" in trimmed:
+        return trimmed.replace("\\n", "\n").strip()
+    try:
+        decoded = base64.b64decode(trimmed).decode("utf-8").strip()
+        if decoded.startswith("-----BEGIN"):
+            return decoded
+    except Exception:
+        pass
+    return trimmed
+
+
+def _load_private_key_pem() -> Optional[str]:
+    if KALSHI_PRIVATE_KEY:
+        return _normalize_pem(KALSHI_PRIVATE_KEY)
+    if KALSHI_PRIVATE_KEY_PATH:
+        try:
+            with open(KALSHI_PRIVATE_KEY_PATH, "r", encoding="utf-8") as f:
+                return _normalize_pem(f.read())
+        except Exception as e:
+            print(f"ERROR: Failed to read KALSHI_PRIVATE_KEY_PATH: {e}")
+    return None
+
+
+class KalshiAuth(requests.auth.AuthBase):
+    def __init__(self, api_key_id: str, private_key_pem: str):
+        self.api_key_id = api_key_id
+        self.private_key_pem = private_key_pem
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.backends import default_backend
+        except Exception:
+            raise ImportError("cryptography is required for Kalshi API key auth. Install with: pip install cryptography")
+
+        self._serialization = serialization
+        self._backend = default_backend()
+
+        self._private_key = serialization.load_pem_private_key(
+            private_key_pem.encode("utf-8"), password=None, backend=self._backend
+        )
+
+    def __call__(self, r: requests.PreparedRequest) -> requests.PreparedRequest:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+
+        timestamp_ms = str(int(time.time() * 1000))
+        parsed = urlparse(r.url or "")
+        path = parsed.path
+        message = f"{timestamp_ms}{r.method}{path}".encode("utf-8")
+        signature = self._private_key.sign(
+            message,
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+            hashes.SHA256(),
+        )
+
+        r.headers["KALSHI-ACCESS-KEY"] = self.api_key_id
+        r.headers["KALSHI-ACCESS-TIMESTAMP"] = timestamp_ms
+        r.headers["KALSHI-ACCESS-SIGNATURE"] = base64.b64encode(signature).decode("utf-8")
+        return r
+
+
+def _init_api_auth() -> bool:
+    global _api_auth_ready
+    if _api_auth_ready:
+        return True
+    if not KALSHI_API_KEY_ID:
+        return False
+
+    private_key_pem = _load_private_key_pem()
+    if not private_key_pem:
+        print("ERROR: Missing KALSHI_PRIVATE_KEY or KALSHI_PRIVATE_KEY_PATH for Kalshi API key auth.")
+        return False
+
+    try:
+        session.auth = KalshiAuth(KALSHI_API_KEY_ID, private_key_pem)
+        _api_auth_ready = True
+        return True
+    except Exception as e:
+        print(f"ERROR: Kalshi API key auth failed: {e}")
+        return False
 
 
 def _ensure_auth():
     """Refresh token if expired"""
     global _token, _token_expiry
 
+    # API key auth has priority
+    if _init_api_auth():
+        return True
+
     if not KALSHI_EMAIL or not KALSHI_PASSWORD:
-        print("ERROR: Set KALSHI_EMAIL and KALSHI_PASSWORD environment variables")
+        print("ERROR: Set KALSHI_API_KEY_ID + KALSHI_PRIVATE_KEY (preferred) or KALSHI_EMAIL + KALSHI_PASSWORD")
         return False
 
     if time.time() > _token_expiry - 60:  # Refresh 1 min before expiry
         try:
-            r = requests.post(f"{BASE_URL}/login", json={
+            r = session.post(f"{BASE_URL}/login", json={
                 "email": KALSHI_EMAIL,
                 "password": KALSHI_PASSWORD
             })
@@ -166,6 +266,10 @@ def _headers():
     """Get auth headers"""
     if not _ensure_auth():
         return {}
+    if _api_auth_ready:
+        return {
+            "Content-Type": "application/json"
+        }
     return {
         "Authorization": f"Bearer {_token}",
         "Content-Type": "application/json"
@@ -176,7 +280,7 @@ def search_markets(query: str = None, status: str = "open", limit: int = 20) -> 
     """Search for markets"""
     params = {"status": status, "limit": limit}
 
-    r = requests.get(f"{BASE_URL}/markets", headers=_headers(), params=params)
+    r = session.get(f"{BASE_URL}/markets", headers=_headers(), params=params)
     if r.status_code != 200:
         print(f"ERROR: Search failed: {r.status_code} - {r.text}")
         return []
@@ -208,7 +312,7 @@ def search_markets(query: str = None, status: str = "open", limit: int = 20) -> 
 
 def get_market(ticker: str) -> Optional[Dict]:
     """Get single market details"""
-    r = requests.get(f"{BASE_URL}/markets/{ticker}", headers=_headers())
+    r = session.get(f"{BASE_URL}/markets/{ticker}", headers=_headers())
     if r.status_code != 200:
         print(f"ERROR: Market fetch failed: {r.status_code}")
         return None
@@ -269,7 +373,7 @@ def place_order(
         payload["yes_price"] = int(price) if side.lower() == "yes" else (100 - int(price))
 
     try:
-        r = requests.post(f"{BASE_URL}/portfolio/orders", headers=_headers(), json=payload)
+        r = session.post(f"{BASE_URL}/portfolio/orders", headers=_headers(), json=payload)
 
         if r.status_code != 200:
             return {"success": False, "error": f"Order failed: {r.status_code} - {r.text}"}
@@ -309,7 +413,7 @@ def cancel_order(order_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.delete(f"{BASE_URL}/portfolio/orders/{order_id}", headers=_headers())
+        r = session.delete(f"{BASE_URL}/portfolio/orders/{order_id}", headers=_headers())
 
         if r.status_code not in [200, 204]:
             return {"success": False, "error": f"Cancel failed: {r.status_code}"}
@@ -325,7 +429,7 @@ def get_open_orders() -> List[Dict]:
     if not _ensure_auth():
         return []
 
-    r = requests.get(f"{BASE_URL}/portfolio/orders", headers=_headers())
+    r = session.get(f"{BASE_URL}/portfolio/orders", headers=_headers())
     if r.status_code != 200:
         print(f"ERROR: Orders fetch failed: {r.status_code}")
         return []
@@ -348,7 +452,7 @@ def get_positions() -> List[Dict]:
     if not _ensure_auth():
         return []
 
-    r = requests.get(f"{BASE_URL}/portfolio/positions", headers=_headers())
+    r = session.get(f"{BASE_URL}/portfolio/positions", headers=_headers())
     if r.status_code != 200:
         print(f"ERROR: Positions fetch failed: {r.status_code}")
         return []
@@ -388,7 +492,7 @@ def get_balance() -> Dict:
     if not _ensure_auth():
         return {"available": 0, "portfolio_value": 0}
 
-    r = requests.get(f"{BASE_URL}/portfolio/balance", headers=_headers())
+    r = session.get(f"{BASE_URL}/portfolio/balance", headers=_headers())
     if r.status_code != 200:
         print(f"ERROR: Balance fetch failed: {r.status_code}")
         return {"available": 0, "portfolio_value": 0}
@@ -407,7 +511,7 @@ def get_balance() -> Dict:
 def get_exchange_status() -> Dict:
     """Get current exchange operational status"""
     try:
-        r = requests.get(f"{BASE_URL}/exchange/status")
+        r = session.get(f"{BASE_URL}/exchange/status")
         if r.status_code == 200:
             return {"success": True, "status": r.json()}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -418,7 +522,7 @@ def get_exchange_status() -> Dict:
 def get_exchange_schedule() -> Dict:
     """Get exchange trading hours and schedule"""
     try:
-        r = requests.get(f"{BASE_URL}/exchange/schedule")
+        r = session.get(f"{BASE_URL}/exchange/schedule")
         if r.status_code == 200:
             return {"success": True, "schedule": r.json()}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -429,7 +533,7 @@ def get_exchange_schedule() -> Dict:
 def get_announcements() -> Dict:
     """Get platform-wide announcements"""
     try:
-        r = requests.get(f"{BASE_URL}/exchange/announcements")
+        r = session.get(f"{BASE_URL}/exchange/announcements")
         if r.status_code == 200:
             return {"success": True, "announcements": r.json()}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -444,7 +548,7 @@ def get_announcements() -> Dict:
 def get_orderbook(ticker: str) -> Dict:
     """Get orderbook for a market"""
     try:
-        r = requests.get(f"{BASE_URL}/markets/{ticker}/orderbook", headers=_headers())
+        r = session.get(f"{BASE_URL}/markets/{ticker}/orderbook", headers=_headers())
         if r.status_code == 200:
             data = r.json().get("orderbook", {})
             return {
@@ -464,7 +568,7 @@ def get_market_trades(ticker: str = None, limit: int = 100) -> Dict:
     if ticker:
         params["ticker"] = ticker
     try:
-        r = requests.get(f"{BASE_URL}/markets/trades", headers=_headers(), params=params)
+        r = session.get(f"{BASE_URL}/markets/trades", headers=_headers(), params=params)
         if r.status_code == 200:
             return {"success": True, "trades": r.json().get("trades", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -483,7 +587,7 @@ def get_candlesticks(series_ticker: str, ticker: str, interval: int = 60) -> Dic
     """
     params = {"period_interval": interval}
     try:
-        r = requests.get(
+        r = session.get(
             f"{BASE_URL}/series/{series_ticker}/markets/{ticker}/candlesticks",
             headers=_headers(), params=params
         )
@@ -506,7 +610,7 @@ def get_events(status: str = None, series_ticker: str = None, limit: int = 100) 
     if series_ticker:
         params["series_ticker"] = series_ticker
     try:
-        r = requests.get(f"{BASE_URL}/events", headers=_headers(), params=params)
+        r = session.get(f"{BASE_URL}/events", headers=_headers(), params=params)
         if r.status_code == 200:
             events = r.json().get("events", [])
             return {
@@ -529,7 +633,7 @@ def get_event(event_ticker: str) -> Dict:
     """Get specific event with nested markets"""
     params = {"with_nested_markets": True}
     try:
-        r = requests.get(f"{BASE_URL}/events/{event_ticker}", headers=_headers(), params=params)
+        r = session.get(f"{BASE_URL}/events/{event_ticker}", headers=_headers(), params=params)
         if r.status_code == 200:
             return {"success": True, "event": r.json().get("event", {})}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -543,7 +647,7 @@ def get_series(category: str = None) -> Dict:
     if category:
         params["category"] = category
     try:
-        r = requests.get(f"{BASE_URL}/series", headers=_headers(), params=params)
+        r = session.get(f"{BASE_URL}/series", headers=_headers(), params=params)
         if r.status_code == 200:
             return {"success": True, "series": r.json().get("series", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -555,7 +659,7 @@ def get_series_info(series_ticker: str) -> Dict:
     """Get specific series details"""
     params = {"include_volume": True}
     try:
-        r = requests.get(f"{BASE_URL}/series/{series_ticker}", headers=_headers(), params=params)
+        r = session.get(f"{BASE_URL}/series/{series_ticker}", headers=_headers(), params=params)
         if r.status_code == 200:
             return {"success": True, "series": r.json().get("series", {})}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -572,7 +676,7 @@ def get_order(order_id: str) -> Dict:
     if not _ensure_auth():
         return {"success": False, "error": "Authentication failed"}
     try:
-        r = requests.get(f"{BASE_URL}/portfolio/orders/{order_id}", headers=_headers())
+        r = session.get(f"{BASE_URL}/portfolio/orders/{order_id}", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "order": r.json().get("order", {})}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -602,7 +706,7 @@ def market_order(ticker: str, side: str, action: str, count: int) -> Dict:
     }
 
     try:
-        r = requests.post(f"{BASE_URL}/portfolio/orders", headers=_headers(), json=payload)
+        r = session.post(f"{BASE_URL}/portfolio/orders", headers=_headers(), json=payload)
         if r.status_code == 200:
             return {"success": True, "order": r.json().get("order", {})}
         return {"success": False, "error": f"HTTP {r.status_code} - {r.text}"}
@@ -624,7 +728,7 @@ def batch_create_orders(orders: List[Dict]) -> Dict:
         return {"success": False, "error": "Maximum 20 orders per batch"}
 
     try:
-        r = requests.post(
+        r = session.post(
             f"{BASE_URL}/portfolio/orders/batched",
             headers=_headers(),
             json={"orders": orders}
@@ -642,7 +746,7 @@ def batch_cancel_orders(order_ids: List[str]) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.delete(
+        r = session.delete(
             f"{BASE_URL}/portfolio/orders/batched",
             headers=_headers(),
             json={"ids": order_ids}
@@ -693,7 +797,7 @@ def amend_order(order_id: str, price: int = None, count: int = None) -> Dict:
         return {"success": False, "error": "Must specify price and/or count"}
 
     try:
-        r = requests.post(
+        r = session.post(
             f"{BASE_URL}/portfolio/orders/{order_id}/amend",
             headers=_headers(),
             json=payload
@@ -717,7 +821,7 @@ def decrease_order(order_id: str, reduce_by: int) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.post(
+        r = session.post(
             f"{BASE_URL}/portfolio/orders/{order_id}/decrease",
             headers=_headers(),
             json={"reduce_by": int(reduce_by)}
@@ -735,7 +839,7 @@ def get_queue_position(order_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(
+        r = session.get(
             f"{BASE_URL}/portfolio/orders/{order_id}/queue_position",
             headers=_headers()
         )
@@ -752,7 +856,7 @@ def get_queue_positions() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/portfolio/orders/queue_positions", headers=_headers())
+        r = session.get(f"{BASE_URL}/portfolio/orders/queue_positions", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "queue_positions": r.json().get("queue_positions", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -776,7 +880,7 @@ def get_fills(ticker: str = None, order_id: str = None, limit: int = 100) -> Dic
         params["order_id"] = order_id
 
     try:
-        r = requests.get(f"{BASE_URL}/portfolio/fills", headers=_headers(), params=params)
+        r = session.get(f"{BASE_URL}/portfolio/fills", headers=_headers(), params=params)
         if r.status_code == 200:
             return {"success": True, "fills": r.json().get("fills", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -791,7 +895,7 @@ def get_settlements(limit: int = 100) -> Dict:
 
     params = {"limit": limit}
     try:
-        r = requests.get(f"{BASE_URL}/portfolio/settlements", headers=_headers(), params=params)
+        r = session.get(f"{BASE_URL}/portfolio/settlements", headers=_headers(), params=params)
         if r.status_code == 200:
             return {"success": True, "settlements": r.json().get("settlements", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -809,7 +913,7 @@ def get_account_limits() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/account/limits", headers=_headers())
+        r = session.get(f"{BASE_URL}/account/limits", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "limits": r.json()}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -823,7 +927,7 @@ def get_api_keys() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/api_keys", headers=_headers())
+        r = session.get(f"{BASE_URL}/api_keys", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "api_keys": r.json().get("api_keys", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -837,7 +941,7 @@ def create_api_key() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.post(f"{BASE_URL}/api_keys/generate", headers=_headers())
+        r = session.post(f"{BASE_URL}/api_keys/generate", headers=_headers())
         if r.status_code == 200:
             data = r.json()
             return {
@@ -857,7 +961,7 @@ def delete_api_key(api_key: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.delete(f"{BASE_URL}/api_keys/{api_key}", headers=_headers())
+        r = session.delete(f"{BASE_URL}/api_keys/{api_key}", headers=_headers())
         if r.status_code in [200, 204]:
             return {"success": True, "deleted": api_key}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -872,7 +976,7 @@ def delete_api_key(api_key: str) -> Dict:
 def get_fee_changes() -> Dict:
     """Get upcoming series fee changes"""
     try:
-        r = requests.get(f"{BASE_URL}/series/fee_changes", headers=_headers())
+        r = session.get(f"{BASE_URL}/series/fee_changes", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "fee_changes": r.json().get("fee_changes", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -885,7 +989,7 @@ def get_user_data_timestamp() -> Dict:
     if not _ensure_auth():
         return {"success": False, "error": "Authentication failed"}
     try:
-        r = requests.get(f"{BASE_URL}/exchange/user_data_timestamp", headers=_headers())
+        r = session.get(f"{BASE_URL}/exchange/user_data_timestamp", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "timestamp": r.json()}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -905,7 +1009,7 @@ def batch_candlesticks(tickers: List[Dict]) -> Dict:
         tickers: List of dicts with series_ticker, ticker, period_interval
     """
     try:
-        r = requests.post(
+        r = session.post(
             f"{BASE_URL}/markets/candlesticks",
             headers=_headers(),
             json={"markets": tickers}
@@ -924,7 +1028,7 @@ def batch_candlesticks(tickers: List[Dict]) -> Dict:
 def get_event_metadata(event_ticker: str) -> Dict:
     """Get metadata for an event (rules, resolution criteria, etc.)"""
     try:
-        r = requests.get(f"{BASE_URL}/events/{event_ticker}/metadata", headers=_headers())
+        r = session.get(f"{BASE_URL}/events/{event_ticker}/metadata", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "metadata": r.json()}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -936,7 +1040,7 @@ def get_event_candlesticks(series_ticker: str, event_ticker: str, interval: int 
     """Get candlestick data for an event"""
     params = {"period_interval": interval}
     try:
-        r = requests.get(
+        r = session.get(
             f"{BASE_URL}/series/{series_ticker}/events/{event_ticker}/candlesticks",
             headers=_headers(), params=params
         )
@@ -950,7 +1054,7 @@ def get_event_candlesticks(series_ticker: str, event_ticker: str, interval: int 
 def get_forecast_history(series_ticker: str, event_ticker: str) -> Dict:
     """Get forecast percentile history for an event"""
     try:
-        r = requests.get(
+        r = session.get(
             f"{BASE_URL}/series/{series_ticker}/events/{event_ticker}/forecast_percentile_history",
             headers=_headers()
         )
@@ -964,7 +1068,7 @@ def get_forecast_history(series_ticker: str, event_ticker: str) -> Dict:
 def get_multivariate_events() -> Dict:
     """Get multivariate events (events with multiple correlated markets)"""
     try:
-        r = requests.get(f"{BASE_URL}/events/multivariate", headers=_headers())
+        r = session.get(f"{BASE_URL}/events/multivariate", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "events": r.json().get("events", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -992,7 +1096,7 @@ def create_order_group(orders: List[Dict], max_loss: int = None) -> Dict:
         payload["max_loss"] = int(max_loss)
 
     try:
-        r = requests.post(
+        r = session.post(
             f"{BASE_URL}/portfolio/order_groups/create",
             headers=_headers(),
             json=payload
@@ -1010,7 +1114,7 @@ def get_order_groups() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/portfolio/order_groups", headers=_headers())
+        r = session.get(f"{BASE_URL}/portfolio/order_groups", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "order_groups": r.json().get("order_groups", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1024,7 +1128,7 @@ def get_order_group(group_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/portfolio/order_groups/{group_id}", headers=_headers())
+        r = session.get(f"{BASE_URL}/portfolio/order_groups/{group_id}", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "order_group": r.json().get("order_group", {})}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1038,7 +1142,7 @@ def update_order_group_limit(group_id: str, max_loss: int) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.put(
+        r = session.put(
             f"{BASE_URL}/portfolio/order_groups/{group_id}/limit",
             headers=_headers(),
             json={"max_loss": int(max_loss)}
@@ -1056,7 +1160,7 @@ def trigger_order_group(group_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.put(
+        r = session.put(
             f"{BASE_URL}/portfolio/order_groups/{group_id}/trigger",
             headers=_headers()
         )
@@ -1073,7 +1177,7 @@ def reset_order_group(group_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.put(
+        r = session.put(
             f"{BASE_URL}/portfolio/order_groups/{group_id}/reset",
             headers=_headers()
         )
@@ -1090,7 +1194,7 @@ def delete_order_group(group_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.delete(
+        r = session.delete(
             f"{BASE_URL}/portfolio/order_groups/{group_id}",
             headers=_headers()
         )
@@ -1111,7 +1215,7 @@ def get_resting_order_value() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(
+        r = session.get(
             f"{BASE_URL}/portfolio/summary/total_resting_order_value",
             headers=_headers()
         )
@@ -1132,7 +1236,7 @@ def create_subaccount(name: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.post(
+        r = session.post(
             f"{BASE_URL}/portfolio/subaccounts",
             headers=_headers(),
             json={"name": name}
@@ -1150,7 +1254,7 @@ def get_subaccount_balances() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/portfolio/subaccounts/balances", headers=_headers())
+        r = session.get(f"{BASE_URL}/portfolio/subaccounts/balances", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "balances": r.json().get("balances", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1171,7 +1275,7 @@ def subaccount_transfer(from_id: str, to_id: str, amount: int) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.post(
+        r = session.post(
             f"{BASE_URL}/portfolio/subaccounts/transfer",
             headers=_headers(),
             json={"from_subaccount_id": from_id, "to_subaccount_id": to_id, "amount": int(amount)}
@@ -1189,7 +1293,7 @@ def get_subaccount_transfers() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/portfolio/subaccounts/transfers", headers=_headers())
+        r = session.get(f"{BASE_URL}/portfolio/subaccounts/transfers", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "transfers": r.json().get("transfers", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1207,7 +1311,7 @@ def get_comms_id() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/communications/id", headers=_headers())
+        r = session.get(f"{BASE_URL}/communications/id", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "comms_id": r.json()}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1240,7 +1344,7 @@ def create_rfq(ticker: str, side: str, count: int, min_price: int = None, max_pr
         payload["max_price"] = int(max_price)
 
     try:
-        r = requests.post(f"{BASE_URL}/communications/rfqs", headers=_headers(), json=payload)
+        r = session.post(f"{BASE_URL}/communications/rfqs", headers=_headers(), json=payload)
         if r.status_code == 200:
             return {"success": True, "rfq": r.json().get("rfq", {})}
         return {"success": False, "error": f"HTTP {r.status_code} - {r.text}"}
@@ -1254,7 +1358,7 @@ def get_rfqs() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/communications/rfqs", headers=_headers())
+        r = session.get(f"{BASE_URL}/communications/rfqs", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "rfqs": r.json().get("rfqs", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1268,7 +1372,7 @@ def get_rfq(rfq_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/communications/rfqs/{rfq_id}", headers=_headers())
+        r = session.get(f"{BASE_URL}/communications/rfqs/{rfq_id}", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "rfq": r.json().get("rfq", {})}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1282,7 +1386,7 @@ def cancel_rfq(rfq_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.delete(f"{BASE_URL}/communications/rfqs/{rfq_id}", headers=_headers())
+        r = session.delete(f"{BASE_URL}/communications/rfqs/{rfq_id}", headers=_headers())
         if r.status_code in [200, 204]:
             return {"success": True, "cancelled": rfq_id}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1302,7 +1406,7 @@ def create_quote(rfq_id: str, price: int) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.post(
+        r = session.post(
             f"{BASE_URL}/communications/quotes",
             headers=_headers(),
             json={"rfq_id": rfq_id, "price": int(price)}
@@ -1320,7 +1424,7 @@ def get_quotes() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/communications/quotes", headers=_headers())
+        r = session.get(f"{BASE_URL}/communications/quotes", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "quotes": r.json().get("quotes", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1334,7 +1438,7 @@ def get_quote(quote_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/communications/quotes/{quote_id}", headers=_headers())
+        r = session.get(f"{BASE_URL}/communications/quotes/{quote_id}", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "quote": r.json().get("quote", {})}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1348,7 +1452,7 @@ def cancel_quote(quote_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.delete(f"{BASE_URL}/communications/quotes/{quote_id}", headers=_headers())
+        r = session.delete(f"{BASE_URL}/communications/quotes/{quote_id}", headers=_headers())
         if r.status_code in [200, 204]:
             return {"success": True, "cancelled": quote_id}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1362,7 +1466,7 @@ def accept_quote(quote_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.put(
+        r = session.put(
             f"{BASE_URL}/communications/quotes/{quote_id}/accept",
             headers=_headers()
         )
@@ -1379,7 +1483,7 @@ def confirm_quote(quote_id: str) -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.put(
+        r = session.put(
             f"{BASE_URL}/communications/quotes/{quote_id}/confirm",
             headers=_headers()
         )
@@ -1397,7 +1501,7 @@ def confirm_quote(quote_id: str) -> Dict:
 def get_collections() -> Dict:
     """List all multivariate event collections"""
     try:
-        r = requests.get(f"{BASE_URL}/multivariate_event_collections", headers=_headers())
+        r = session.get(f"{BASE_URL}/multivariate_event_collections", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "collections": r.json().get("collections", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1408,7 +1512,7 @@ def get_collections() -> Dict:
 def get_collection(collection_ticker: str) -> Dict:
     """Get specific multivariate collection"""
     try:
-        r = requests.get(
+        r = session.get(
             f"{BASE_URL}/multivariate_event_collections/{collection_ticker}",
             headers=_headers()
         )
@@ -1422,7 +1526,7 @@ def get_collection(collection_ticker: str) -> Dict:
 def get_collection_lookup(collection_ticker: str) -> Dict:
     """Get market lookup for a multivariate collection"""
     try:
-        r = requests.get(
+        r = session.get(
             f"{BASE_URL}/multivariate_event_collections/{collection_ticker}/lookup",
             headers=_headers()
         )
@@ -1436,7 +1540,7 @@ def get_collection_lookup(collection_ticker: str) -> Dict:
 def get_collection_lookup_history(collection_ticker: str) -> Dict:
     """Get lookup history for a multivariate collection"""
     try:
-        r = requests.get(
+        r = session.get(
             f"{BASE_URL}/multivariate_event_collections/{collection_ticker}/lookup_history",
             headers=_headers()
         )
@@ -1460,7 +1564,7 @@ def get_live_data(data_type: str, milestone_id: str) -> Dict:
         milestone_id: Milestone ID
     """
     try:
-        r = requests.get(
+        r = session.get(
             f"{BASE_URL}/live_data/{data_type}/milestone/{milestone_id}",
             headers=_headers()
         )
@@ -1479,7 +1583,7 @@ def get_live_data_batch(requests_list: List[Dict]) -> Dict:
         requests_list: List of dicts with type and milestone_id
     """
     try:
-        r = requests.post(
+        r = session.post(
             f"{BASE_URL}/live_data/batch",
             headers=_headers(),
             json={"requests": requests_list}
@@ -1498,7 +1602,7 @@ def get_live_data_batch(requests_list: List[Dict]) -> Dict:
 def get_milestones() -> Dict:
     """List all milestones"""
     try:
-        r = requests.get(f"{BASE_URL}/milestones", headers=_headers())
+        r = session.get(f"{BASE_URL}/milestones", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "milestones": r.json().get("milestones", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1509,7 +1613,7 @@ def get_milestones() -> Dict:
 def get_milestone(milestone_id: str) -> Dict:
     """Get specific milestone"""
     try:
-        r = requests.get(f"{BASE_URL}/milestones/{milestone_id}", headers=_headers())
+        r = session.get(f"{BASE_URL}/milestones/{milestone_id}", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "milestone": r.json().get("milestone", {})}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1524,7 +1628,7 @@ def get_milestone(milestone_id: str) -> Dict:
 def get_structured_targets() -> Dict:
     """List all structured targets"""
     try:
-        r = requests.get(f"{BASE_URL}/structured_targets", headers=_headers())
+        r = session.get(f"{BASE_URL}/structured_targets", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "structured_targets": r.json().get("structured_targets", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1535,7 +1639,7 @@ def get_structured_targets() -> Dict:
 def get_structured_target(target_id: str) -> Dict:
     """Get specific structured target"""
     try:
-        r = requests.get(f"{BASE_URL}/structured_targets/{target_id}", headers=_headers())
+        r = session.get(f"{BASE_URL}/structured_targets/{target_id}", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "structured_target": r.json().get("structured_target", {})}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1553,7 +1657,7 @@ def get_incentives() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/incentive_programs", headers=_headers())
+        r = session.get(f"{BASE_URL}/incentive_programs", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "incentives": r.json().get("incentive_programs", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1571,7 +1675,7 @@ def get_fcm_orders() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/fcm/orders", headers=_headers())
+        r = session.get(f"{BASE_URL}/fcm/orders", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "orders": r.json().get("orders", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1585,7 +1689,7 @@ def get_fcm_positions() -> Dict:
         return {"success": False, "error": "Authentication failed"}
 
     try:
-        r = requests.get(f"{BASE_URL}/fcm/positions", headers=_headers())
+        r = session.get(f"{BASE_URL}/fcm/positions", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "positions": r.json().get("positions", [])}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1600,7 +1704,7 @@ def get_fcm_positions() -> Dict:
 def get_search_tags() -> Dict:
     """Get search tags organized by category"""
     try:
-        r = requests.get(f"{BASE_URL}/search/tags_by_categories", headers=_headers())
+        r = session.get(f"{BASE_URL}/search/tags_by_categories", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "tags": r.json()}
         return {"success": False, "error": f"HTTP {r.status_code}"}
@@ -1611,7 +1715,7 @@ def get_search_tags() -> Dict:
 def get_search_sports() -> Dict:
     """Get sports filters for search"""
     try:
-        r = requests.get(f"{BASE_URL}/search/filters_by_sport", headers=_headers())
+        r = session.get(f"{BASE_URL}/search/filters_by_sport", headers=_headers())
         if r.status_code == 200:
             return {"success": True, "sports": r.json()}
         return {"success": False, "error": f"HTTP {r.status_code}"}

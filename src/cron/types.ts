@@ -30,12 +30,23 @@ export type CronPayload =
   | {
       kind: 'alert';
       alertId: string;
-      checkCondition: boolean;
     }
   | {
       kind: 'marketCheck';
       marketId: string;
       platform: string;
+    }
+  | {
+      kind: 'alertScan';
+    }
+  | {
+      kind: 'portfolioSync';
+    }
+  | {
+      kind: 'dailyDigest';
+    }
+  | {
+      kind: 'stopLossScan';
     };
 
 /** Job state tracking */

@@ -10,8 +10,12 @@ import { Market, Outcome, PriceUpdate, Platform } from '../../types';
 import { logger } from '../../utils/logger';
 
 // Drift BET API endpoints
-const API_URL = 'https://drift-api.drift.trade';
-const BET_API_URL = 'https://bet.drift.trade/api';
+const DEFAULT_BET_API_URL = 'https://bet.drift.trade/api';
+
+export interface DriftFeedConfig {
+  betApiUrl?: string;
+  requestTimeoutMs?: number;
+}
 
 interface DriftMarket {
   marketIndex: number;
@@ -34,11 +38,27 @@ export interface DriftFeed extends EventEmitter {
   unsubscribeFromMarket: (marketIndex: string) => void;
 }
 
-export async function createDriftFeed(): Promise<DriftFeed> {
+export async function createDriftFeed(config: DriftFeedConfig = {}): Promise<DriftFeed> {
   const emitter = new EventEmitter();
   let pollInterval: NodeJS.Timeout | null = null;
   const subscribedMarkets = new Set<string>();
   const priceCache = new Map<string, number>();
+  const betApiUrl = config.betApiUrl || process.env.DRIFT_BET_API_URL || DEFAULT_BET_API_URL;
+  const requestTimeoutMs = Math.max(1000, config.requestTimeoutMs ?? 8000);
+
+  async function fetchJson<T>(url: string): Promise<T> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`Drift API error: ${response.status}`);
+      }
+      return await response.json() as T;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 
   function convertToMarket(m: DriftMarket): Market {
     const prob = m.probability;
@@ -77,14 +97,13 @@ export async function createDriftFeed(): Promise<DriftFeed> {
   async function fetchMarkets(): Promise<DriftMarket[]> {
     try {
       // Drift BET API - fetch prediction markets
-      const response = await fetch(`${BET_API_URL}/markets`);
-      if (!response.ok) {
-        throw new Error(`Drift API error: ${response.status}`);
+      const data: any = await fetchJson(`${betApiUrl}/markets`);
+      if (!data || !Array.isArray(data.markets)) {
+        throw new Error('Drift API error: invalid markets response');
       }
-      const data: any = await response.json();
-      return data.markets || [];
+      return data.markets;
     } catch (error) {
-      logger.warn('Drift: Failed to fetch markets', error);
+      logger.warn({ error, betApiUrl }, 'Drift: Failed to fetch markets');
       return [];
     }
   }
@@ -108,13 +127,19 @@ export async function createDriftFeed(): Promise<DriftFeed> {
 
   async function getMarket(marketIndex: string): Promise<Market | null> {
     try {
-      const response = await fetch(`${BET_API_URL}/markets/${marketIndex}`);
-      if (!response.ok) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+      try {
+        const response = await fetch(`${betApiUrl}/markets/${marketIndex}`, { signal: controller.signal });
         if (response.status === 404) return null;
-        throw new Error(`Drift API error: ${response.status}`);
+        if (!response.ok) {
+          throw new Error(`Drift API error: ${response.status}`);
+        }
+        const market = await response.json() as DriftMarket;
+        return convertToMarket(market);
+      } finally {
+        clearTimeout(timeout);
       }
-      const market = await response.json() as DriftMarket;
-      return convertToMarket(market);
     } catch (error) {
       logger.error(`Drift: Error fetching market ${marketIndex}`, error);
       return null;
@@ -153,6 +178,12 @@ export async function createDriftFeed(): Promise<DriftFeed> {
 
   return Object.assign(emitter, {
     async start(): Promise<void> {
+      const markets = await fetchMarkets();
+      if (markets.length === 0) {
+        logger.warn({ betApiUrl }, 'Drift BET: No markets returned; check API endpoint');
+      } else {
+        logger.info({ count: markets.length, betApiUrl }, 'Drift BET: Markets loaded');
+      }
       // Drift doesn't have WebSocket for BET markets, poll every 10s
       pollInterval = setInterval(pollPrices, 10000);
       logger.info('Drift BET: Started (polling mode)');
@@ -181,3 +212,7 @@ export async function createDriftFeed(): Promise<DriftFeed> {
     },
   }) as DriftFeed;
 }
+
+// Re-export trading module
+export { createDriftTrading } from './trading';
+export type { DriftTrading, DriftTradingConfig, DriftOrder, DriftPosition, DriftBalance } from './trading';

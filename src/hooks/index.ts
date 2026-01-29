@@ -15,7 +15,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync, appendFileSync, statSync, renameSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger';
@@ -66,6 +66,17 @@ export interface HookContext {
   response?: OutgoingMessage;
   session?: Session;
   error?: Error;
+  toolName?: string;
+  toolParams?: Record<string, unknown>;
+  runId?: string;
+  abortSignal?: AbortSignal;
+  cancelledReason?: string;
+  hookId?: string;
+  hookName?: string;
+  hookStateKey?: string;
+  getState?: (key: string, defaultValue?: unknown) => unknown;
+  setState?: (key: string, value: unknown) => void;
+  clearState?: (key?: string) => void;
   /** Set to true to stop further processing */
   cancelled?: boolean;
   /** Custom data passed between hooks */
@@ -172,7 +183,10 @@ export interface Hook<TContext = HookContext, TResult = void> {
     channels?: string[];
     users?: string[];
     agentIds?: string[];
+    tools?: string[];
   };
+  /** Conditional execution */
+  when?: HookCondition;
   /** Requirements for this hook to be active */
   requirements?: HookRequirements;
   /** Whether hook is enabled */
@@ -192,6 +206,18 @@ export interface HookRequirements {
   os?: string[];
 }
 
+export type HookCondition =
+  | {
+      any?: HookCondition[];
+      all?: HookCondition[];
+      not?: HookCondition;
+    }
+  | {
+      field: 'channel' | 'userId' | 'agentId' | 'toolName' | 'messageText' | 'event';
+      op: 'eq' | 'neq' | 'in' | 'contains' | 'regex' | 'startsWith' | 'endsWith';
+      value: string | string[];
+    };
+
 // =============================================================================
 // HOOK METADATA (for discovery)
 // =============================================================================
@@ -205,6 +231,37 @@ export interface HookMetadata {
   priority?: number;
   execution?: 'sequential' | 'parallel';
   requirements?: HookRequirements;
+}
+
+export interface HookStateFile {
+  version: number;
+  sources: Record<string, { enabled: boolean; updatedAt: string }>;
+}
+
+export interface HookStateStore {
+  version: number;
+  data: Record<string, Record<string, unknown>>;
+  updatedAt?: string;
+}
+
+export interface HookTraceEntry {
+  id: string;
+  hookId: string;
+  hookName?: string;
+  event: HookEvent;
+  execution: 'sequential' | 'parallel';
+  startedAt: string;
+  durationMs: number;
+  status: 'ok' | 'error';
+  error?: string;
+}
+
+export interface HookRunInfo {
+  runId: string;
+  event: HookEvent;
+  startedAt: string;
+  cancelled: boolean;
+  reason?: string;
 }
 
 // =============================================================================
@@ -223,6 +280,8 @@ export interface HooksService {
       syncOnly?: boolean;
       filter?: Hook['filter'];
       requirements?: HookRequirements;
+      sourcePath?: string;
+      when?: HookCondition;
     }
   ): string;
 
@@ -259,6 +318,27 @@ export interface HooksService {
 
   /** Install a hook from path */
   install(hookPath: string): Promise<string>;
+
+  /** Enable/disable hook tracing */
+  setTracingEnabled(enabled: boolean): void;
+  /** Set trace buffer limit */
+  setTraceLimit(limit: number): void;
+  /** List recent hook traces */
+  listTraces(limit?: number): HookTraceEntry[];
+  /** Clear hook traces */
+  clearTraces(): void;
+
+  /** Cancel a running hook execution */
+  cancel(runId: string, reason?: string): boolean;
+  /** List running hook executions */
+  listActiveRuns(): HookRunInfo[];
+
+  /** Get hook state */
+  getState(hookKey: string, key?: string): unknown;
+  /** Set hook state */
+  setState(hookKey: string, key: string, value: unknown): void;
+  /** Clear hook state */
+  clearState(hookKey: string, key?: string): void;
 }
 
 // =============================================================================
@@ -299,7 +379,18 @@ const EVENT_EXECUTION_MODES: Record<HookEvent, 'sequential' | 'parallel'> = {
 export function createHooksService(): HooksService {
   const hooks = new Map<string, Hook>();
   let idCounter = 0;
-  const hooksDir = join(homedir(), '.clodds', 'hooks');
+  const hooksDir = getHooksDir();
+  let currentSourcePath: string | null = null;
+  let tracingEnabled = process.env.CLODDS_HOOK_TRACE === '1';
+  let traceLimit = Math.max(
+    10,
+    Number.parseInt(process.env.CLODDS_HOOK_TRACE_LIMIT || '200', 10)
+  );
+  const traces: HookTraceEntry[] = [];
+  const traceFilePath = process.env.CLODDS_HOOK_TRACE_FILE || join(hooksDir, 'trace.log');
+  const activeRuns = new Map<string, { ctx: HookContext; controller: AbortController; startedAt: number }>();
+  const stateStorePath = getHookStateStorePath();
+  let stateStore = loadHookStateStore(stateStorePath);
 
   // Ensure hooks directory exists
   if (!existsSync(hooksDir)) {
@@ -353,7 +444,13 @@ export function createHooksService(): HooksService {
         if (!h.filter) return true;
         if (h.filter.channels && ctx.message && !h.filter.channels.includes(ctx.message.platform)) return false;
         if (h.filter.users && ctx.message && !h.filter.users.includes(ctx.message.userId)) return false;
+        if (h.filter.tools && ctx.toolName && !h.filter.tools.includes(ctx.toolName)) return false;
+        if (h.filter.tools && !ctx.toolName) return false;
         return true;
+      })
+      .filter((h) => {
+        if (!h.when) return true;
+        return evaluateHookCondition(h.when, ctx);
       })
       .filter((h) => {
         if (!h.requirements) return true;
@@ -366,8 +463,9 @@ export function createHooksService(): HooksService {
     register(event, fn, opts = {}) {
       const id = `hook_${++idCounter}`;
       const execution = opts.execution ?? EVENT_EXECUTION_MODES[event] ?? 'parallel';
+      const sourcePath = opts.sourcePath ?? currentSourcePath ?? undefined;
 
-      hooks.set(id, {
+      const hook: Hook = {
         id,
         name: opts.name,
         event,
@@ -376,9 +474,21 @@ export function createHooksService(): HooksService {
         execution,
         syncOnly: opts.syncOnly,
         filter: opts.filter,
+        when: opts.when,
         requirements: opts.requirements,
         enabled: true,
-      });
+        sourcePath,
+      };
+
+      const persistedEnabled = sourcePath ? getHookSourceEnabled(sourcePath) : undefined;
+      if (persistedEnabled === false) {
+        hook.enabled = false;
+      }
+
+      hooks.set(id, hook);
+      if (sourcePath && persistedEnabled === undefined) {
+        setHookSourceEnabled(sourcePath, true);
+      }
 
       logger.debug({ id, event, name: opts.name }, 'Hook registered');
       return id;
@@ -396,16 +506,15 @@ export function createHooksService(): HooksService {
       const hook = hooks.get(id);
       if (!hook) return false;
       hook.enabled = enabled;
+      if (hook.sourcePath) {
+        setHookSourceEnabled(hook.sourcePath, enabled);
+      }
       logger.debug({ id, enabled }, 'Hook enabled state changed');
       return true;
     },
 
     async trigger(event, partialCtx) {
-      const ctx: HookContext = {
-        event,
-        data: {},
-        ...partialCtx,
-      };
+      const { ctx, runId, controller } = createRunContext(event, partialCtx);
 
       const matching = getMatchingHooks(event, ctx);
       const execution = EVENT_EXECUTION_MODES[event] ?? 'parallel';
@@ -414,25 +523,35 @@ export function createHooksService(): HooksService {
         // Fire all hooks in parallel, don't wait
         await Promise.all(
           matching.map(async (hook) => {
+            const startedAt = Date.now();
             try {
-              await hook.fn(ctx);
+              if (ctx.abortSignal?.aborted || ctx.cancelled) return;
+              const hookCtx = bindHookState(ctx, hook);
+              await hook.fn(hookCtx);
+              recordTrace(hook, event, startedAt, 'ok');
             } catch (error) {
               logger.error({ hookId: hook.id, error }, 'Hook error');
+              recordTrace(hook, event, startedAt, 'error', error);
             }
           })
         );
       } else {
         // Sequential execution
         for (const hook of matching) {
-          if (ctx.cancelled) break;
+          if (ctx.cancelled || ctx.abortSignal?.aborted) break;
+          const startedAt = Date.now();
           try {
-            await hook.fn(ctx);
+            const hookCtx = bindHookState(ctx, hook);
+            await hook.fn(hookCtx);
+            recordTrace(hook, event, startedAt, 'ok');
           } catch (error) {
             logger.error({ hookId: hook.id, error }, 'Hook error');
+            recordTrace(hook, event, startedAt, 'error', error);
           }
         }
       }
 
+      finalizeRun(runId, controller);
       return ctx;
     },
 
@@ -441,25 +560,25 @@ export function createHooksService(): HooksService {
       partialCtx: Partial<HookContext>,
       mergeResults?: (results: TResult[]) => TResult
     ): Promise<{ ctx: HookContext; result: TResult | undefined }> {
-      const ctx: HookContext = {
-        event,
-        data: {},
-        ...partialCtx,
-      };
+      const { ctx, runId, controller } = createRunContext(event, partialCtx);
 
       const matching = getMatchingHooks(event, ctx);
       const results: TResult[] = [];
 
       // Always sequential for result-returning hooks
       for (const hook of matching) {
-        if (ctx.cancelled) break;
+        if (ctx.cancelled || ctx.abortSignal?.aborted) break;
+        const startedAt = Date.now();
         try {
-          const result = await hook.fn(ctx);
+          const hookCtx = bindHookState(ctx, hook);
+          const result = await hook.fn(hookCtx);
           if (result !== undefined) {
             results.push(result as TResult);
           }
+          recordTrace(hook, event, startedAt, 'ok');
         } catch (error) {
           logger.error({ hookId: hook.id, error }, 'Hook error');
+          recordTrace(hook, event, startedAt, 'error', error);
         }
       }
 
@@ -468,28 +587,30 @@ export function createHooksService(): HooksService {
         ? mergeResults(results)
         : results[results.length - 1]; // Default: last result wins
 
+      finalizeRun(runId, controller);
       return { ctx, result: finalResult };
     },
 
     triggerSync(event, partialCtx) {
-      const ctx: HookContext = {
-        event,
-        data: {},
-        ...partialCtx,
-      };
+      const { ctx, runId, controller } = createRunContext(event, partialCtx);
 
       const matching = getMatchingHooks(event, ctx).filter(h => h.syncOnly !== false);
 
       for (const hook of matching) {
-        if (ctx.cancelled) break;
+        if (ctx.cancelled || ctx.abortSignal?.aborted) break;
+        const startedAt = Date.now();
         try {
+          const hookCtx = bindHookState(ctx, hook);
           // Call synchronously (ignoring promises)
-          hook.fn(ctx);
+          hook.fn(hookCtx);
+          recordTrace(hook, event, startedAt, 'ok');
         } catch (error) {
           logger.error({ hookId: hook.id, error }, 'Sync hook error');
+          recordTrace(hook, event, startedAt, 'error', error);
         }
       }
 
+      finalizeRun(runId, controller);
       return ctx;
     },
 
@@ -524,6 +645,7 @@ export function createHooksService(): HooksService {
           try {
             // Try to load the hook
             if (existsSync(indexPath)) {
+              currentSourcePath = hookDir;
               const hookModule = require(indexPath);
               if (typeof hookModule.register === 'function') {
                 hookModule.register(service);
@@ -533,6 +655,8 @@ export function createHooksService(): HooksService {
             }
           } catch (error) {
             logger.warn({ hook: entry.name, error }, 'Failed to load hook');
+          } finally {
+            currentSourcePath = null;
           }
         }
       }
@@ -561,7 +685,250 @@ export function createHooksService(): HooksService {
 
       return hookName;
     },
+
+    setTracingEnabled(enabled: boolean) {
+      tracingEnabled = enabled;
+    },
+
+    setTraceLimit(limit: number) {
+      traceLimit = Math.max(10, limit);
+      if (traces.length > traceLimit) {
+        traces.splice(0, traces.length - traceLimit);
+      }
+    },
+
+    listTraces(limit?: number) {
+      if (!tracingEnabled) return [];
+      if (!limit || limit >= traces.length) {
+        return [...traces];
+      }
+      return traces.slice(Math.max(0, traces.length - limit));
+    },
+
+    clearTraces() {
+      traces.length = 0;
+    },
+
+    cancel(runId, reason) {
+      const run = activeRuns.get(runId);
+      if (!run) return false;
+      run.ctx.cancelled = true;
+      run.ctx.cancelledReason = reason;
+      run.controller.abort(reason);
+      return true;
+    },
+
+    listActiveRuns() {
+      return Array.from(activeRuns.entries()).map(([runId, run]) => ({
+        runId,
+        event: run.ctx.event,
+        startedAt: new Date(run.startedAt).toISOString(),
+        cancelled: Boolean(run.ctx.cancelled || run.ctx.abortSignal?.aborted),
+        reason: run.ctx.cancelledReason,
+      }));
+    },
+
+    getState(hookKey, key) {
+      const entry = stateStore.data[hookKey];
+      if (!entry) return undefined;
+      if (!key) return { ...entry };
+      return entry[key];
+    },
+
+    setState(hookKey, key, value) {
+      if (!stateStore.data[hookKey]) {
+        stateStore.data[hookKey] = {};
+      }
+      stateStore.data[hookKey][key] = value;
+      persistHookStateStore();
+    },
+
+    clearState(hookKey, key) {
+      if (!stateStore.data[hookKey]) return;
+      if (key) {
+        delete stateStore.data[hookKey][key];
+      } else {
+        delete stateStore.data[hookKey];
+      }
+      persistHookStateStore();
+    },
   };
+
+  function createRunContext(
+    event: HookEvent,
+    partialCtx: Partial<HookContext>
+  ): { ctx: HookContext; runId: string; controller: AbortController } {
+    const runId = `hookrun_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const controller = new AbortController();
+    const ctx: HookContext = {
+      event,
+      data: {},
+      ...partialCtx,
+      runId,
+      abortSignal: controller.signal,
+    };
+    activeRuns.set(runId, { ctx, controller, startedAt: Date.now() });
+    controller.signal.addEventListener('abort', () => {
+      ctx.cancelled = true;
+      ctx.cancelledReason = ctx.cancelledReason ?? 'cancelled';
+    }, { once: true });
+    return { ctx, runId, controller };
+  }
+
+  function finalizeRun(runId: string, controller: AbortController): void {
+    activeRuns.delete(runId);
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  }
+
+  function recordTrace(
+    hook: Hook,
+    event: HookEvent,
+    startedAtMs: number,
+    status: 'ok' | 'error',
+    error?: unknown
+  ): void {
+    if (!tracingEnabled) return;
+    const entry: HookTraceEntry = {
+      id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      hookId: hook.id,
+      hookName: hook.name,
+      event,
+      execution: hook.execution,
+      startedAt: new Date(startedAtMs).toISOString(),
+      durationMs: Math.max(0, Date.now() - startedAtMs),
+      status,
+      error: error instanceof Error ? error.message : error ? String(error) : undefined,
+    };
+    traces.push(entry);
+    if (traces.length > traceLimit) {
+      traces.splice(0, traces.length - traceLimit);
+    }
+    writeTraceToFile(entry);
+  }
+
+  function writeTraceToFile(entry: HookTraceEntry): void {
+    if (!traceFilePath) return;
+    try {
+      const line = `${JSON.stringify(entry)}\n`;
+      appendFileSync(traceFilePath, line);
+      rotateTraceFileIfNeeded();
+    } catch (error) {
+      logger.warn({ error }, 'Failed to write hook trace file');
+    }
+  }
+
+  function rotateTraceFileIfNeeded(): void {
+    try {
+      const stats = statSync(traceFilePath);
+      const maxBytes = 5 * 1024 * 1024; // 5MB
+      if (stats.size < maxBytes) return;
+      const rotated = `${traceFilePath}.${Date.now()}`;
+      renameSync(traceFilePath, rotated);
+    } catch {
+      // ignore rotation errors
+    }
+  }
+
+  function bindHookState(ctx: HookContext, hook: Hook): HookContext {
+    const hookStateKey = resolveHookStateKey(hook.sourcePath || hook.name || hook.id);
+    const bound: HookContext = ctx;
+    bound.hookId = hook.id;
+    bound.hookName = hook.name;
+    bound.hookStateKey = hookStateKey;
+    bound.getState = (key: string, defaultValue?: unknown) => {
+      const entry = stateStore.data[hookStateKey];
+      if (entry && Object.prototype.hasOwnProperty.call(entry, key)) {
+        return entry[key];
+      }
+      return defaultValue;
+    };
+    bound.setState = (key: string, value: unknown) => {
+      if (!stateStore.data[hookStateKey]) {
+        stateStore.data[hookStateKey] = {};
+      }
+      stateStore.data[hookStateKey][key] = value;
+      persistHookStateStore();
+    };
+    bound.clearState = (key?: string) => {
+      if (!stateStore.data[hookStateKey]) return;
+      if (key) {
+        delete stateStore.data[hookStateKey][key];
+      } else {
+        delete stateStore.data[hookStateKey];
+      }
+      persistHookStateStore();
+    };
+    return bound;
+  }
+
+  function persistHookStateStore(): void {
+    stateStore.updatedAt = new Date().toISOString();
+    saveHookStateStore(stateStorePath, stateStore);
+  }
+
+  function evaluateHookCondition(condition: HookCondition, ctx: Partial<HookContext>): boolean {
+    if ('any' in condition || 'all' in condition || 'not' in condition) {
+      const anyResult = condition.any ? condition.any.some((c) => evaluateHookCondition(c, ctx)) : undefined;
+      const allResult = condition.all ? condition.all.every((c) => evaluateHookCondition(c, ctx)) : undefined;
+      const notResult = condition.not ? !evaluateHookCondition(condition.not, ctx) : undefined;
+      const results = [anyResult, allResult, notResult].filter((v) => v !== undefined) as boolean[];
+      return results.length > 0 ? results.every(Boolean) : true;
+    }
+
+    const fieldCondition = condition as Extract<HookCondition, { field: string }>;
+    const fieldValue = getConditionFieldValue(fieldCondition.field, ctx);
+    if (fieldValue === undefined || fieldValue === null) return false;
+
+    switch (fieldCondition.op) {
+      case 'eq':
+        return fieldValue === fieldCondition.value;
+      case 'neq':
+        return fieldValue !== fieldCondition.value;
+      case 'in':
+        return Array.isArray(fieldCondition.value) && fieldCondition.value.includes(String(fieldValue));
+      case 'contains':
+        return String(fieldValue).includes(String(fieldCondition.value));
+      case 'startsWith':
+        return String(fieldValue).startsWith(String(fieldCondition.value));
+      case 'endsWith':
+        return String(fieldValue).endsWith(String(fieldCondition.value));
+      case 'regex':
+        try {
+          const pattern = Array.isArray(fieldCondition.value)
+            ? fieldCondition.value.join('|')
+            : fieldCondition.value;
+          return new RegExp(pattern).test(String(fieldValue));
+        } catch {
+          return false;
+        }
+      default:
+        return false;
+    }
+  }
+
+  function getConditionFieldValue(
+    field: 'channel' | 'userId' | 'agentId' | 'toolName' | 'messageText' | 'event',
+    ctx: Partial<HookContext>
+  ): string | undefined {
+    switch (field) {
+      case 'channel':
+        return ctx.message?.platform;
+      case 'userId':
+        return ctx.message?.userId;
+      case 'agentId':
+        return (ctx as Partial<AgentHookContext>).agentId;
+      case 'toolName':
+        return ctx.toolName;
+      case 'messageText':
+        return ctx.message?.text;
+      case 'event':
+        return ctx.event;
+      default:
+        return undefined;
+    }
+  }
 
   return service;
 }
@@ -660,3 +1027,128 @@ export function createSystemPromptInjector(
 // =============================================================================
 
 export const hooks = createHooksService();
+
+export function getHooksDir(): string {
+  return join(homedir(), '.clodds', 'hooks');
+}
+
+export function getHooksStatePath(): string {
+  return join(getHooksDir(), 'hooks.json');
+}
+
+export function getHookStateStorePath(): string {
+  return join(getHooksDir(), 'hook-state.json');
+}
+
+export function resolveHookStateKey(input: string): string {
+  if (!input) return input;
+  if (input.startsWith('~')) {
+    return join(homedir(), input.slice(1));
+  }
+  if (input.includes('/') || input.includes('\\')) {
+    return input;
+  }
+  return join(getHooksDir(), input);
+}
+
+export function loadHookStateStore(pathOverride?: string): HookStateStore {
+  const path = pathOverride || getHookStateStorePath();
+  if (!existsSync(path)) {
+    return { version: 1, data: {} };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as HookStateStore;
+    if (!parsed.data) {
+      return { version: 1, data: {} };
+    }
+    return parsed;
+  } catch (error) {
+    logger.warn({ error }, 'Failed to load hook state store');
+    return { version: 1, data: {} };
+  }
+}
+
+export function saveHookStateStore(pathOverride: string | undefined, store: HookStateStore): void {
+  const path = pathOverride || getHookStateStorePath();
+  try {
+    if (!existsSync(getHooksDir())) {
+      mkdirSync(getHooksDir(), { recursive: true });
+    }
+    writeFileSync(
+      path,
+      JSON.stringify(
+        {
+          version: store.version || 1,
+          data: store.data || {},
+          updatedAt: store.updatedAt,
+        },
+        null,
+        2
+      )
+    );
+  } catch (error) {
+    logger.warn({ error }, 'Failed to save hook state store');
+  }
+}
+
+export function loadHooksState(): HookStateFile {
+  const statePath = getHooksStatePath();
+  if (!existsSync(statePath)) {
+    return { version: 1, sources: {} };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(statePath, 'utf-8')) as HookStateFile;
+    if (!parsed.sources) {
+      return { version: 1, sources: {} };
+    }
+    return parsed;
+  } catch (error) {
+    logger.warn({ error }, 'Failed to load hooks state');
+    return { version: 1, sources: {} };
+  }
+}
+
+export function saveHooksState(state: HookStateFile): void {
+  try {
+    const statePath = getHooksStatePath();
+    if (!existsSync(getHooksDir())) {
+      mkdirSync(getHooksDir(), { recursive: true });
+    }
+    writeFileSync(
+      statePath,
+      JSON.stringify(
+        {
+          version: state.version || 1,
+          sources: state.sources || {},
+        },
+        null,
+        2
+      )
+    );
+  } catch (error) {
+    logger.warn({ error }, 'Failed to save hooks state');
+  }
+}
+
+export function getHookSourceEnabled(sourcePath: string): boolean | undefined {
+  const state = loadHooksState();
+  const entry = state.sources[sourcePath];
+  return entry ? entry.enabled : undefined;
+}
+
+export function setHookSourceEnabled(sourcePath: string, enabled: boolean): void {
+  const state = loadHooksState();
+  state.sources[sourcePath] = {
+    enabled,
+    updatedAt: new Date().toISOString(),
+  };
+  saveHooksState(state);
+}
+
+export function removeHookSourceState(sourcePath: string): void {
+  const state = loadHooksState();
+  if (state.sources[sourcePath]) {
+    delete state.sources[sourcePath];
+    saveHooksState(state);
+  }
+}

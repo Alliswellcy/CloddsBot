@@ -12,10 +12,14 @@
 
 import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 import { logger } from '../../utils/logger';
 import type { ChannelAdapter, ChannelCallbacks } from '../index';
-import type { IncomingMessage, OutgoingMessage } from '../../types';
+import type { IncomingMessage, OutgoingMessage, MessageAttachment } from '../../types';
 import type { PairingService } from '../../pairing/index';
+import { resolveAttachment, guessAttachmentType } from '../../utils/attachments';
 
 export interface SignalConfig {
   enabled: boolean;
@@ -31,6 +35,8 @@ export interface SignalConfig {
   allowFrom?: string[];
   /** Allowed group IDs */
   groupAllowlist?: string[];
+  /** Per-group policies */
+  groups?: Record<string, { requireMention?: boolean }>;
 }
 
 /** Signal-cli JSON RPC message */
@@ -106,8 +112,49 @@ export async function createSignalChannel(
   }
 
   /** Handle incoming message */
+  async function downloadSignalAttachment(
+    attachmentId: string,
+    filename?: string
+  ): Promise<MessageAttachment | null> {
+    const tempName = filename || `signal-${attachmentId}`;
+    const tempPath = path.join(os.tmpdir(), tempName);
+    const args = ['-u', config.phoneNumber, 'attachment', '-i', attachmentId, '-o', tempPath];
+
+    if (config.configDir) {
+      args.unshift('--config', config.configDir);
+    }
+
+    return new Promise((resolve) => {
+      const proc = spawn(signalCli, args);
+      let stderr = '';
+      proc.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+      proc.on('close', async (code) => {
+        if (code !== 0) {
+          logger.warn({ attachmentId, stderr }, 'signal-cli attachment fetch failed');
+          resolve(null);
+          return;
+        }
+        try {
+          const buffer = await fs.readFile(tempPath);
+          await fs.unlink(tempPath).catch(() => {});
+          resolve({
+            type: guessAttachmentType(undefined, filename),
+            data: buffer.toString('base64'),
+            filename,
+          });
+        } catch (error) {
+          logger.warn({ error, attachmentId }, 'Failed to read Signal attachment');
+          resolve(null);
+        }
+      });
+      proc.on('error', () => resolve(null));
+    });
+  }
+
   async function handleMessage(msg: SignalMessage): Promise<void> {
-    if (!msg.envelope?.dataMessage?.message) return;
+    if (!msg.envelope?.dataMessage) return;
 
     const sender = msg.envelope.sourceNumber || msg.envelope.source;
     if (!sender) return;
@@ -116,7 +163,29 @@ export async function createSignalChannel(
     if (sender === config.phoneNumber) return;
 
     const groupId = msg.envelope.dataMessage.groupInfo?.groupId;
-    const text = msg.envelope.dataMessage.message;
+    const text = msg.envelope.dataMessage.message || '';
+    const attachments: MessageAttachment[] = [];
+
+    if (msg.envelope.dataMessage.attachments && msg.envelope.dataMessage.attachments.length > 0) {
+      for (const attachment of msg.envelope.dataMessage.attachments) {
+        if (attachment.id) {
+          const downloaded = await downloadSignalAttachment(attachment.id, attachment.filename);
+          if (downloaded) {
+            attachments.push({
+              ...downloaded,
+              mimeType: attachment.contentType,
+            });
+            continue;
+          }
+        }
+        attachments.push({
+          type: guessAttachmentType(attachment.contentType, attachment.filename),
+          mimeType: attachment.contentType,
+          filename: attachment.filename,
+          url: attachment.id ? `signal-attachment:${attachment.id}` : undefined,
+        });
+      }
+    }
 
     // Check if allowed
     if (!isAllowed(sender, groupId)) {
@@ -137,7 +206,19 @@ export async function createSignalChannel(
       return;
     }
 
+    if (groupId) {
+      const requireMention = config.groups?.[groupId]?.requireMention ?? false;
+      if (requireMention) {
+        // Signal JSON RPC doesn't include mentions. Skip when required.
+        return;
+      }
+    }
+
     // Create incoming message
+    if (!text && attachments.length === 0) {
+      return;
+    }
+
     const message: IncomingMessage = {
       id: msg.envelope.timestamp?.toString() || Date.now().toString(),
       platform: 'signal',
@@ -145,6 +226,7 @@ export async function createSignalChannel(
       chatId: groupId || sender,
       chatType: groupId ? 'group' : 'dm',
       text,
+      attachments: attachments.length > 0 ? attachments : undefined,
       timestamp: msg.envelope.timestamp
         ? new Date(msg.envelope.timestamp)
         : new Date(),
@@ -154,44 +236,87 @@ export async function createSignalChannel(
   }
 
   /** Send message via signal-cli */
-  async function sendMessage(message: OutgoingMessage): Promise<void> {
+  async function sendMessage(message: OutgoingMessage): Promise<string | null> {
     return new Promise((resolve, reject) => {
-      const args = [
-        '-u',
-        config.phoneNumber,
-        'send',
-        '-m',
-        message.text,
-      ];
+      const baseArgs = ['-u', config.phoneNumber, 'send'];
+      const optionArgs: string[] = [];
+      const targetArgs: string[] = [];
 
-      // Determine if group or direct message
+      if (message.text) {
+        optionArgs.push('-m', message.text);
+      }
+
       if (message.chatId.startsWith('group.')) {
-        args.push('-g', message.chatId);
+        optionArgs.push('-g', message.chatId);
       } else {
-        args.push(message.chatId);
+        targetArgs.push(message.chatId);
       }
 
       if (config.configDir) {
-        args.unshift('--config', config.configDir);
+        baseArgs.unshift('--config', config.configDir);
       }
 
-      const proc = spawn(signalCli, args);
+      const tempFiles: string[] = [];
+      const attachments = message.attachments || [];
 
-      let stderr = '';
-      proc.stderr?.on('data', (data) => {
-        stderr += data.toString();
-      });
+      const sendWithAttachments = async (): Promise<void> => {
+        const finalArgs = [...baseArgs, ...optionArgs];
 
-      proc.on('close', (code) => {
-        if (code === 0) {
-          logger.debug({ chatId: message.chatId }, 'Signal message sent');
-          resolve();
-        } else {
-          reject(new Error(`signal-cli exited with code ${code}: ${stderr}`));
+        if (attachments.length > 0) {
+          finalArgs.push('-a');
+          const filePaths: string[] = [];
+
+          for (const attachment of attachments) {
+            const resolved = await resolveAttachment(attachment);
+            if (!resolved) continue;
+
+            const tempPath = path.join(
+              os.tmpdir(),
+              `clodds-signal-${Date.now()}-${resolved.filename}`
+            );
+            await fs.writeFile(tempPath, resolved.buffer);
+            filePaths.push(tempPath);
+            tempFiles.push(tempPath);
+          }
+
+          if (filePaths.length > 0) {
+            finalArgs.push(...filePaths);
+          } else {
+            // Remove the -a flag if nothing to attach
+            finalArgs.splice(finalArgs.indexOf('-a'), 1);
+          }
         }
-      });
 
-      proc.on('error', reject);
+        finalArgs.push(...targetArgs);
+
+        const proc = spawn(signalCli, finalArgs);
+
+        let stderr = '';
+        proc.stderr?.on('data', (data) => {
+          stderr += data.toString();
+        });
+
+        proc.on('close', async (code) => {
+          for (const filePath of tempFiles) {
+            try {
+              await fs.unlink(filePath);
+            } catch {
+              // ignore cleanup errors
+            }
+          }
+
+          if (code === 0) {
+            logger.debug({ chatId: message.chatId }, 'Signal message sent');
+            resolve(null);
+          } else {
+            reject(new Error(`signal-cli exited with code ${code}: ${stderr}`));
+          }
+        });
+
+        proc.on('error', reject);
+      };
+
+      sendWithAttachments().catch(reject);
     });
   }
 
@@ -260,8 +385,22 @@ export async function createSignalChannel(
       logger.info('Signal channel stopped');
     },
 
-    async sendMessage(message: OutgoingMessage): Promise<void> {
-      await sendMessage(message);
+    async sendMessage(message: OutgoingMessage): Promise<string | null> {
+      return sendMessage(message);
+    },
+
+    async editMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      logger.warn(
+        { chatId: message.chatId, messageId: message.messageId },
+        'Signal does not support message editing via signal-cli'
+      );
+    },
+
+    async deleteMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      logger.warn(
+        { chatId: message.chatId, messageId: message.messageId },
+        'Signal does not support message deletion via signal-cli'
+      );
     },
   };
 }

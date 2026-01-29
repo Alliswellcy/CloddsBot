@@ -14,7 +14,8 @@ export type Platform =
   | 'metaculus'
   | 'drift'
   | 'predictit'
-  | 'betfair';
+  | 'betfair'
+  | 'smarkets';
 
 // =============================================================================
 // MARKETS
@@ -46,6 +47,27 @@ export interface Outcome {
   previousPrice?: number;
   priceChange24h?: number;
   volume24h: number;
+}
+
+export interface MarketIndexEntry {
+  platform: Platform;
+  marketId: string;
+  slug?: string;
+  question: string;
+  description?: string;
+  outcomesJson?: string;
+  tagsJson?: string;
+  status?: string;
+  url?: string;
+  endDate?: Date;
+  resolved: boolean;
+  updatedAt: Date;
+  volume24h?: number;
+  liquidity?: number;
+  openInterest?: number;
+  predictions?: number;
+  contentHash?: string;
+  rawJson?: string;
 }
 
 export interface Orderbook {
@@ -89,6 +111,17 @@ export interface Portfolio {
   byPlatform: Record<Platform, { value: number; pnl: number }>;
 }
 
+export interface PortfolioSnapshot {
+  userId: string;
+  totalValue: number;
+  totalPnl: number;
+  totalPnlPct: number;
+  totalCostBasis: number;
+  positionsCount: number;
+  byPlatform: Record<string, { value: number; pnl: number }>;
+  createdAt: Date;
+}
+
 // =============================================================================
 // ALERTS
 // =============================================================================
@@ -102,6 +135,10 @@ export interface Alert {
   name?: string;
   marketId?: string;
   platform?: Platform;
+  /** Channel to deliver alert (e.g., telegram, discord) */
+  channel?: string;
+  /** Chat ID to deliver alert */
+  chatId?: string;
   condition: AlertCondition;
   enabled: boolean;
   triggered: boolean;
@@ -170,6 +207,12 @@ export interface UserSettings {
   edgeThreshold: number;
   /** Max single order size in USD for trading */
   maxOrderSize?: number;
+  /** Max exposure per position (USD cost basis) */
+  maxPositionValue?: number;
+  /** Max total exposure across all positions (USD cost basis) */
+  maxTotalExposure?: number;
+  /** Stop-loss trigger percentage (e.g. 0.2 for 20%) */
+  stopLossPct?: number;
 }
 
 // =============================================================================
@@ -179,7 +222,7 @@ export interface UserSettings {
 /**
  * Credential types matching Clawdbot's auth profile system
  */
-export type CredentialMode = 'api_key' | 'oauth' | 'wallet';
+export type CredentialMode = 'api_key' | 'oauth' | 'wallet' | 'legacy_login';
 
 export interface TradingCredentials {
   userId: string;
@@ -213,8 +256,14 @@ export interface PolymarketCredentials {
  * Kalshi credentials (decrypted form)
  */
 export interface KalshiCredentials {
-  email: string;
-  password: string;
+  /** API key ID from Kalshi */
+  apiKeyId?: string;
+  /** RSA private key in PEM format (or base64-encoded PEM) */
+  privateKeyPem?: string;
+  /** Legacy email login (deprecated) */
+  email?: string;
+  /** Legacy password login (deprecated) */
+  password?: string;
 }
 
 /**
@@ -225,12 +274,43 @@ export interface ManifoldCredentials {
 }
 
 /**
+ * Betfair credentials (decrypted form)
+ */
+export interface BetfairCredentials {
+  appKey: string;
+  username?: string;
+  password?: string;
+  sessionToken?: string;
+}
+
+/**
+ * Drift/Solana credentials (decrypted form)
+ */
+export interface DriftCredentials {
+  /** Solana private key (base58) */
+  privateKey?: string;
+  /** Path to keypair file */
+  keypairPath?: string;
+}
+
+/**
+ * Smarkets credentials (decrypted form)
+ */
+export interface SmarketsCredentials {
+  apiToken?: string;
+  sessionToken?: string;
+}
+
+/**
  * Union of all platform credentials
  */
 export type PlatformCredentials =
   | { platform: 'polymarket'; data: PolymarketCredentials }
   | { platform: 'kalshi'; data: KalshiCredentials }
-  | { platform: 'manifold'; data: ManifoldCredentials };
+  | { platform: 'manifold'; data: ManifoldCredentials }
+  | { platform: 'betfair'; data: BetfairCredentials }
+  | { platform: 'drift'; data: DriftCredentials }
+  | { platform: 'smarkets'; data: SmarketsCredentials };
 
 /**
  * Trading execution context passed to tools
@@ -251,6 +331,8 @@ export interface Session {
   key: string;
   userId: string;
   channel: string;
+  /** Optional account ID for multi-account channels */
+  accountId?: string;
   chatId: string;
   chatType: 'dm' | 'group';
   context: SessionContext;
@@ -268,6 +350,15 @@ export interface SessionContext {
   preferences: Record<string, unknown>;
   /** Conversation history for multi-turn context (last N messages) */
   conversationHistory: ConversationMessage[];
+  /** Checkpoint for conversation resumption */
+  checkpoint?: {
+    createdAt: number;
+    messageCount: number;
+    summary?: string;
+    history: ConversationMessage[];
+  };
+  /** Last time a checkpoint was restored */
+  checkpointRestoredAt?: number;
   /** Model override for this session (Clawdbot-style) */
   modelOverride?: string;
   /** Current model (Clawdbot chat command) */
@@ -328,6 +419,8 @@ export interface ThreadContext {
 export interface IncomingMessage {
   id: string;
   platform: string;
+  /** Optional account ID for multi-account channels */
+  accountId?: string;
   userId: string;
   chatId: string;
   chatType: 'dm' | 'group';
@@ -345,12 +438,38 @@ export interface OutgoingMessage {
   platform: string;
   chatId: string;
   text: string;
-  parseMode?: 'HTML' | 'Markdown';
+  /** Optional account ID for multi-account channels */
+  accountId?: string;
+  parseMode?: 'HTML' | 'Markdown' | 'MarkdownV2';
   buttons?: MessageButton[][];
   /** Thread/reply context */
   thread?: ThreadContext;
   /** Attachments to send */
   attachments?: MessageAttachment[];
+}
+
+export interface ReactionMessage {
+  platform: string;
+  chatId: string;
+  messageId: string;
+  emoji: string;
+  remove?: boolean;
+  /** Optional account ID for multi-account channels */
+  accountId?: string;
+  /** Optional sender JID for group messages */
+  participant?: string;
+  /** Whether the target message was sent by this bot */
+  fromMe?: boolean;
+}
+
+export interface PollMessage {
+  platform: string;
+  chatId: string;
+  question: string;
+  options: string[];
+  multiSelect?: boolean;
+  /** Optional account ID for multi-account channels */
+  accountId?: string;
 }
 
 export interface MessageButton {
@@ -400,7 +519,41 @@ export interface Skill {
 export interface Config {
   gateway: {
     port: number;
+    cors?: boolean | string[];
     auth: { token?: string };
+  };
+  positions?: {
+    enabled?: boolean;
+    priceUpdateIntervalMs?: number;
+    pnlSnapshotsEnabled?: boolean;
+    pnlHistoryDays?: number;
+  };
+  marketIndex?: {
+    enabled?: boolean;
+    syncIntervalMs?: number;
+    staleAfterMs?: number;
+    limitPerPlatform?: number;
+    status?: 'open' | 'closed' | 'settled' | 'all';
+    excludeSports?: boolean;
+    platforms?: Array<'polymarket' | 'kalshi' | 'manifold' | 'metaculus'>;
+    minVolume24h?: number;
+    minLiquidity?: number;
+    minOpenInterest?: number;
+    minPredictions?: number;
+    excludeResolved?: boolean;
+    platformWeights?: Partial<Record<'polymarket' | 'kalshi' | 'manifold' | 'metaculus', number>>;
+  };
+  memory?: {
+    auto?: {
+      enabled?: boolean;
+      scope?: 'user' | 'channel';
+      minIntervalMs?: number;
+      maxItemsPerType?: number;
+      profileUpdateEvery?: number;
+      semanticSearchTopK?: number;
+      includeMemoryContext?: boolean;
+      excludeSensitive?: boolean;
+    };
   };
   agents: {
     defaults: {
@@ -418,22 +571,41 @@ export interface Config {
       botToken: string;
       dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
       allowFrom?: string[];
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
     };
     discord?: {
       enabled: boolean;
       token: string;
+      appId?: string;
       dmPolicy?: 'pairing' | 'allowlist' | 'open' | 'disabled';
       allowFrom?: string[];
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
     };
     webchat?: {
       enabled: boolean;
+      authToken?: string;
+      rateLimit?: RateLimitConfig;
     };
     whatsapp?: {
       enabled: boolean;
       authDir?: string;
+      defaultAccountId?: string;
+      accounts?: Record<string, {
+        authDir?: string;
+        enabled?: boolean;
+        name?: string;
+        dmPolicy?: 'pairing' | 'allowlist' | 'open' | 'disabled';
+        allowFrom?: string[];
+        requireMentionInGroups?: boolean;
+        groups?: Record<string, { requireMention?: boolean }>;
+      }>;
       dmPolicy?: 'pairing' | 'allowlist' | 'open' | 'disabled';
       allowFrom?: string[];
       requireMentionInGroups?: boolean;
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
     };
     slack?: {
       enabled: boolean;
@@ -441,21 +613,164 @@ export interface Config {
       appToken: string;
       dmPolicy?: 'pairing' | 'allowlist' | 'open' | 'disabled';
       allowFrom?: string[];
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
+    };
+    teams?: {
+      enabled: boolean;
+      appId: string;
+      appPassword: string;
+      dmPolicy?: 'pairing' | 'open';
+      allowFrom?: string[];
+      teamAllowlist?: string[];
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
+    };
+    googlechat?: {
+      enabled: boolean;
+      credentialsPath?: string;
+      credentials?: {
+        client_email: string;
+        private_key: string;
+        project_id: string;
+      };
+      dmPolicy?: 'pairing' | 'open';
+      allowFrom?: string[];
+      spaces?: string[];
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
+    };
+    matrix?: {
+      enabled: boolean;
+      homeserverUrl: string;
+      accessToken: string;
+      userId: string;
+      dmPolicy?: 'pairing' | 'open';
+      allowFrom?: string[];
+      roomAllowlist?: string[];
+      deviceId?: string;
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
+    };
+    signal?: {
+      enabled: boolean;
+      phoneNumber: string;
+      signalCliPath?: string;
+      configDir?: string;
+      dmPolicy?: 'pairing' | 'open';
+      allowFrom?: string[];
+      groupAllowlist?: string[];
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
+    };
+    imessage?: {
+      enabled: boolean;
+      dmPolicy?: 'pairing' | 'open';
+      allowFrom?: string[];
+      groupAllowlist?: string[];
+      pollInterval?: number;
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
+    };
+    line?: {
+      enabled: boolean;
+      channelAccessToken: string;
+      channelSecret: string;
+      webhookPort?: number;
+      webhookPath?: string;
+      useInternalWebhookServer?: boolean;
+      groups?: Record<string, { requireMention?: boolean }>;
+      rateLimit?: RateLimitConfig;
     };
   };
   feeds: {
-    polymarket: { enabled: boolean };
-    kalshi: { enabled: boolean; email?: string; password?: string };
+    polymarket: {
+      enabled: boolean;
+      rtds?: {
+        enabled?: boolean;
+        url?: string;
+        pingIntervalMs?: number;
+        reconnectDelayMs?: number;
+        subscriptions?: Array<{
+          topic: 'crypto_prices' | 'crypto_prices_chainlink' | 'comments';
+          type: string;
+          filters?: string;
+          gammaAuthAddress?: string;
+          clobAuth?: { key: string; secret: string; passphrase: string };
+        }>;
+      };
+    };
+    kalshi: {
+      enabled: boolean;
+      apiKeyId?: string;
+      privateKeyPem?: string;
+      privateKeyPath?: string;
+      /** Legacy email login (deprecated) */
+      email?: string;
+      /** Legacy password login (deprecated) */
+      password?: string;
+    };
     manifold: { enabled: boolean; apiKey?: string };
     metaculus: { enabled: boolean };
-    drift: { enabled: boolean };
-    news: { enabled: boolean; twitter?: { accounts: string[] } };
+    drift: { enabled: boolean; betApiUrl?: string; requestTimeoutMs?: number };
+    betfair?: {
+      enabled: boolean;
+      appKey: string;
+      username?: string;
+      password?: string;
+      sessionToken?: string;
+      certPath?: string;
+      keyPath?: string;
+    };
+    smarkets?: {
+      enabled: boolean;
+      apiToken?: string;
+      sessionToken?: string;
+    };
+    news: {
+      enabled: boolean;
+      twitter?: {
+        accounts: string[];
+        bearerToken?: string;
+        baseUrl?: string;
+        requestTimeoutMs?: number;
+      };
+    };
+  };
+  solana?: {
+    rpcUrl?: string;
+    privateKey?: string;
+    keypairPath?: string;
+  };
+  /** x402 payment configuration */
+  x402?: {
+    enabled?: boolean;
+    /** Default network (base, base-sepolia, solana, solana-devnet) */
+    network?: 'base' | 'base-sepolia' | 'solana' | 'solana-devnet';
+    /** EVM private key for Base payments */
+    evmPrivateKey?: string;
+    /** Solana private key for Solana payments */
+    solanaPrivateKey?: string;
+    /** Facilitator URL (default: Coinbase) */
+    facilitatorUrl?: string;
+    /** Auto-approve payments under this USD amount */
+    autoApproveLimit?: number;
+    /** Dry run mode */
+    dryRun?: boolean;
+    /** Server config for receiving payments */
+    server?: {
+      /** Address to receive payments */
+      payToAddress?: string;
+      /** Network to receive on */
+      network?: 'base' | 'base-sepolia' | 'solana' | 'solana-devnet';
+    };
   };
   trading?: {
     enabled: boolean;
     dryRun: boolean;
     maxOrderSize: number;
     maxDailyLoss: number;
+    stopLossCooldownMs?: number;
     polymarket?: {
       privateKey: string;
       funderAddress: string;
@@ -475,6 +790,20 @@ export interface Config {
     priceChange: { threshold: number; windowSecs: number };
     volumeSpike: { multiplier: number };
   };
+  http?: HttpRateLimitConfig;
+  cron?: {
+    enabled?: boolean;
+    alertScanIntervalMs?: number;
+    digestIntervalMs?: number;
+    portfolioSyncIntervalMs?: number;
+    stopLossIntervalMs?: number;
+  };
+  monitoring?: MonitoringConfig;
+  marketCache?: {
+    enabled?: boolean;
+    ttlMs?: number;
+    cleanupIntervalMs?: number;
+  };
   /** Session configuration (Clawdbot-style) */
   session?: {
     /** How to scope DM sessions */
@@ -490,6 +819,15 @@ export interface Config {
     };
     /** Commands that trigger session reset */
     resetTriggers?: string[];
+    /** Cleanup configuration */
+    cleanup?: {
+      /** Whether to delete old sessions */
+      enabled?: boolean;
+      /** Max age in days before deletion */
+      maxAgeDays?: number;
+      /** Only delete sessions with no recent activity */
+      idleDays?: number;
+    };
   };
   /** Message queue configuration (Clawdbot-style) */
   messages?: {
@@ -506,5 +844,76 @@ export interface Config {
       /** Max messages to collect */
       cap?: number;
     };
+    /** Offline outbound message queue settings */
+    offlineQueue?: OfflineQueueConfig;
+  };
+}
+
+export interface RateLimitConfig {
+  maxRequests: number;
+  windowMs: number;
+  perUser?: boolean;
+}
+
+export interface HttpRetryConfig {
+  enabled?: boolean;
+  maxAttempts?: number;
+  minDelay?: number;
+  maxDelay?: number;
+  jitter?: number;
+  backoffMultiplier?: number;
+  methods?: string[];
+}
+
+export interface HttpRateLimitConfig {
+  enabled?: boolean;
+  defaultRateLimit?: RateLimitConfig;
+  perHost?: Record<string, RateLimitConfig>;
+  retry?: HttpRetryConfig;
+}
+
+export interface OfflineQueueConfig {
+  enabled?: boolean;
+  maxSize?: number;
+  maxAgeMs?: number;
+  retryIntervalMs?: number;
+  maxRetries?: number;
+}
+
+export interface MonitoringTarget {
+  platform: string;
+  chatId: string;
+  /** Optional account ID for multi-account channels */
+  accountId?: string;
+  threadId?: string;
+}
+
+export interface MonitoringConfig {
+  enabled?: boolean;
+  cooldownMs?: number;
+  alertTargets?: MonitoringTarget[];
+  email?: {
+    enabled?: boolean;
+    from?: string;
+    to?: string[];
+    subjectPrefix?: string;
+  };
+  providerHealth?: {
+    enabled?: boolean;
+    alertAfterFailures?: number;
+    alertOnRecovery?: boolean;
+    cooldownMs?: number;
+  };
+  errors?: {
+    enabled?: boolean;
+    cooldownMs?: number;
+    includeStack?: boolean;
+  };
+  systemHealth?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    memoryWarnPct?: number;
+    diskWarnPct?: number;
+    cooldownMs?: number;
   };
 }

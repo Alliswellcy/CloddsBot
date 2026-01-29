@@ -73,10 +73,48 @@ export interface ApprovalRequest {
   agentId: string;
   sessionId?: string;
   timestamp: Date;
+  expiresAt?: Date;
+  awaitingDecision?: boolean;
+  requester?: {
+    userId: string;
+    channel: string;
+    chatId: string;
+  };
   status: 'pending' | 'approved' | 'denied' | 'timeout';
   decision?: ApprovalDecision;
   decidedBy?: string;
   decidedAt?: Date;
+}
+
+interface PendingApprovalRecord {
+  id: string;
+  command: string;
+  args: string[];
+  fullCommand: string;
+  agentId: string;
+  sessionId?: string;
+  timestamp: string;
+  expiresAt?: string;
+  requester?: ApprovalRequest['requester'];
+}
+
+interface PendingApprovalsFile {
+  version: number;
+  pending: PendingApprovalRecord[];
+  updatedAt: string;
+}
+
+interface ApprovalDecisionRecord {
+  id: string;
+  decision: ApprovalDecision;
+  decidedBy?: string;
+  decidedAt: string;
+}
+
+interface ApprovalDecisionsFile {
+  version: number;
+  decisions: ApprovalDecisionRecord[];
+  updatedAt: string;
 }
 
 export interface ExecApprovalsConfig {
@@ -403,12 +441,42 @@ export function resolveSandboxPath(path: string, config: SandboxConfig): string 
 export class ExecApprovalsManager extends EventEmitter {
   private config: ExecApprovalsConfig;
   private configPath: string;
+  private pendingPath: string;
+  private decisionsPath: string;
   private pendingApprovals: Map<string, ApprovalRequest> = new Map();
 
   constructor(configPath?: string) {
     super();
     this.configPath = configPath || join(homedir(), '.clodds', 'exec-approvals.json');
+    this.pendingPath = join(homedir(), '.clodds', 'exec-approvals.pending.json');
+    this.decisionsPath = join(homedir(), '.clodds', 'exec-approvals.decisions.json');
     this.config = this.loadConfig();
+
+    const pending = this.loadPendingFile();
+    const now = Date.now();
+    for (const entry of pending.pending) {
+      const expiresAt = entry.expiresAt ? new Date(entry.expiresAt) : undefined;
+      if (expiresAt && expiresAt.getTime() <= now) {
+        continue;
+      }
+      this.pendingApprovals.set(entry.id, {
+        id: entry.id,
+        command: entry.command,
+        args: entry.args,
+        fullCommand: entry.fullCommand,
+        agentId: entry.agentId,
+        sessionId: entry.sessionId,
+        timestamp: new Date(entry.timestamp),
+        expiresAt,
+        requester: entry.requester,
+        status: 'pending',
+      });
+    }
+
+    const decisionPoller = setInterval(() => {
+      this.applyDecisionsFromDisk();
+    }, 1000);
+    decisionPoller.unref?.();
   }
 
   private loadConfig(): ExecApprovalsConfig {
@@ -436,6 +504,10 @@ export class ExecApprovalsManager extends EventEmitter {
     };
   }
 
+  private refreshConfig(): void {
+    this.config = this.loadConfig();
+  }
+
   private saveConfig(): void {
     try {
       const dir = dirname(this.configPath);
@@ -445,6 +517,161 @@ export class ExecApprovalsManager extends EventEmitter {
       writeFileSync(this.configPath, JSON.stringify(this.config, null, 2));
     } catch (error) {
       logger.error({ error }, 'Failed to save exec approvals config');
+    }
+  }
+
+  private loadPendingFile(): PendingApprovalsFile {
+    try {
+      if (existsSync(this.pendingPath)) {
+        const data = JSON.parse(readFileSync(this.pendingPath, 'utf-8')) as PendingApprovalsFile;
+        if (data.version === 1 && Array.isArray(data.pending)) {
+          return data;
+        }
+      }
+    } catch (error) {
+      logger.error({ error }, 'Failed to load exec approvals pending file');
+    }
+
+    return {
+      version: 1,
+      pending: [],
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  private savePendingFile(pending: PendingApprovalRecord[]): void {
+    try {
+      const dir = dirname(this.pendingPath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      const data: PendingApprovalsFile = {
+        version: 1,
+        pending,
+        updatedAt: new Date().toISOString(),
+      };
+      writeFileSync(this.pendingPath, JSON.stringify(data, null, 2));
+    } catch (error) {
+      logger.error({ error }, 'Failed to save exec approvals pending file');
+    }
+  }
+
+  private loadDecisionsFile(): ApprovalDecisionsFile {
+    try {
+      if (existsSync(this.decisionsPath)) {
+        const data = JSON.parse(readFileSync(this.decisionsPath, 'utf-8')) as ApprovalDecisionsFile;
+        if (data.version === 1 && Array.isArray(data.decisions)) {
+          return data;
+        }
+      }
+    } catch (error) {
+      logger.error({ error }, 'Failed to load exec approvals decisions file');
+    }
+
+    return {
+      version: 1,
+      decisions: [],
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  private saveDecisionsFile(decisions: ApprovalDecisionRecord[]): void {
+    try {
+      const dir = dirname(this.decisionsPath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      const data: ApprovalDecisionsFile = {
+        version: 1,
+        decisions,
+        updatedAt: new Date().toISOString(),
+      };
+      writeFileSync(this.decisionsPath, JSON.stringify(data, null, 2));
+    } catch (error) {
+      logger.error({ error }, 'Failed to save exec approvals decisions file');
+    }
+  }
+
+  private persistPending(): void {
+    const pending: PendingApprovalRecord[] = Array.from(this.pendingApprovals.values())
+      .filter((req) => req.status === 'pending')
+      .map((req) => ({
+        id: req.id,
+        command: req.command,
+        args: req.args,
+        fullCommand: req.fullCommand,
+        agentId: req.agentId,
+        sessionId: req.sessionId,
+        timestamp: req.timestamp.toISOString(),
+        expiresAt: req.expiresAt?.toISOString(),
+        requester: req.requester,
+      }));
+    this.savePendingFile(pending);
+  }
+
+  private consumeDecisionForRequest(requestId: string): ApprovalDecisionRecord | null {
+    const data = this.loadDecisionsFile();
+    if (data.decisions.length === 0) return null;
+
+    const remaining: ApprovalDecisionRecord[] = [];
+    let matched: ApprovalDecisionRecord | null = null;
+
+    for (const decision of data.decisions) {
+      if (!matched && decision.id === requestId) {
+        matched = decision;
+      } else {
+        remaining.push(decision);
+      }
+    }
+
+    if (matched) {
+      this.saveDecisionsFile(remaining);
+    }
+
+    return matched;
+  }
+
+  private applyDecisionsFromDisk(): void {
+    const data = this.loadDecisionsFile();
+    if (data.decisions.length === 0) return;
+
+    const remaining: ApprovalDecisionRecord[] = [];
+    let changed = false;
+
+    for (const decision of data.decisions) {
+      const request = this.pendingApprovals.get(decision.id);
+      if (!request) {
+        continue;
+      }
+
+      request.status = decision.decision === 'deny' ? 'denied' : 'approved';
+      request.decision = decision.decision;
+      request.decidedBy = decision.decidedBy;
+      request.decidedAt = new Date(decision.decidedAt);
+
+      this.pendingApprovals.delete(decision.id);
+      changed = true;
+
+      if (decision.decision === 'allow-always' && !request.awaitingDecision) {
+        this.addToAllowlist(request.agentId, request.command, 'prefix', {
+          description: 'Auto-added via approval',
+          addedBy: decision.decidedBy,
+        });
+      }
+
+      this.emit('approval:decision', {
+        requestId: decision.id,
+        decision: decision.decision,
+        decidedBy: decision.decidedBy,
+      });
+    }
+
+    if (remaining.length !== data.decisions.length) {
+      this.saveDecisionsFile(remaining);
+    }
+
+    if (changed) {
+      this.persistPending();
     }
   }
 
@@ -528,9 +755,16 @@ export class ExecApprovalsManager extends EventEmitter {
   async checkCommand(
     agentId: string,
     fullCommand: string,
-    options: { sessionId?: string; skipApproval?: boolean } = {}
-  ): Promise<{ allowed: boolean; reason: string; entry?: AllowlistEntry }> {
+    options: {
+      sessionId?: string;
+      skipApproval?: boolean;
+      waitForApproval?: boolean;
+      requester?: ApprovalRequest['requester'];
+    } = {}
+  ): Promise<{ allowed: boolean; reason: string; entry?: AllowlistEntry; requestId?: string }> {
+    this.refreshConfig();
     const security = this.getSecurityConfig(agentId);
+    const waitForApproval = options.waitForApproval !== false;
 
     // Full mode - allow everything
     if (security.mode === 'full') {
@@ -574,7 +808,24 @@ export class ExecApprovalsManager extends EventEmitter {
 
       // Request approval
       if (security.ask === 'on-miss' || security.ask === 'always') {
-        const approval = await this.requestApproval(agentId, command, args, cmdStr, options.sessionId);
+        if (!waitForApproval) {
+          const pending = this.createApprovalRequest(
+            agentId,
+            command,
+            args,
+            cmdStr,
+            options.sessionId,
+            options.requester,
+            false
+          );
+          return {
+            allowed: false,
+            reason: 'Approval required',
+            requestId: pending.id,
+          };
+        }
+
+        const approval = await this.requestApproval(agentId, command, args, cmdStr, options.sessionId, options.requester);
 
         if (approval.status === 'approved') {
           if (approval.decision === 'allow-always') {
@@ -597,6 +848,53 @@ export class ExecApprovalsManager extends EventEmitter {
     return { allowed: true, reason: 'All commands allowed' };
   }
 
+  private createApprovalRequest(
+    agentId: string,
+    command: string,
+    args: string[],
+    fullCommand: string,
+    sessionId?: string,
+    requester?: ApprovalRequest['requester'],
+    awaitingDecision: boolean = false
+  ): ApprovalRequest {
+    const security = this.getSecurityConfig(agentId);
+    const timeout = security.approvalTimeout || DEFAULT_APPROVAL_TIMEOUT;
+
+    const request: ApprovalRequest = {
+      id: randomUUID(),
+      command,
+      args,
+      fullCommand,
+      agentId,
+      sessionId,
+      requester,
+      awaitingDecision,
+      timestamp: new Date(),
+      expiresAt: new Date(Date.now() + timeout),
+      status: 'pending',
+    };
+
+    this.pendingApprovals.set(request.id, request);
+    this.persistPending();
+    this.emit('approval:request', request);
+
+    logger.info({ requestId: request.id, command, agentId }, 'Approval requested');
+
+    setTimeout(() => {
+      const existing = this.pendingApprovals.get(request.id);
+      if (existing && existing.status === 'pending' && existing.expiresAt) {
+        if (Date.now() >= existing.expiresAt.getTime()) {
+          existing.status = 'timeout';
+          this.pendingApprovals.delete(request.id);
+          this.persistPending();
+          this.emit('approval:timeout', existing);
+        }
+      }
+    }, timeout + 500);
+
+    return request;
+  }
+
   /**
    * Request approval for a command
    */
@@ -605,23 +903,18 @@ export class ExecApprovalsManager extends EventEmitter {
     command: string,
     args: string[],
     fullCommand: string,
-    sessionId?: string
+    sessionId?: string,
+    requester?: ApprovalRequest['requester']
   ): Promise<ApprovalRequest> {
-    const request: ApprovalRequest = {
-      id: randomUUID(),
+    const request = this.createApprovalRequest(
+      agentId,
       command,
       args,
       fullCommand,
-      agentId,
       sessionId,
-      timestamp: new Date(),
-      status: 'pending',
-    };
-
-    this.pendingApprovals.set(request.id, request);
-    this.emit('approval:request', request);
-
-    logger.info({ requestId: request.id, command, agentId }, 'Approval requested');
+      requester,
+      true
+    );
 
     // Wait for decision or timeout
     const security = this.getSecurityConfig(agentId);
@@ -632,20 +925,34 @@ export class ExecApprovalsManager extends EventEmitter {
         if (request.status === 'pending') {
           request.status = 'timeout';
           this.pendingApprovals.delete(request.id);
+          this.persistPending();
           this.emit('approval:timeout', request);
+          clearInterval(poller);
           resolve(request);
         }
       }, timeout);
+
+      const poller = setInterval(() => {
+        const decision = this.consumeDecisionForRequest(request.id);
+        if (!decision) return;
+        this.emit('approval:decision', {
+          requestId: decision.id,
+          decision: decision.decision,
+          decidedBy: decision.decidedBy,
+        });
+      }, 500);
 
       // Listen for decision
       const handler = (decision: { requestId: string; decision: ApprovalDecision; decidedBy?: string }) => {
         if (decision.requestId === request.id) {
           clearTimeout(timer);
+          clearInterval(poller);
           request.status = decision.decision === 'deny' ? 'denied' : 'approved';
           request.decision = decision.decision;
           request.decidedBy = decision.decidedBy;
           request.decidedAt = new Date();
           this.pendingApprovals.delete(request.id);
+          this.persistPending();
           this.removeListener('approval:decision', handler);
           resolve(request);
         }
@@ -674,6 +981,54 @@ export class ExecApprovalsManager extends EventEmitter {
    */
   getPendingApprovals(): ApprovalRequest[] {
     return Array.from(this.pendingApprovals.values());
+  }
+
+  /**
+   * Get pending approval requests from disk (cross-process)
+   */
+  getPendingApprovalsFromDisk(): ApprovalRequest[] {
+    const data = this.loadPendingFile();
+    const now = Date.now();
+    const active = data.pending.filter((entry) => !entry.expiresAt || new Date(entry.expiresAt).getTime() > now);
+    if (active.length !== data.pending.length) {
+      this.savePendingFile(active);
+    }
+    return active
+      .map((entry): ApprovalRequest => ({
+        id: entry.id,
+        command: entry.command,
+        args: entry.args,
+        fullCommand: entry.fullCommand,
+        agentId: entry.agentId,
+        sessionId: entry.sessionId,
+        timestamp: new Date(entry.timestamp),
+        expiresAt: entry.expiresAt ? new Date(entry.expiresAt) : undefined,
+        requester: entry.requester,
+        status: 'pending',
+      }))
+      .filter((req) => !req.expiresAt || req.expiresAt.getTime() > now);
+  }
+
+  /**
+   * Record a decision to disk (for external approvers like CLI)
+   */
+  recordDecision(requestId: string, decision: ApprovalDecision, decidedBy?: string): boolean {
+    const pending = this.loadPendingFile();
+    const exists = pending.pending.some((entry) => entry.id === requestId);
+    if (!exists) {
+      return false;
+    }
+
+    const decisions = this.loadDecisionsFile();
+    const filtered = decisions.decisions.filter((entry) => entry.id !== requestId);
+    filtered.push({
+      id: requestId,
+      decision,
+      decidedBy,
+      decidedAt: new Date().toISOString(),
+    });
+    this.saveDecisionsFile(filtered);
+    return true;
   }
 
   /**

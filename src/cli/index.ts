@@ -10,17 +10,30 @@
  * - clodds pairing users <channel> - List paired users
  */
 
+import 'dotenv/config';
 import { Command } from 'commander';
 import { createDatabase } from '../db/index';
+import { createMigrationRunner } from '../db/migrations';
 import { createPairingService } from '../pairing/index';
 import { createGateway } from '../gateway/index';
 import { loadConfig } from '../utils/config';
 import { logger } from '../utils/logger';
+import { installHttpClient, configureHttpClient } from '../utils/http';
 import { runDoctor } from './commands/doctor';
 import { createSkillsCommands } from './commands/skills';
 import { addAllCommands } from './commands/index';
+import { startRepl } from './commands/repl';
 
 const program = new Command();
+installHttpClient();
+
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason }, 'Unhandled promise rejection');
+});
+process.on('uncaughtException', (error) => {
+  logger.error({ error }, 'Uncaught exception');
+  process.exit(1);
+});
 
 program
   .name('clodds')
@@ -34,6 +47,7 @@ program
   .action(async () => {
     logger.info('Starting Clodds...');
     const config = await loadConfig();
+    configureHttpClient(config.http);
     const gateway = await createGateway(config);
     await gateway.start();
 
@@ -49,6 +63,25 @@ program
     process.on('SIGTERM', shutdown);
   });
 
+// REPL command
+program
+  .command('repl')
+  .description('Start an interactive local REPL for testing the agent')
+  .option('-c, --config <path>', 'Path to config file')
+  .option('--user <id>', 'User ID to use in the REPL', 'cli-user')
+  .option('--chat <id>', 'Chat ID to use in the REPL', 'cli-chat')
+  .option('--platform <name>', 'Platform label for the REPL session', 'cli')
+  .option('--no-feeds', 'Do not start market/news feeds')
+  .action(async (options: { config?: string; user?: string; chat?: string; platform?: string; feeds?: boolean }) => {
+    await startRepl({
+      config: options.config,
+      userId: options.user,
+      chatId: options.chat,
+      platform: options.platform,
+      feeds: options.feeds,
+    });
+  });
+
 // Pairing commands
 const pairing = program
   .command('pairing')
@@ -59,6 +92,7 @@ pairing
   .description('List pending pairing requests for a channel')
   .action(async (channel: string) => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     const requests = pairingService.listPendingRequests(channel);
@@ -88,6 +122,7 @@ pairing
   .description('Approve a pairing request')
   .action(async (channel: string, code: string) => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     const success = await pairingService.approveRequest(channel, code);
@@ -108,6 +143,7 @@ pairing
   .description('Reject a pairing request')
   .action(async (channel: string, code: string) => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     const success = await pairingService.rejectRequest(channel, code);
@@ -126,6 +162,7 @@ pairing
   .description('List paired users for a channel')
   .action(async (channel: string) => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     const users = pairingService.listPairedUsers(channel);
@@ -156,6 +193,7 @@ pairing
   .description('Set a user as owner (can approve pairings via chat)')
   .action(async (channel: string, userId: string, options: { username?: string }) => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     pairingService.setOwner(channel, userId, options.username);
@@ -170,6 +208,7 @@ pairing
   .description('Remove owner status from a user')
   .action(async (channel: string, userId: string) => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     pairingService.removeOwner(channel, userId);
@@ -183,6 +222,7 @@ pairing
   .description('List all owners for a channel')
   .action(async (channel: string) => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     const owners = pairingService.listOwners(channel);
@@ -207,6 +247,7 @@ pairing
   .description('Manually add a user to the paired list')
   .action(async (channel: string, userId: string, options: { username?: string }) => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     pairingService.addPairedUser(channel, userId, options.username, 'allowlist');
@@ -220,6 +261,7 @@ pairing
   .description('Remove a user from the paired list')
   .action(async (channel: string, userId: string) => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     pairingService.removePairedUser(channel, userId);
@@ -259,22 +301,85 @@ program
     }
   });
 
+// Webhook endpoints helper
+program
+  .command('endpoints')
+  .description('Show webhook endpoints for channels')
+  .option('--host <host>', 'Public host for webhooks', process.env.CLODDS_PUBLIC_HOST || 'localhost')
+  .option('--scheme <scheme>', 'URL scheme (http or https)', process.env.CLODDS_PUBLIC_SCHEME || 'http')
+  .option('--port <port>', 'Override gateway port')
+  .action(async (options: { host: string; scheme: string; port?: string }) => {
+    const config = await loadConfig();
+    const port = options.port ? Number.parseInt(options.port, 10) : (config.gateway?.port || 18789);
+    const host = options.host;
+    const scheme = options.scheme;
+    const portSuffix = port === 80 || port === 443 ? '' : `:${port}`;
+    const baseUrl = `${scheme}://${host}${portSuffix}`;
+
+    console.log('\nWebhook Endpoints\n');
+    console.log(`Base URL: ${baseUrl}\n`);
+
+    console.log('Channel webhooks:');
+    console.log(`- Teams: ${baseUrl}/channels/teams`);
+    console.log(`- Google Chat: ${baseUrl}/channels/googlechat`);
+    console.log(`- LINE: ${baseUrl}/channels/line`);
+    console.log('');
+
+    console.log('Automation webhooks:');
+    console.log(`- Generic: ${baseUrl}/webhook`);
+    console.log(`- By ID: ${baseUrl}/webhook/:id`);
+  });
+
 // Status command
 program
   .command('status')
   .description('Show Clodds status')
   .action(async () => {
     const db = createDatabase();
+    createMigrationRunner(db).migrate();
     const pairingService = createPairingService(db);
 
     console.log('\nClodds Status\n');
 
     // Count paired users per channel
-    const channels = ['telegram', 'discord', 'webchat'];
+    const channels = ['telegram', 'discord', 'webchat', 'matrix', 'signal', 'imessage', 'line', 'googlechat'];
     for (const channel of channels) {
       const users = pairingService.listPairedUsers(channel);
       const pending = pairingService.listPendingRequests(channel);
       console.log(`${channel}: ${users.length} paired, ${pending.length} pending`);
+    }
+
+    const config = await loadConfig();
+    const scheme = process.env.CLODDS_PUBLIC_SCHEME || 'http';
+    const host = process.env.CLODDS_PUBLIC_HOST || 'localhost';
+    const portSuffix = config.gateway?.port && ![80, 443].includes(config.gateway.port)
+      ? `:${config.gateway.port}`
+      : '';
+    const baseUrl = `${scheme}://${host}${portSuffix}`;
+
+    console.log('\nWebhook Endpoints\n');
+    console.log(`Base URL: ${baseUrl}`);
+    console.log(`Teams: ${baseUrl}/channels/teams`);
+    console.log(`Google Chat: ${baseUrl}/channels/googlechat`);
+    console.log(`LINE: ${baseUrl}/channels/line`);
+    console.log(`Webhook (generic): ${baseUrl}/webhook`);
+    console.log(`Webhook (by id): ${baseUrl}/webhook/:id`);
+
+    const groupPolicies: Record<string, number> = {};
+    if (config.channels) {
+      for (const [channel, channelConfig] of Object.entries(config.channels)) {
+        const groups = (channelConfig as any)?.groups;
+        if (groups && typeof groups === 'object') {
+          groupPolicies[channel] = Object.keys(groups).length;
+        }
+      }
+    }
+
+    if (Object.keys(groupPolicies).length > 0) {
+      console.log('\nGroup Policies\n');
+      for (const [channel, count] of Object.entries(groupPolicies)) {
+        console.log(`${channel}: ${count} groups`);
+      }
     }
 
     db.close();

@@ -10,10 +10,14 @@
  * - Approval gating via ExecApprovalsManager
  */
 
-import { spawn, execSync, ChildProcess } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import { logger } from '../utils/logger';
-import { execApprovals, elevatedPermissions, isSafeBin, splitCommandChain, parseCommand } from '../permissions/index';
+import {
+  execApprovals,
+  elevatedPermissions,
+  assertSandboxPath,
+} from '../permissions/index';
 
 /** Exec options */
 export interface ExecOptions {
@@ -25,6 +29,16 @@ export interface ExecOptions {
   background?: boolean;
   /** Use elevated privileges */
   elevated?: boolean;
+  /** Sandbox mode enforcement */
+  sandboxMode?: 'off' | 'docker';
+  /** Docker sandbox configuration */
+  sandbox?: {
+    image?: string;
+    networkEnabled?: boolean;
+    memory?: string;
+    cpus?: number;
+    readonly?: boolean;
+  };
   /** Environment variables to add */
   env?: Record<string, string>;
   /** Max output size in bytes */
@@ -70,6 +84,179 @@ const backgroundProcesses = new Map<number, BackgroundProcess>();
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 const DEFAULT_MAX_OUTPUT = 1024 * 1024; // 1MB
+const DEFAULT_DOCKER_IMAGE = process.env.CLODDS_SANDBOX_IMAGE || 'debian:bookworm-slim';
+
+function runProcess(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number } = {}
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+
+    const timeoutId =
+      options.timeout && options.timeout > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            child.kill('SIGTERM');
+            setTimeout(() => {
+              if (!child.killed) child.kill('SIGKILL');
+            }, 1000);
+          }, options.timeout)
+        : null;
+
+    child.stdout?.on('data', (data) => {
+      stdout += data.toString();
+    });
+    child.stderr?.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve({
+        stdout: stdout.trim(),
+        stderr: timedOut ? (stderr || 'Process timed out') : stderr.trim(),
+        exitCode: timedOut ? 124 : code ?? 1,
+      });
+    });
+
+    child.on('error', (err) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve({
+        stdout: '',
+        stderr: err.message,
+        exitCode: 1,
+      });
+    });
+  });
+}
+
+async function runInDockerSandbox(
+  command: string,
+  cwd: string,
+  workspaceRoot: string,
+  env: NodeJS.ProcessEnv,
+  timeout: number,
+  sandbox: NonNullable<ExecOptions['sandbox']>
+): Promise<ExecResult> {
+  // Ensure cwd is within the workspace sandbox root.
+  assertSandboxPath(cwd, { root: workspaceRoot, allowSymlinks: false });
+
+  const image = sandbox.image || DEFAULT_DOCKER_IMAGE;
+  const networkEnabled = sandbox.networkEnabled ?? false;
+  const readonly = sandbox.readonly ?? false;
+
+  // Basic docker availability check.
+  const dockerInfo = await runProcess('docker', ['info'], { timeout: 5000 });
+  if (dockerInfo.exitCode !== 0) {
+    return {
+      stdout: '',
+      stderr: dockerInfo.stderr || 'Docker is not available',
+      exitCode: 127,
+      signal: null,
+      timedOut: false,
+    };
+  }
+
+  const containerName = `clodds-sbx-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+
+  const dockerArgs = [
+    'run',
+    '--name',
+    containerName,
+    '--rm',
+    '-d',
+    '--cap-drop',
+    'ALL',
+    '--security-opt',
+    'no-new-privileges',
+    '--pids-limit',
+    '256',
+    '-v',
+    `${cwd}:/workspace${readonly ? ':ro' : ''}`,
+    '-w',
+    '/workspace',
+    '--network',
+    networkEnabled ? 'bridge' : 'none',
+  ];
+
+  if (sandbox.memory) {
+    dockerArgs.push('-m', sandbox.memory);
+  }
+  if (sandbox.cpus) {
+    dockerArgs.push('--cpus', String(sandbox.cpus));
+  }
+
+  dockerArgs.push(image, 'sh', '-lc', command);
+
+  const started = await runProcess('docker', dockerArgs, { env, timeout: 15000 });
+  if (started.exitCode !== 0) {
+    return {
+      stdout: started.stdout,
+      stderr: started.stderr || 'Failed to start docker sandbox',
+      exitCode: started.exitCode,
+      signal: null,
+      timedOut: false,
+    };
+  }
+
+  let timedOut = false;
+  let exitCode: number | null = null;
+
+  const waitPromise = runProcess('docker', ['wait', containerName], {
+    env,
+    timeout: Math.max(timeout, 1000),
+  });
+
+  const timeoutPromise = new Promise<{ exitCode: number }>((resolve) => {
+    setTimeout(async () => {
+      timedOut = true;
+      await runProcess('docker', ['kill', '-s', 'TERM', containerName], { env, timeout: 3000 });
+      setTimeout(() => {
+        void runProcess('docker', ['kill', '-s', 'KILL', containerName], {
+          env,
+          timeout: 3000,
+        });
+      }, 1000);
+      resolve({ exitCode: 124 });
+    }, timeout);
+  });
+
+  const waitResult = await Promise.race([waitPromise, timeoutPromise]);
+  if ('stdout' in waitResult) {
+    const parsed = parseInt(waitResult.stdout, 10);
+    exitCode = Number.isFinite(parsed) ? parsed : waitResult.exitCode;
+  } else {
+    exitCode = waitResult.exitCode;
+  }
+
+  const logs = await runProcess('docker', ['logs', containerName], {
+    env,
+    timeout: 10000,
+  });
+
+  // Best-effort cleanup (container may already be removed).
+  void runProcess('docker', ['rm', '-f', containerName], { env, timeout: 5000 });
+
+  return {
+    stdout: logs.stdout,
+    stderr: logs.stderr,
+    exitCode: exitCode ?? 1,
+    signal: null,
+    timedOut,
+  };
+}
 
 export interface ExecTool {
   /** Execute a command */
@@ -100,6 +287,8 @@ export function createExecTool(workspaceDir: string, defaultAgentId: string = 'd
       const timeout = options.timeout || DEFAULT_TIMEOUT;
       const maxOutput = options.maxOutput || DEFAULT_MAX_OUTPUT;
       const agentId = options.agentId || defaultAgentId;
+      const sandboxMode =
+        options.sandboxMode || (process.env.CLODDS_SANDBOX_MODE === 'docker' ? 'docker' : 'off');
 
       logger.info({ command, cwd, background: options.background, agentId }, 'Executing command');
 
@@ -156,8 +345,39 @@ export function createExecTool(workspaceDir: string, defaultAgentId: string = 'd
           };
         }
 
-        logger.warn({ command, agentId, senderId: options.senderId }, 'Elevated execution approved');
-        finalCommand = `sudo ${command}`;
+        // Require an explicit approval decision for the elevated form.
+        const elevatedApproval = await execApprovals.checkCommand(agentId, `sudo ${command}`, {
+          sessionId: options.sessionId,
+          skipApproval: false,
+        });
+
+        if (!elevatedApproval.allowed) {
+          logger.warn(
+            { command, reason: elevatedApproval.reason, agentId },
+            'Elevated command blocked by approval system'
+          );
+          return {
+            stdout: '',
+            stderr: `Elevated command blocked: ${elevatedApproval.reason}`,
+            exitCode: 126,
+            signal: null,
+            timedOut: false,
+          };
+        }
+
+        logger.warn(
+          { command, agentId, senderId: options.senderId },
+          'Elevated execution approved'
+        );
+        // Use non-interactive sudo to avoid hanging on password prompts.
+        finalCommand = `sudo -n -- ${command}`;
+      }
+
+      // Enforce docker sandboxing when configured.
+      if (sandboxMode === 'docker' && !options.background) {
+        logger.info({ command, cwd }, 'Executing command in Docker sandbox');
+        const sandboxConfig = options.sandbox || {};
+        return runInDockerSandbox(finalCommand, cwd, workspaceDir, env, timeout, sandboxConfig);
       }
 
       return new Promise((resolve) => {

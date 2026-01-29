@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadConfig } from '../../utils/config';
+import { resolveWhatsAppAccounts } from '../../channels/whatsapp/index';
 
 interface CheckResult {
   name: string;
@@ -23,6 +24,7 @@ interface CheckResult {
 
 export async function runDoctor(): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
+  const config = await loadConfig();
 
   // 1. Node version check
   const nodeVersion = process.version;
@@ -156,20 +158,50 @@ export async function runDoctor(): Promise<CheckResult[]> {
     // Check WhatsApp
     const whatsappConfig = (config.channels as any)?.whatsapp;
     if (whatsappConfig?.enabled) {
-      const authDir = whatsappConfig.authDir || path.join(process.cwd(), '.whatsapp-auth');
-      if (fs.existsSync(authDir)) {
-        results.push({
-          name: 'WhatsApp channel',
-          status: 'pass',
-          message: 'Auth directory exists',
-        });
-      } else {
+      const accounts = resolveWhatsAppAccounts(whatsappConfig);
+      if (accounts.length === 0) {
         results.push({
           name: 'WhatsApp channel',
           status: 'warn',
-          message: 'Needs QR pairing',
-          fix: 'Start gateway and scan QR code',
+          message: 'No enabled accounts configured',
+          fix: 'Set channels.whatsapp.authDir or channels.whatsapp.accounts',
         });
+      } else {
+        const warnOpenPolicy = (label: string, policy?: string) => {
+          if (policy === 'open') {
+            results.push({
+              name: `${label} DM policy`,
+              status: 'warn',
+              message: 'OPEN - anyone can message',
+              fix: 'Set dmPolicy: "pairing" for security',
+            });
+          } else if (policy) {
+            results.push({
+              name: `${label} DM policy`,
+              status: 'pass',
+              message: policy,
+            });
+          }
+        };
+        warnOpenPolicy('WhatsApp', whatsappConfig.dmPolicy);
+        for (const account of accounts) {
+          if (fs.existsSync(account.authDir)) {
+            results.push({
+              name: `WhatsApp channel (${account.accountId})`,
+              status: 'pass',
+              message: 'Auth directory exists',
+            });
+          } else {
+            results.push({
+              name: `WhatsApp channel (${account.accountId})`,
+              status: 'warn',
+              message: 'Needs QR pairing',
+              fix: 'Run `clodds whatsapp login` and scan the QR code',
+            });
+          }
+          const accountPolicy = whatsappConfig.accounts?.[account.accountId]?.dmPolicy;
+          warnOpenPolicy(`WhatsApp (${account.accountId})`, accountPolicy);
+        }
       }
     }
 
@@ -191,6 +223,149 @@ export async function runDoctor(): Promise<CheckResult[]> {
           fix: 'Set SLACK_BOT_TOKEN and SLACK_APP_TOKEN',
         });
       }
+    }
+
+    // Check Microsoft Teams
+    const teamsConfig = (config.channels as any)?.teams;
+    if (teamsConfig?.enabled) {
+      if ((teamsConfig.appId || process.env.TEAMS_APP_ID) &&
+          (teamsConfig.appPassword || process.env.TEAMS_APP_PASSWORD)) {
+        results.push({
+          name: 'Microsoft Teams channel',
+          status: 'pass',
+          message: 'Configured',
+        });
+      } else {
+        results.push({
+          name: 'Microsoft Teams channel',
+          status: 'fail',
+          message: 'Missing app credentials',
+          fix: 'Set TEAMS_APP_ID and TEAMS_APP_PASSWORD',
+        });
+      }
+    }
+
+    // Check Matrix
+    const matrixConfig = (config.channels as any)?.matrix;
+    if (matrixConfig?.enabled) {
+      if (matrixConfig.homeserverUrl && matrixConfig.accessToken && matrixConfig.userId) {
+        results.push({
+          name: 'Matrix channel',
+          status: 'pass',
+          message: 'Configured',
+        });
+      } else {
+        results.push({
+          name: 'Matrix channel',
+          status: 'fail',
+          message: 'Missing homeserverUrl/accessToken/userId',
+          fix: 'Set MATRIX_HOMESERVER_URL, MATRIX_ACCESS_TOKEN, MATRIX_USER_ID or channels.matrix.*',
+        });
+      }
+    }
+
+    // Check Signal
+    const signalConfig = (config.channels as any)?.signal;
+    if (signalConfig?.enabled) {
+      if (signalConfig.phoneNumber) {
+        results.push({
+          name: 'Signal channel',
+          status: 'pass',
+          message: 'Configured',
+        });
+      } else {
+        results.push({
+          name: 'Signal channel',
+          status: 'fail',
+          message: 'Missing phone number',
+          fix: 'Set SIGNAL_PHONE_NUMBER or channels.signal.phoneNumber',
+        });
+      }
+    }
+
+    // Check iMessage (macOS only)
+    const imessageConfig = (config.channels as any)?.imessage;
+    if (imessageConfig?.enabled) {
+      if (process.platform === 'darwin') {
+        results.push({
+          name: 'iMessage channel',
+          status: 'pass',
+          message: 'Configured (macOS)',
+        });
+      } else {
+        results.push({
+          name: 'iMessage channel',
+          status: 'fail',
+          message: 'Only supported on macOS',
+          fix: 'Run on macOS with Messages.app signed in',
+        });
+      }
+    }
+
+    // Check LINE
+    const lineConfig = (config.channels as any)?.line;
+    if (lineConfig?.enabled) {
+      if (lineConfig.channelAccessToken && lineConfig.channelSecret) {
+        results.push({
+          name: 'LINE channel',
+          status: 'pass',
+          message: 'Configured',
+        });
+      } else {
+        results.push({
+          name: 'LINE channel',
+          status: 'fail',
+          message: 'Missing channelAccessToken/channelSecret',
+          fix: 'Set LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET',
+        });
+      }
+    }
+
+    // Check Google Chat
+    const googleChatConfig = (config.channels as any)?.googlechat;
+    if (googleChatConfig?.enabled) {
+      const hasPath = !!googleChatConfig.credentialsPath || !!process.env.GOOGLECHAT_CREDENTIALS_PATH;
+      const hasInlineCreds =
+        !!googleChatConfig.credentials?.client_email &&
+        !!googleChatConfig.credentials?.private_key &&
+        !!googleChatConfig.credentials?.project_id;
+
+      if (hasPath || hasInlineCreds) {
+        results.push({
+          name: 'Google Chat channel',
+          status: 'pass',
+          message: 'Configured',
+        });
+      } else {
+        results.push({
+          name: 'Google Chat channel',
+          status: 'fail',
+          message: 'Missing service account credentials',
+          fix: 'Set GOOGLECHAT_CREDENTIALS_PATH or GOOGLECHAT_CLIENT_EMAIL/PRIVATE_KEY/PROJECT_ID',
+        });
+      }
+    }
+
+    // Group policies
+    const groupPolicies: Record<string, number> = {};
+    if (config.channels) {
+      for (const [channel, channelConfig] of Object.entries(config.channels)) {
+        const groups = (channelConfig as any)?.groups;
+        if (groups && typeof groups === 'object') {
+          groupPolicies[channel] = Object.keys(groups).length;
+        }
+      }
+    }
+
+    if (Object.keys(groupPolicies).length > 0) {
+      const summary = Object.entries(groupPolicies)
+        .map(([channel, count]) => `${channel}:${count}`)
+        .join(', ');
+      results.push({
+        name: 'Group policies',
+        status: 'pass',
+        message: summary,
+      });
     }
   } catch (error) {
     results.push({
@@ -245,6 +420,19 @@ export async function runDoctor(): Promise<CheckResult[]> {
       fix: 'Will be created on first run',
     });
   }
+
+  // 7. Webhook endpoints
+  const scheme = process.env.CLODDS_PUBLIC_SCHEME || 'http';
+  const host = process.env.CLODDS_PUBLIC_HOST || 'localhost';
+  const portSuffix = config.gateway?.port && ![80, 443].includes(config.gateway.port)
+    ? `:${config.gateway.port}`
+    : '';
+  const baseUrl = `${scheme}://${host}${portSuffix}`;
+  results.push({
+    name: 'Webhook endpoints',
+    status: 'pass',
+    message: `${baseUrl} (channels + /webhook)`,
+  });
 
   return results;
 }

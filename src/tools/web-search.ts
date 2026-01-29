@@ -23,6 +23,10 @@ export interface SearchResult {
 export interface SearchOptions {
   /** Number of results (default: 5, max: 20) */
   count?: number;
+  /** Page number (1-based) */
+  page?: number;
+  /** Explicit offset (overrides page) */
+  offset?: number;
   /** Country code for localization */
   country?: string;
   /** Search freshness: day, week, month, year */
@@ -36,6 +40,14 @@ export interface SearchResponse {
   query: string;
   results: SearchResult[];
   totalResults?: number;
+  /** Page number (1-based) */
+  page: number;
+  /** Offset used for this request */
+  offset: number;
+  /** Requested count per page */
+  count: number;
+  /** Whether another page is likely available */
+  hasMore: boolean;
   cached: boolean;
 }
 
@@ -55,6 +67,75 @@ interface CacheEntry {
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const cache = new Map<string, CacheEntry>();
+const ALLOWED_FRESHNESS = new Set(['day', 'week', 'month', 'year']);
+const ALLOWED_SAFESEARCH = new Set(['off', 'moderate', 'strict']);
+const ENGINE_NAME = 'brave';
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+const DEFAULT_RATE_LIMIT_MAX = 30;
+
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+const engineRateLimits = new Map<string, RateLimitEntry>();
+
+function checkEngineRateLimit(engine: string): { allowed: boolean; resetInMs: number } {
+  const now = Date.now();
+  const windowMs = Math.max(
+    1_000,
+    parseInt(process.env.CLODDS_SEARCH_RATE_WINDOW_MS || '', 10) || DEFAULT_RATE_LIMIT_WINDOW_MS
+  );
+  const maxRequests = Math.max(
+    1,
+    parseInt(process.env.CLODDS_SEARCH_RATE_MAX || '', 10) || DEFAULT_RATE_LIMIT_MAX
+  );
+
+  let entry = engineRateLimits.get(engine);
+  if (!entry || entry.resetAt <= now) {
+    entry = { count: 0, resetAt: now + windowMs };
+    engineRateLimits.set(engine, entry);
+  }
+
+  if (entry.count >= maxRequests) {
+    return { allowed: false, resetInMs: Math.max(0, entry.resetAt - now) };
+  }
+
+  entry.count += 1;
+  return { allowed: true, resetInMs: Math.max(0, entry.resetAt - now) };
+}
+
+function normalizeCountry(country?: string): string | undefined {
+  if (!country) return undefined;
+  const trimmed = country.trim();
+  if (!trimmed) return undefined;
+  // Brave expects ISO country codes; normalize to uppercase 2-3 letter token.
+  const code = trimmed.toUpperCase();
+  if (!/^[A-Z]{2,3}$/.test(code)) {
+    throw new Error(`Invalid country code: ${country}`);
+  }
+  return code;
+}
+
+function normalizeFreshness(
+  freshness?: SearchOptions['freshness']
+): SearchOptions['freshness'] | undefined {
+  if (!freshness) return undefined;
+  if (!ALLOWED_FRESHNESS.has(freshness)) {
+    throw new Error(`Invalid freshness: ${freshness}`);
+  }
+  return freshness;
+}
+
+function normalizeSafeSearch(
+  safesearch?: SearchOptions['safesearch']
+): SearchOptions['safesearch'] | undefined {
+  if (!safesearch) return undefined;
+  if (!ALLOWED_SAFESEARCH.has(safesearch)) {
+    throw new Error(`Invalid safesearch: ${safesearch}`);
+  }
+  return safesearch;
+}
 
 export function createWebSearchTool(apiKey?: string): WebSearchTool {
   const braveApiKey = apiKey || process.env.BRAVE_SEARCH_API_KEY;
@@ -70,7 +151,24 @@ export function createWebSearchTool(apiKey?: string): WebSearchTool {
   return {
     async search(query, options = {}): Promise<SearchResponse> {
       const count = Math.min(options.count || 5, 20);
-      const cacheKey = getCacheKey(query, { ...options, count });
+      const page = Math.max(1, Math.floor(options.page || 1));
+      const offset =
+        options.offset !== undefined
+          ? Math.max(0, Math.floor(options.offset))
+          : (page - 1) * count;
+      const country = normalizeCountry(options.country);
+      const freshness = normalizeFreshness(options.freshness);
+      const safesearch = normalizeSafeSearch(options.safesearch);
+
+      const cacheKey = getCacheKey(query, {
+        ...options,
+        count,
+        page,
+        offset,
+        country,
+        freshness,
+        safesearch,
+      });
 
       // Check cache
       const cached = cache.get(cacheKey);
@@ -83,23 +181,32 @@ export function createWebSearchTool(apiKey?: string): WebSearchTool {
         throw new Error('Brave Search API key not configured');
       }
 
-      logger.info({ query, count }, 'Performing web search');
+      const rateLimit = checkEngineRateLimit(ENGINE_NAME);
+      if (!rateLimit.allowed) {
+        const resetSeconds = Math.ceil(rateLimit.resetInMs / 1000);
+        throw new Error(
+          `Search rate limit exceeded for ${ENGINE_NAME}. Try again in ${resetSeconds}s.`
+        );
+      }
+
+      logger.info({ query, count, page, offset, country, freshness, safesearch }, 'Performing web search');
 
       try {
         // Build URL
         const params = new URLSearchParams({
           q: query,
           count: count.toString(),
+          offset: offset.toString(),
         });
 
-        if (options.country) {
-          params.set('country', options.country);
+        if (country) {
+          params.set('country', country);
         }
-        if (options.freshness) {
-          params.set('freshness', options.freshness);
+        if (freshness) {
+          params.set('freshness', freshness);
         }
-        if (options.safesearch) {
-          params.set('safesearch', options.safesearch);
+        if (safesearch) {
+          params.set('safesearch', safesearch);
         }
 
         const response = await fetch(
@@ -131,10 +238,20 @@ export function createWebSearchTool(apiKey?: string): WebSearchTool {
           })
         );
 
+        const totalResults = data.web?.total;
+        const hasMore =
+          typeof totalResults === 'number'
+            ? offset + results.length < totalResults
+            : results.length === count;
+
         const searchResponse: SearchResponse = {
           query,
           results,
-          totalResults: data.web?.total,
+          totalResults,
+          page,
+          offset,
+          count,
+          hasMore,
           cached: false,
         };
 
@@ -166,17 +283,27 @@ export function formatSearchResults(response: SearchResponse): string {
     return `No results found for "${response.query}"`;
   }
 
-  const lines = [`**Search results for "${response.query}":**\n`];
+  const headerParts = [`**Search results for "${response.query}":**`];
+  headerParts.push(`Page ${response.page}`);
+  if (typeof response.totalResults === 'number') {
+    headerParts.push(`${response.totalResults.toLocaleString()} total`);
+  }
+  const lines = [`${headerParts.join(' ')}\n`];
 
   for (let i = 0; i < response.results.length; i++) {
     const r = response.results[i];
-    lines.push(`${i + 1}. **${r.title}**`);
+    const index = response.offset + i + 1;
+    lines.push(`${index}. **${r.title}**`);
     lines.push(`   ${r.url}`);
     lines.push(`   ${r.description}`);
     if (r.date) {
       lines.push(`   _${r.date}_`);
     }
     lines.push('');
+  }
+
+  if (response.hasMore) {
+    lines.push(`More results available. Try page ${response.page + 1}.`);
   }
 
   return lines.join('\n');

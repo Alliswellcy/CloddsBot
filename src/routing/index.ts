@@ -11,6 +11,45 @@
 import { logger } from '../utils/logger';
 import type { IncomingMessage, Session } from '../types';
 
+/** Tool policy for an agent */
+export interface ToolPolicy {
+  /** Tools that are always allowed */
+  allow?: string[];
+  /** Tools that are always denied */
+  deny?: string[];
+  /** Tool groups that are allowed (e.g., 'fs', 'web', 'runtime') */
+  allowGroups?: string[];
+  /** Tool groups that are denied */
+  denyGroups?: string[];
+  /** Whether to require confirmation for dangerous tools */
+  confirmDangerous?: boolean;
+}
+
+/** Tool groups for easy policy configuration */
+export const TOOL_GROUPS: Record<string, string[]> = {
+  fs: ['read', 'write', 'edit', 'glob', 'find'],
+  web: ['web-search', 'web-fetch', 'browser'],
+  runtime: ['exec', 'bash', 'shell'],
+  comms: ['message', 'email', 'sms'],
+  media: ['image', 'transcription', 'canvas'],
+  data: ['sql', 'git', 'docker'],
+  sessions: ['sessions', 'checkpoint', 'restore'],
+};
+
+/** Agent workspace configuration */
+export interface AgentWorkspace {
+  /** Root directory for this agent's workspace */
+  rootDir?: string;
+  /** Whether to isolate file operations to workspace */
+  isolate?: boolean;
+  /** State directory for agent-specific data */
+  stateDir?: string;
+  /** Session storage path */
+  sessionsDir?: string;
+  /** Memory storage path */
+  memoryDir?: string;
+}
+
 /** Agent definition */
 export interface AgentDefinition {
   id: string;
@@ -22,6 +61,10 @@ export interface AgentDefinition {
   model?: string;
   /** Whether this agent is enabled */
   enabled: boolean;
+  /** Tool access policy for this agent */
+  toolPolicy?: ToolPolicy;
+  /** Workspace configuration for this agent */
+  workspace?: AgentWorkspace;
 }
 
 /** Binding types */
@@ -92,6 +135,15 @@ export interface RoutingService {
 
   /** Get default agent */
   getDefaultAgent(): AgentDefinition;
+
+  /** Check if a tool is allowed for an agent */
+  isToolAllowed(agentId: string, toolName: string): boolean;
+
+  /** Get workspace path for an agent */
+  getWorkspacePath(agentId: string): string | null;
+
+  /** Get all tools allowed for an agent */
+  getAllowedTools(agentId: string): string[] | null;
 }
 
 /** Default agents */
@@ -397,6 +449,81 @@ export function createRoutingService(config?: Partial<RoutingConfig>): RoutingSe
 
     getDefaultAgent() {
       return agents.get(defaultAgentId) || DEFAULT_AGENTS[0];
+    },
+
+    isToolAllowed(agentId, toolName) {
+      const agent = agents.get(agentId);
+      if (!agent) return true; // Default to allow if agent not found
+
+      const policy = agent.toolPolicy;
+      if (!policy) return true; // No policy = all tools allowed
+
+      // Check explicit deny first
+      if (policy.deny?.includes(toolName)) return false;
+
+      // Check deny groups
+      if (policy.denyGroups) {
+        for (const groupName of policy.denyGroups) {
+          const group = TOOL_GROUPS[groupName];
+          if (group?.includes(toolName)) return false;
+        }
+      }
+
+      // Check explicit allow
+      if (policy.allow?.includes(toolName)) return true;
+
+      // Check allow groups
+      if (policy.allowGroups) {
+        for (const groupName of policy.allowGroups) {
+          const group = TOOL_GROUPS[groupName];
+          if (group?.includes(toolName)) return true;
+        }
+        // If allowGroups is specified, only those are allowed
+        return false;
+      }
+
+      // Default to allow
+      return true;
+    },
+
+    getWorkspacePath(agentId) {
+      const agent = agents.get(agentId);
+      return agent?.workspace?.rootDir || null;
+    },
+
+    getAllowedTools(agentId) {
+      const agent = agents.get(agentId);
+      if (!agent?.toolPolicy) return null; // All tools allowed
+
+      const policy = agent.toolPolicy;
+      const allowed: string[] = [];
+
+      // Start with explicit allows
+      if (policy.allow) {
+        allowed.push(...policy.allow);
+      }
+
+      // Add tools from allowed groups
+      if (policy.allowGroups) {
+        for (const groupName of policy.allowGroups) {
+          const group = TOOL_GROUPS[groupName];
+          if (group) allowed.push(...group);
+        }
+      }
+
+      // Remove denied tools
+      const denied = new Set<string>();
+      if (policy.deny) {
+        policy.deny.forEach(t => denied.add(t));
+      }
+      if (policy.denyGroups) {
+        for (const groupName of policy.denyGroups) {
+          const group = TOOL_GROUPS[groupName];
+          if (group) group.forEach(t => denied.add(t));
+        }
+      }
+
+      return allowed.filter(t => !denied.has(t));
     },
   };
 

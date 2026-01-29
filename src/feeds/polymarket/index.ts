@@ -46,12 +46,19 @@ interface PolymarketMarket {
   slug: string;
 }
 
+interface PolymarketOrderbookResponse {
+  bids: Array<{ price: string; size: string }>;
+  asks: Array<{ price: string; size: string }>;
+}
+
 export async function createPolymarketFeed(): Promise<PolymarketFeed> {
   const emitter = new EventEmitter() as PolymarketFeed;
   let ws: WebSocket | null = null;
   let reconnectTimer: NodeJS.Timeout | null = null;
+  let initialSubscriptionSent = false;
   const subscriptions = new Map<string, Set<(update: PriceUpdate) => void>>();
   const marketCache = new Map<string, Market>();
+  const lastPrices = new Map<string, number>();
 
   function connect() {
     if (ws) return;
@@ -61,10 +68,12 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
 
     ws.on('open', () => {
       logger.info('Polymarket WebSocket connected');
+      initialSubscriptionSent = false;
 
       // Resubscribe to all markets
-      for (const marketId of subscriptions.keys()) {
-        subscribeToMarket(marketId);
+      const assetIds = Array.from(subscriptions.keys());
+      if (assetIds.length > 0) {
+        sendInitialSubscription(assetIds);
       }
     });
 
@@ -96,43 +105,180 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
     }, 5000);
   }
 
-  function subscribeToMarket(marketId: string) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  function sendInitialSubscription(assetIds: string[]) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || assetIds.length === 0) return;
 
     ws.send(
       JSON.stringify({
         type: 'market',
+        assets_ids: assetIds,
+        initial_dump: true,
+        custom_feature_enabled: true,
+      })
+    );
+    initialSubscriptionSent = true;
+  }
+
+  function subscribeToMarket(marketId: string) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    if (!initialSubscriptionSent) {
+      sendInitialSubscription([marketId]);
+      return;
+    }
+
+    ws.send(
+      JSON.stringify({
         assets_ids: [marketId],
+        operation: 'subscribe',
+        initial_dump: true,
+        custom_feature_enabled: true,
       })
     );
   }
 
-  function handleMessage(message: unknown) {
-    // Handle price updates from WebSocket
-    // TODO: Parse actual Polymarket message format
-    if (message && typeof message === 'object' && 'price' in message) {
-      const update = message as {
-        asset_id: string;
-        price: number;
-        timestamp: number;
-      };
-      const priceUpdate: PriceUpdate = {
-        platform: 'polymarket',
-        marketId: update.asset_id,
-        outcomeId: update.asset_id,
-        price: update.price,
-        timestamp: update.timestamp || Date.now(),
-      };
+  function toNumber(value: unknown): number | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'string') {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  }
 
-      emitter.emit('price', priceUpdate);
+  function toTimestamp(value: unknown): number {
+    const parsed = toNumber(value);
+    return parsed && parsed > 0 ? Math.floor(parsed) : Date.now();
+  }
 
-      // Notify subscribers
-      const callbacks = subscriptions.get(update.asset_id);
-      if (callbacks) {
-        for (const callback of callbacks) {
-          callback(priceUpdate);
-        }
+  function pickMidPrice(bestBid: number | null, bestAsk: number | null, fallback?: number | null): number | null {
+    if (bestBid !== null && bestAsk !== null) {
+      return (bestBid + bestAsk) / 2;
+    }
+    if (bestBid !== null) return bestBid;
+    if (bestAsk !== null) return bestAsk;
+    return fallback ?? null;
+  }
+
+  function emitPriceUpdate(assetId: string, marketId: string, price: number, timestamp: number) {
+    const previousPrice = lastPrices.get(assetId);
+    lastPrices.set(assetId, price);
+
+    const priceUpdate: PriceUpdate = {
+      platform: 'polymarket',
+      marketId,
+      outcomeId: assetId,
+      price,
+      previousPrice,
+      timestamp,
+    };
+
+    emitter.emit('price', priceUpdate);
+
+    const callbacks = subscriptions.get(assetId);
+    if (callbacks) {
+      for (const callback of callbacks) {
+        callback(priceUpdate);
       }
+    }
+  }
+
+  function handleMessage(message: unknown) {
+    if (!message || typeof message !== 'object') return;
+    const msg = message as Record<string, unknown>;
+    const eventType = msg.event_type as string | undefined;
+    if (!eventType) return;
+
+    switch (eventType) {
+      case 'book': {
+        const assetId = msg.asset_id as string | undefined;
+        const marketId = (msg.market as string | undefined) || assetId;
+        if (!assetId || !marketId) return;
+
+        const bidsRaw = (msg.bids || msg.buys) as Array<{ price?: string | number }> | undefined;
+        const asksRaw = (msg.asks || msg.sells) as Array<{ price?: string | number }> | undefined;
+
+        let bestBid: number | null = null;
+        let bestAsk: number | null = null;
+
+        if (Array.isArray(bidsRaw)) {
+          for (const bid of bidsRaw) {
+            const price = toNumber(bid?.price);
+            if (price === null) continue;
+            if (bestBid === null || price > bestBid) bestBid = price;
+          }
+        }
+
+        if (Array.isArray(asksRaw)) {
+          for (const ask of asksRaw) {
+            const price = toNumber(ask?.price);
+            if (price === null) continue;
+            if (bestAsk === null || price < bestAsk) bestAsk = price;
+          }
+        }
+
+        const mid = pickMidPrice(bestBid, bestAsk);
+        if (mid !== null) {
+          emitPriceUpdate(assetId, marketId, mid, toTimestamp(msg.timestamp));
+        }
+        return;
+      }
+      case 'price_change': {
+        const marketId = msg.market as string | undefined;
+        const timestamp = toTimestamp(msg.timestamp);
+        const priceChanges = msg.price_changes as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(priceChanges)) {
+          for (const change of priceChanges) {
+            const assetId = change.asset_id as string | undefined;
+            if (!assetId) continue;
+            const bestBid = toNumber(change.best_bid);
+            const bestAsk = toNumber(change.best_ask);
+            const price = pickMidPrice(bestBid, bestAsk, toNumber(change.price));
+            if (price === null) continue;
+            emitPriceUpdate(assetId, marketId || assetId, price, timestamp);
+          }
+          return;
+        }
+
+        // Legacy schema fallback (pre-2025-09-15)
+        const legacyAssetId = msg.asset_id as string | undefined;
+        const legacyChanges = msg.changes as Array<Record<string, unknown>> | undefined;
+        if (legacyAssetId && Array.isArray(legacyChanges)) {
+          for (const change of legacyChanges) {
+            const price = toNumber(change.price);
+            if (price === null) continue;
+            emitPriceUpdate(legacyAssetId, marketId || legacyAssetId, price, timestamp);
+          }
+        }
+        return;
+      }
+      case 'best_bid_ask': {
+        const assetId = msg.asset_id as string | undefined;
+        const marketId = (msg.market as string | undefined) || assetId;
+        if (!assetId || !marketId) return;
+        const bestBid = toNumber(msg.best_bid);
+        const bestAsk = toNumber(msg.best_ask);
+        const price = pickMidPrice(bestBid, bestAsk);
+        if (price === null) return;
+        emitPriceUpdate(assetId, marketId, price, toTimestamp(msg.timestamp));
+        return;
+      }
+      case 'last_trade_price': {
+        const assetId = msg.asset_id as string | undefined;
+        const marketId = (msg.market as string | undefined) || assetId;
+        if (!assetId || !marketId) return;
+        const price = toNumber(msg.price);
+        if (price === null) return;
+        emitPriceUpdate(assetId, marketId, price, toTimestamp(msg.timestamp));
+        return;
+      }
+      case 'tick_size_change':
+      case 'new_market':
+      case 'market_resolved':
+        return;
+      default:
+        return;
     }
   }
 
@@ -146,6 +292,56 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
       return convertMarket(data);
     } catch (err) {
       logger.error({ err, marketId }, 'Failed to fetch market');
+      return null;
+    }
+  }
+
+  async function fetchOrderbook(tokenId: string): Promise<Orderbook | null> {
+    try {
+      const res = await fetch(`${REST_URL}/orderbook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token_id: tokenId }),
+      });
+      if (!res.ok) {
+        logger.warn({ tokenId, status: res.status }, 'Polymarket orderbook fetch failed');
+        return null;
+      }
+
+      const data = (await res.json()) as PolymarketOrderbookResponse;
+      const bids = (data.bids || [])
+        .map((bid) => [Number.parseFloat(bid.price), Number.parseFloat(bid.size)] as [number, number])
+        .filter((entry) => Number.isFinite(entry[0]) && Number.isFinite(entry[1]))
+        .sort((a, b) => b[0] - a[0]);
+
+      const asks = (data.asks || [])
+        .map((ask) => [Number.parseFloat(ask.price), Number.parseFloat(ask.size)] as [number, number])
+        .filter((entry) => Number.isFinite(entry[0]) && Number.isFinite(entry[1]))
+        .sort((a, b) => a[0] - b[0]);
+
+      if (bids.length === 0 && asks.length === 0) {
+        return null;
+      }
+
+      const bestBid = bids.length ? bids[0][0] : null;
+      const bestAsk = asks.length ? asks[0][0] : null;
+      const mid = bestBid !== null && bestAsk !== null
+        ? (bestBid + bestAsk) / 2
+        : bestBid ?? bestAsk ?? 0;
+      const spread = bestBid !== null && bestAsk !== null ? bestAsk - bestBid : 0;
+
+      return {
+        platform: 'polymarket',
+        marketId: tokenId,
+        outcomeId: tokenId,
+        bids,
+        asks,
+        spread,
+        midPrice: mid,
+        timestamp: Date.now(),
+      };
+    } catch (err) {
+      logger.error({ err, tokenId }, 'Failed to fetch orderbook');
       return null;
     }
   }
@@ -233,10 +429,9 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
 
   emitter.getOrderbook = async (
     _platform: string,
-    _marketId: string
+    marketId: string
   ): Promise<Orderbook | null> => {
-    // TODO: Implement orderbook fetching
-    return null;
+    return fetchOrderbook(marketId);
   };
 
   emitter.subscribePrice = (
@@ -257,6 +452,15 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
         callbacks.delete(callback);
         if (callbacks.size === 0) {
           subscriptions.delete(marketId);
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                assets_ids: [marketId],
+                operation: 'unsubscribe',
+                custom_feature_enabled: true,
+              })
+            );
+          }
         }
       }
     };

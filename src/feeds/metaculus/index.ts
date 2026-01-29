@@ -32,12 +32,21 @@ interface MetaculusQuestion {
   };
 }
 
+interface PaginatedResponse<T> {
+  results: T[];
+  next?: string | null;
+}
+
 export interface MetaculusFeed extends EventEmitter {
   connect(): Promise<void>;
   disconnect(): void;
   searchMarkets(query: string): Promise<Market[]>;
   getMarket(id: string): Promise<Market | null>;
   getTournaments(): Promise<Array<{ id: number; name: string; questionCount: number }>>;
+  getTournamentQuestions(
+    tournamentId: number,
+    options?: { maxResults?: number; status?: string }
+  ): Promise<Market[]>;
 }
 
 export async function createMetaculusFeed(): Promise<MetaculusFeed> {
@@ -81,25 +90,53 @@ export async function createMetaculusFeed(): Promise<MetaculusFeed> {
     };
   }
 
-  async function fetchQuestions(params: Record<string, string>): Promise<MetaculusQuestion[]> {
+  async function fetchPaginated<T>(
+    url: string,
+    params: Record<string, string>,
+    maxResults: number
+  ): Promise<T[]> {
     try {
-      const queryString = new URLSearchParams(params).toString();
-      const response = await fetch(`${API_URL}/questions/?${queryString}`, {
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
+      const results: T[] = [];
+      let nextUrl: string | null = `${url}?${new URLSearchParams(params).toString()}`;
 
-      if (!response.ok) {
-        throw new Error(`Metaculus API error: ${response.status}`);
+      while (nextUrl && results.length < maxResults) {
+        const response = await fetch(nextUrl, {
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`Metaculus API error: ${response.status}`);
+        }
+
+        const data = await response.json() as PaginatedResponse<T>;
+        if (Array.isArray(data.results)) {
+          results.push(...data.results);
+        }
+
+        if (!data.next) break;
+        nextUrl = data.next;
       }
 
-      const data: any = await response.json();
-      return data.results || [];
+      return results.slice(0, maxResults);
     } catch (error) {
       logger.error('Metaculus fetch error:', error);
       return [];
     }
+  }
+
+  async function fetchQuestions(
+    params: Record<string, string>,
+    maxResults = Number(params.limit ?? 20)
+  ): Promise<MetaculusQuestion[]> {
+    const safeMax = Number.isFinite(maxResults) && maxResults > 0 ? maxResults : 20;
+    const limit = Math.min(Number(params.limit ?? safeMax), 100);
+    return fetchPaginated<MetaculusQuestion>(
+      `${API_URL}/questions/`,
+      { ...params, limit: limit.toString() },
+      safeMax
+    );
   }
 
   emitter.connect = async () => {
@@ -149,16 +186,12 @@ export async function createMetaculusFeed(): Promise<MetaculusFeed> {
 
   emitter.getTournaments = async () => {
     try {
-      const response = await fetch(`${API_URL}/tournaments/`, {
-        headers: { 'Accept': 'application/json' },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Metaculus API error: ${response.status}`);
-      }
-
-      const data: any = await response.json();
-      return (data.results || []).map((t: { id: number; name: string; questions_count: number }) => ({
+      const tournaments = await fetchPaginated<{ id: number; name: string; questions_count: number }>(
+        `${API_URL}/tournaments/`,
+        { limit: '50' },
+        200
+      );
+      return tournaments.map((t) => ({
         id: t.id,
         name: t.name,
         questionCount: t.questions_count,
@@ -167,6 +200,19 @@ export async function createMetaculusFeed(): Promise<MetaculusFeed> {
       logger.error('Error fetching Metaculus tournaments:', error);
       return [];
     }
+  };
+
+  emitter.getTournamentQuestions = async (tournamentId, options) => {
+    const status = options?.status ?? 'open';
+    const maxResults = options?.maxResults ?? 200;
+    const questions = await fetchQuestions({
+      contest: tournamentId.toString(),
+      status,
+      type: 'forecast',
+      limit: '50',
+    }, maxResults);
+
+    return questions.map(convertToMarket);
   };
 
   return emitter;

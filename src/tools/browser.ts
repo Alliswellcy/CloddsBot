@@ -22,6 +22,8 @@ export interface BrowserConfig {
   executablePath?: string;
   /** User data directory for profiles */
   userDataDir?: string;
+  /** Profile name for persistent storage */
+  profile?: string;
   /** Default viewport width */
   viewportWidth?: number;
   /** Default viewport height */
@@ -30,6 +32,12 @@ export interface BrowserConfig {
   headless?: boolean;
   /** CDP port */
   cdpPort?: number;
+  /** Initial wait for CDP readiness (ms) */
+  cdpWaitMs?: number;
+  /** Max time to wait for CDP readiness (ms) */
+  cdpMaxWaitMs?: number;
+  /** Poll interval while waiting for CDP (ms) */
+  cdpPollMs?: number;
 }
 
 /** Page info */
@@ -62,10 +70,24 @@ export interface ClickOptions {
   delay?: number;
 }
 
+/** Cookie representation (CDP-compatible subset) */
+export interface BrowserCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  expires?: number;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: 'Strict' | 'Lax' | 'None';
+  url?: string;
+}
+
 /** CDP connection */
 interface CDPConnection {
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;
   close(): void;
+  isConnected(): boolean;
 }
 
 export interface BrowserTool {
@@ -116,16 +138,29 @@ export interface BrowserTool {
 
   /** Reload page */
   reload(): Promise<void>;
+
+  /** Get cookies for the current page (or specific URLs) */
+  getCookies(urls?: string[]): Promise<BrowserCookie[]>;
+
+  /** Set cookies */
+  setCookies(cookies: BrowserCookie[]): Promise<void>;
+
+  /** Clear all browser cookies */
+  clearCookies(): Promise<void>;
 }
 
 const DEFAULT_CONFIG: Required<BrowserConfig> = {
   enabled: true,
   executablePath: '',
   userDataDir: path.join(os.homedir(), '.clodds', 'browser'),
+  profile: 'default',
   viewportWidth: 1280,
   viewportHeight: 720,
   headless: true,
   cdpPort: 9222,
+  cdpWaitMs: 1000,
+  cdpMaxWaitMs: 15_000,
+  cdpPollMs: 200,
 };
 
 /**
@@ -168,7 +203,7 @@ function findChrome(): string | null {
 /**
  * Simple CDP client using WebSocket
  */
-async function connectCDP(port: number): Promise<CDPConnection> {
+async function connectCDP(port: number, onDisconnect?: (reason: string) => void): Promise<CDPConnection> {
   const WebSocket = (await import('ws')).default;
 
   // Get WebSocket URL from CDP
@@ -179,9 +214,13 @@ async function connectCDP(port: number): Promise<CDPConnection> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     let messageId = 0;
+    let connected = false;
+    let resolved = false;
     const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 
     ws.on('open', () => {
+      connected = true;
+      resolved = true;
       resolve({
         send(method, params = {}) {
           return new Promise((res, rej) => {
@@ -192,6 +231,9 @@ async function connectCDP(port: number): Promise<CDPConnection> {
         },
         close() {
           ws.close();
+        },
+        isConnected() {
+          return connected && ws.readyState === ws.OPEN;
         },
       });
     });
@@ -209,15 +251,112 @@ async function connectCDP(port: number): Promise<CDPConnection> {
       }
     });
 
-    ws.on('error', reject);
+    ws.on('close', () => {
+      connected = false;
+      for (const { reject } of pending.values()) {
+        reject(new Error('CDP connection closed'));
+      }
+      pending.clear();
+      onDisconnect?.('close');
+    });
+
+    ws.on('error', (err: Error) => {
+      connected = false;
+      onDisconnect?.(err.message || 'error');
+      // If not yet connected, surface the error to the caller.
+      if (!resolved) {
+        reject(err);
+      }
+    });
   });
+}
+
+async function waitForCdpReady(
+  port: number,
+  initialWaitMs: number,
+  maxWaitMs: number,
+  pollMs: number
+): Promise<void> {
+  const start = Date.now();
+
+  if (initialWaitMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, initialWaitMs));
+  }
+
+  let lastError: unknown = null;
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (res.ok) return;
+      lastError = new Error(`CDP not ready: ${res.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Timed out waiting for CDP on port ${port}`);
 }
 
 export function createBrowserTool(configInput?: Partial<BrowserConfig>): BrowserTool {
   const config: Required<BrowserConfig> = { ...DEFAULT_CONFIG, ...configInput };
+  const profileRoot = path.join(config.userDataDir, 'profiles', config.profile);
 
   let browserProcess: ChildProcess | null = null;
   let cdp: CDPConnection | null = null;
+  let reconnectPromise: Promise<CDPConnection> | null = null;
+
+  const handleDisconnect = (reason: string) => {
+    logger.warn({ reason }, 'CDP disconnected');
+    cdp = null;
+    // Best-effort background reconnect if the browser is still running.
+    if (browserProcess && !reconnectPromise) {
+      void ensureCdp();
+    }
+  };
+
+  async function establishCdpConnection(): Promise<CDPConnection> {
+    const conn = await connectCDP(config.cdpPort, handleDisconnect);
+    await conn.send('Page.enable');
+    await conn.send('Runtime.enable');
+    await conn.send('Network.enable');
+    return conn;
+  }
+
+  async function ensureCdp(): Promise<CDPConnection> {
+    if (cdp && cdp.isConnected()) {
+      return cdp;
+    }
+    if (!browserProcess) {
+      throw new Error('Browser not running');
+    }
+    if (reconnectPromise) {
+      return reconnectPromise;
+    }
+
+    reconnectPromise = (async () => {
+      let lastError: unknown = null;
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        try {
+          const conn = await establishCdpConnection();
+          cdp = conn;
+          logger.info({ attempt }, 'CDP reconnected');
+          return conn;
+        } catch (error) {
+          lastError = error;
+          const backoff = Math.min(2000, 200 * attempt);
+          await new Promise((r) => setTimeout(r, backoff));
+        }
+      }
+      throw lastError instanceof Error ? lastError : new Error('Failed to reconnect CDP');
+    })().finally(() => {
+      reconnectPromise = null;
+    });
+
+    return reconnectPromise;
+  }
 
   // Find Chrome if not specified
   if (!config.executablePath) {
@@ -227,9 +366,9 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
     }
   }
 
-  // Ensure user data dir exists
-  if (!fs.existsSync(config.userDataDir)) {
-    fs.mkdirSync(config.userDataDir, { recursive: true });
+  // Ensure profile directory exists (persistent cookies/localStorage per profile)
+  if (!fs.existsSync(profileRoot)) {
+    fs.mkdirSync(profileRoot, { recursive: true });
   }
 
   const tool: BrowserTool = {
@@ -247,7 +386,7 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
 
       const args = [
         `--remote-debugging-port=${config.cdpPort}`,
-        `--user-data-dir=${config.userDataDir}`,
+        `--user-data-dir=${profileRoot}`,
         `--window-size=${config.viewportWidth},${config.viewportHeight}`,
         '--no-first-run',
         '--no-default-browser-check',
@@ -269,12 +408,15 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
       });
 
       // Wait for CDP to be ready
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await waitForCdpReady(
+        config.cdpPort,
+        config.cdpWaitMs,
+        config.cdpMaxWaitMs,
+        config.cdpPollMs
+      );
 
       // Connect to CDP
-      cdp = await connectCDP(config.cdpPort);
-      await cdp.send('Page.enable');
-      await cdp.send('Runtime.enable');
+      cdp = await establishCdpConnection();
 
       logger.info('Browser launched and CDP connected');
     },
@@ -298,24 +440,29 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
     },
 
     async goto(url, options = {}) {
-      if (!cdp) throw new Error('Browser not running');
+      const c = await ensureCdp();
 
       logger.debug({ url }, 'Navigating to URL');
 
-      await cdp.send('Page.navigate', { url });
+      await c.send('Page.navigate', { url });
 
-      // Wait for load
-      if (options.waitUntil === 'load') {
-        await cdp.send('Page.loadEventFired');
+      // Wait for load/DOM readiness (polling readyState).
+      const timeoutMs = 30_000;
+      const start = Date.now();
+      const targetState = options.waitUntil === 'load' ? 'complete' : 'interactive';
+      while (Date.now() - start < timeoutMs) {
+        const state = await this.evaluate<string>('document.readyState');
+        if (state === targetState || state === 'complete') break;
+        await new Promise((r) => setTimeout(r, 100));
       }
 
       return this.getPageInfo();
     },
 
     async getPageInfo() {
-      if (!cdp) throw new Error('Browser not running');
+      const c = await ensureCdp();
 
-      const result = await cdp.send('Runtime.evaluate', {
+      const result = await c.send('Runtime.evaluate', {
         expression: 'JSON.stringify({ url: location.href, title: document.title })',
         returnByValue: true,
       }) as { result: { value: string } };
@@ -324,7 +471,7 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
     },
 
     async screenshot(options = {}) {
-      if (!cdp) throw new Error('Browser not running');
+      const c = await ensureCdp();
 
       const params: Record<string, unknown> = {
         format: options.format || 'png',
@@ -336,7 +483,7 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
 
       if (options.fullPage) {
         // Get full page dimensions
-        const metrics = await cdp.send('Page.getLayoutMetrics') as {
+        const metrics = await c.send('Page.getLayoutMetrics') as {
           contentSize: { width: number; height: number };
         };
         params.clip = {
@@ -350,7 +497,7 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
         params.clip = { ...options.clip, scale: 1 };
       }
 
-      const result = await cdp.send('Page.captureScreenshot', params) as {
+      const result = await c.send('Page.captureScreenshot', params) as {
         data: string;
       };
 
@@ -358,10 +505,10 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
     },
 
     async click(selector, options = {}) {
-      if (!cdp) throw new Error('Browser not running');
+      const c = await ensureCdp();
 
       // Find element and get coordinates
-      const result = await cdp.send('Runtime.evaluate', {
+      const result = await c.send('Runtime.evaluate', {
         expression: `
           (function() {
             const el = document.querySelector(${JSON.stringify(selector)});
@@ -379,7 +526,7 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
 
       const { x, y } = result.result.value;
 
-      await cdp.send('Input.dispatchMouseEvent', {
+      await c.send('Input.dispatchMouseEvent', {
         type: 'mousePressed',
         x,
         y,
@@ -387,7 +534,7 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
         clickCount: options.clickCount || 1,
       });
 
-      await cdp.send('Input.dispatchMouseEvent', {
+      await c.send('Input.dispatchMouseEvent', {
         type: 'mouseReleased',
         x,
         y,
@@ -396,20 +543,20 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
     },
 
     async type(selector, text, options = {}) {
-      if (!cdp) throw new Error('Browser not running');
+      const c = await ensureCdp();
 
       // Focus element
-      await cdp.send('Runtime.evaluate', {
+      await c.send('Runtime.evaluate', {
         expression: `document.querySelector(${JSON.stringify(selector)})?.focus()`,
       });
 
       // Type text
       for (const char of text) {
-        await cdp.send('Input.dispatchKeyEvent', {
+        await c.send('Input.dispatchKeyEvent', {
           type: 'keyDown',
           text: char,
         });
-        await cdp.send('Input.dispatchKeyEvent', {
+        await c.send('Input.dispatchKeyEvent', {
           type: 'keyUp',
           text: char,
         });
@@ -421,9 +568,9 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
     },
 
     async evaluate<T>(script: string): Promise<T> {
-      if (!cdp) throw new Error('Browser not running');
+      const c = await ensureCdp();
 
-      const result = await cdp.send('Runtime.evaluate', {
+      const result = await c.send('Runtime.evaluate', {
         expression: script,
         returnByValue: true,
       }) as { result: { value: T } };
@@ -432,7 +579,7 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
     },
 
     async waitForSelector(selector, options = {}) {
-      if (!cdp) throw new Error('Browser not running');
+      await ensureCdp();
 
       const timeout = options.timeout || 30000;
       const start = Date.now();
@@ -451,19 +598,17 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
     },
 
     async getContent() {
-      if (!cdp) throw new Error('Browser not running');
-
+      await ensureCdp();
       return this.evaluate<string>('document.body.innerText');
     },
 
     async getHTML() {
-      if (!cdp) throw new Error('Browser not running');
-
+      await ensureCdp();
       return this.evaluate<string>('document.documentElement.outerHTML');
     },
 
     async scroll(options) {
-      if (!cdp) throw new Error('Browser not running');
+      await ensureCdp();
 
       if (options === 'top') {
         await this.evaluate('window.scrollTo(0, 0)');
@@ -475,18 +620,41 @@ export function createBrowserTool(configInput?: Partial<BrowserConfig>): Browser
     },
 
     async goBack() {
-      if (!cdp) throw new Error('Browser not running');
-      await cdp.send('Page.navigateToHistoryEntry', { entryId: -1 });
+      await ensureCdp();
+      await this.evaluate('history.back()');
     },
 
     async goForward() {
-      if (!cdp) throw new Error('Browser not running');
-      await cdp.send('Page.navigateToHistoryEntry', { entryId: 1 });
+      await ensureCdp();
+      await this.evaluate('history.forward()');
     },
 
     async reload() {
-      if (!cdp) throw new Error('Browser not running');
-      await cdp.send('Page.reload');
+      const c = await ensureCdp();
+      await c.send('Page.reload');
+    },
+
+    async getCookies(urls?: string[]) {
+      const c = await ensureCdp();
+
+      const pageUrl = await this.evaluate<string>('location.href');
+      const params = urls && urls.length > 0 ? { urls } : { urls: [pageUrl] };
+      const result = (await c.send('Network.getCookies', params)) as {
+        cookies?: BrowserCookie[];
+      };
+      return result.cookies || [];
+    },
+
+    async setCookies(cookies: BrowserCookie[]) {
+      const c = await ensureCdp();
+      if (cookies.length === 0) return;
+
+      await c.send('Network.setCookies', { cookies });
+    },
+
+    async clearCookies() {
+      const c = await ensureCdp();
+      await c.send('Network.clearBrowserCookies');
     },
   };
 

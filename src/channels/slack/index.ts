@@ -9,8 +9,10 @@
 import { App, LogLevel } from '@slack/bolt';
 import { logger } from '../../utils/logger';
 import type { ChannelCallbacks, ChannelAdapter } from '../index';
-import type { Config, OutgoingMessage, IncomingMessage } from '../../types';
+import type { Config, OutgoingMessage, IncomingMessage, MessageAttachment } from '../../types';
 import type { PairingService } from '../../pairing/index';
+import type { CommandRegistry } from '../../commands/registry';
+import { guessAttachmentType, resolveAttachmentWithHeaders, resolveAttachment } from '../../utils/attachments';
 
 export interface SlackConfig {
   enabled: boolean;
@@ -22,12 +24,15 @@ export interface SlackConfig {
   dmPolicy?: 'open' | 'allowlist' | 'pairing' | 'disabled';
   /** Static allowlist of Slack user IDs */
   allowFrom?: string[];
+  /** Per-channel group policies */
+  groups?: Record<string, { requireMention?: boolean }>;
 }
 
 export async function createSlackChannel(
   config: SlackConfig,
   callbacks: ChannelCallbacks,
-  pairing?: PairingService
+  pairing?: PairingService,
+  _commands?: CommandRegistry
 ): Promise<ChannelAdapter> {
   // Static allowlist from config (always paired)
   const staticAllowlist = new Set<string>(config.allowFrom || []);
@@ -53,15 +58,19 @@ export async function createSlackChannel(
     logLevel: LogLevel.WARN,
   });
 
+  let botUserId: string | null = null;
+
   // Handle all messages
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   app.message(async ({ message, say, client }: any) => {
     // Type guard for standard messages
-    if (!('text' in message) || !message.text) return;
+    const hasText = 'text' in message && typeof message.text === 'string' && message.text.length > 0;
+    const hasFiles = Array.isArray((message as any).files) && (message as any).files.length > 0;
+    if (!hasText && !hasFiles) return;
     if (!('user' in message) || !message.user) return;
 
     const userId = message.user;
-    const text = message.text;
+    const text = message.text || '';
     const channelId = message.channel;
     const messageTs = message.ts;
 
@@ -141,13 +150,39 @@ export async function createSlackChannel(
       }
     }
 
+    if (!isDM) {
+      const requireMention = config.groups?.[channelId]?.requireMention ?? true;
+      if (requireMention) {
+        const mentionToken = botUserId ? `<@${botUserId}>` : null;
+        const isMentioned = mentionToken ? text.includes(mentionToken) : false;
+        if (!isMentioned) {
+          return;
+        }
+      }
+    }
+
+    const attachments: MessageAttachment[] = [];
+    if ((message as any).files) {
+      for (const file of (message as any).files as Array<any>) {
+        attachments.push({
+          type: guessAttachmentType(file.mimetype, file.name),
+          url: file.url_private || file.url_private_download,
+          filename: file.name,
+          mimeType: file.mimetype,
+          size: file.size,
+        });
+      }
+    }
+
+    const cleanText = botUserId ? text.replace(new RegExp(`<@${botUserId}>`, 'g'), '').trim() : text;
     const incomingMessage: IncomingMessage = {
       id: messageTs,
       platform: 'slack',
       userId,
       chatId: channelId,
       chatType: isDM ? 'dm' : 'group',
-      text,
+      text: cleanText,
+      attachments: attachments.length > 0 ? attachments : undefined,
       timestamp: new Date(parseFloat(messageTs) * 1000),
     };
 
@@ -159,34 +194,7 @@ export async function createSlackChannel(
     await callbacks.onMessage(incomingMessage);
   });
 
-  // Handle app_mention events (for channel messages where bot is @mentioned)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  app.event('app_mention', async ({ event, say }: any) => {
-    const userId = event.user;
-    const text = event.text;
-    const channelId = event.channel;
-    const messageTs = event.ts;
-
-    // Remove the @mention from the text
-    const cleanText = text.replace(/<@[A-Z0-9]+>/g, '').trim();
-
-    const incomingMessage: IncomingMessage = {
-      id: messageTs,
-      platform: 'slack',
-      userId,
-      chatId: channelId,
-      chatType: 'group',
-      text: cleanText || text,
-      timestamp: new Date(parseFloat(messageTs) * 1000),
-    };
-
-    logger.info(
-      { userId, channel: channelId },
-      'Received Slack mention'
-    );
-
-    await callbacks.onMessage(incomingMessage);
-  });
+  // app_mention events are handled by the generic message handler
 
   // Handle slash commands (optional)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -222,6 +230,14 @@ export async function createSlackChannel(
 
     async start() {
       logger.info('Starting Slack bot (Socket Mode)');
+      try {
+        const auth = await app.client.auth.test();
+        if (auth.user_id) {
+          botUserId = auth.user_id;
+        }
+      } catch (error) {
+        logger.warn({ error }, 'Failed to resolve Slack bot user ID');
+      }
       await app.start();
       logger.info('Slack bot started');
     },
@@ -231,15 +247,71 @@ export async function createSlackChannel(
       await app.stop();
     },
 
-    async sendMessage(message: OutgoingMessage) {
+    async sendMessage(message: OutgoingMessage): Promise<string | null> {
       try {
-        await app.client.chat.postMessage({
+        const attachments = message.attachments || [];
+        if (attachments.length > 0) {
+          let firstUpload = true;
+          for (const attachment of attachments) {
+            const needsAuth = Boolean(attachment.url && attachment.url.includes('slack.com'));
+            const resolved = needsAuth
+              ? await resolveAttachmentWithHeaders(attachment, { Authorization: `Bearer ${config.botToken}` })
+              : await resolveAttachment(attachment);
+            if (!resolved) continue;
+
+            await app.client.files.upload({
+              channels: message.chatId,
+              file: resolved.buffer,
+              filename: resolved.filename,
+              initial_comment: firstUpload ? message.text : undefined,
+              title: resolved.filename,
+            });
+            firstUpload = false;
+          }
+
+          if (firstUpload && message.text) {
+            await app.client.chat.postMessage({
+              channel: message.chatId,
+              text: message.text,
+              mrkdwn: true,
+            });
+          }
+          return null;
+        }
+
+        const response = await app.client.chat.postMessage({
           channel: message.chatId,
           text: message.text,
           mrkdwn: true,
         });
+        return response.ts ?? null;
       } catch (error) {
         logger.error({ error, channel: message.chatId }, 'Failed to send Slack message');
+        return null;
+      }
+    },
+
+    async editMessage(message: OutgoingMessage & { messageId: string }) {
+      try {
+        await app.client.chat.update({
+          channel: message.chatId,
+          ts: message.messageId,
+          text: message.text,
+          mrkdwn: true,
+        });
+      } catch (error) {
+        logger.error({ error, channel: message.chatId }, 'Failed to edit Slack message');
+      }
+    },
+
+    async deleteMessage(message: OutgoingMessage & { messageId: string }) {
+      try {
+        await app.client.chat.delete({
+          channel: message.chatId,
+          ts: message.messageId,
+        });
+      } catch (error) {
+        logger.error({ error, channel: message.chatId }, 'Failed to delete Slack message');
       }
     },
   };

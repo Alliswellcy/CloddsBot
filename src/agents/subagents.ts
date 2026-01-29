@@ -117,6 +117,12 @@ export interface SubagentState {
   };
   /** Retry count */
   retryCount: number;
+  /** Progress updates */
+  progress?: {
+    message?: string;
+    percent?: number;
+    updatedAt?: Date;
+  };
 }
 
 export interface SubagentRun {
@@ -191,7 +197,13 @@ export function classifyError(error: Error): { category: ErrorCategory; retryabl
     message.includes('network') ||
     message.includes('econnrefused') ||
     message.includes('econnreset') ||
-    message.includes('socket')
+    message.includes('socket') ||
+    message.includes('overloaded') ||
+    message.includes('unavailable') ||
+    message.includes('gateway') ||
+    message.includes('502') ||
+    message.includes('503') ||
+    message.includes('504')
   ) {
     return { category: 'network', retryable: true };
   }
@@ -444,6 +456,8 @@ export interface SubagentManager {
   cancel(id: string): boolean;
   /** Get run status */
   getStatus(id: string): SubagentState | null;
+  /** Emit a progress update */
+  updateProgress(id: string, message?: string, percent?: number): boolean;
   /** Wait for a run to complete */
   waitFor(id: string, timeoutMs?: number): Promise<SubagentState>;
   /** Get the run registry */
@@ -492,6 +506,16 @@ export function createSubagentManager(): SubagentManager {
       } catch (err) {
         logger.error({ id: state.config.id, error: err }, 'Failed to announce completion');
       }
+    }
+  }
+
+  async function announceProgress(state: SubagentState): Promise<void> {
+    if (!announcer || !state.config.background) return;
+    if (!state.progress) return;
+    try {
+      await announcer(state);
+    } catch (err) {
+      logger.error({ id: state.config.id, error: err }, 'Failed to announce progress');
     }
   }
 
@@ -585,12 +609,15 @@ export function createSubagentManager(): SubagentManager {
         logger.debug({ id: state.config.id, turn: state.turn }, 'Subagent turn');
 
         // Make API call
-        const response = await anthropicClient.messages.create({
-          model,
-          max_tokens: 4096,
-          system: systemPrompt,
-          messages,
-        });
+        const response = await anthropicClient.messages.create(
+          {
+            model,
+            max_tokens: 4096,
+            system: systemPrompt,
+            messages,
+          },
+          signal ? { signal } : undefined
+        );
 
         // Track tokens/cost
         state.cost.inputTokens += response.usage.input_tokens;
@@ -680,6 +707,16 @@ export function createSubagentManager(): SubagentManager {
         };
       }
     } catch (error) {
+      if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+        if (state.status === 'paused' || state.status === 'cancelled') {
+          logger.info({ id: state.config.id, status: state.status }, 'Subagent stopped by signal');
+          return state;
+        }
+        state.status = 'cancelled';
+        state.completedAt = new Date();
+        saveSubagentState(state);
+        return state;
+      }
       const err = error instanceof Error ? error : new Error(String(error));
       const { category, retryable } = classifyError(err);
 
@@ -695,10 +732,15 @@ export function createSubagentManager(): SubagentManager {
       if (retryable && state.config.autoRetry && state.retryCount < (state.config.maxRetries || 3)) {
         state.retryCount++;
         state.status = 'running';
+        state.error = undefined;
         logger.info({ id: state.config.id, retry: state.retryCount }, 'Auto-retrying subagent');
 
         // Wait before retry (exponential backoff)
-        await new Promise(resolve => setTimeout(resolve, Math.min(1000 * Math.pow(2, state.retryCount), 30000)));
+        const delayMs = Math.min(1000 * Math.pow(2, state.retryCount), 30000);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        if (signal?.aborted || state.status !== 'running') {
+          return state;
+        }
         return executeAgentLoop(run, toolExecutor);
       }
 
@@ -773,8 +815,14 @@ export function createSubagentManager(): SubagentManager {
         return null;
       }
 
+      if (state.status === 'completed' || state.status === 'cancelled') {
+        return null;
+      }
+
       state.status = 'running';
       state.pausedAt = undefined;
+      state.completedAt = undefined;
+      state.error = undefined;
 
       run = {
         state,
@@ -823,6 +871,32 @@ export function createSubagentManager(): SubagentManager {
         return run.state;
       }
       return loadSubagentState(id);
+    },
+
+    updateProgress(id, message, percent) {
+      const run = registry.get(id);
+      if (!run) {
+        const state = loadSubagentState(id);
+        if (!state) return false;
+        state.progress = {
+          message,
+          percent,
+          updatedAt: new Date(),
+        };
+        saveSubagentState(state);
+        void announceProgress(state);
+        return true;
+      }
+
+      run.state.progress = {
+        message,
+        percent,
+        updatedAt: new Date(),
+      };
+      saveSubagentState(run.state);
+      run.events.emit('progress', run.state.progress);
+      void announceProgress(run.state);
+      return true;
     },
 
     async waitFor(id, timeoutMs = 300000) {

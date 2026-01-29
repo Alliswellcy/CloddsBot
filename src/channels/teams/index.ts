@@ -10,7 +10,7 @@
 
 import { logger } from '../../utils/logger';
 import type { ChannelAdapter, ChannelCallbacks } from '../index';
-import type { IncomingMessage, OutgoingMessage } from '../../types';
+import type { IncomingMessage, OutgoingMessage, MessageAttachment } from '../../types';
 import type { PairingService } from '../../pairing/index';
 
 export interface TeamsConfig {
@@ -25,6 +25,8 @@ export interface TeamsConfig {
   allowFrom?: string[];
   /** Allowed teams/channels */
   teamAllowlist?: string[];
+  /** Per-conversation group policies */
+  groups?: Record<string, { requireMention?: boolean }>;
 }
 
 /** Teams activity types */
@@ -53,6 +55,8 @@ interface TeamsActivity {
   attachments?: Array<{
     contentType: string;
     content: unknown;
+    contentUrl?: string;
+    name?: string;
   }>;
   entities?: Array<{
     type: string;
@@ -73,6 +77,8 @@ interface OutgoingActivity {
   attachments?: Array<{
     contentType: string;
     content: unknown;
+    contentUrl?: string;
+    name?: string;
   }>;
 }
 
@@ -189,11 +195,43 @@ export async function createTeamsChannel(
     }
 
     const text = extractText(activity);
-    if (!text) {
+    const hasAttachments = Boolean(activity.attachments && activity.attachments.length > 0);
+    if (!text && !hasAttachments) {
       return null;
     }
 
+    if (activity.conversation.conversationType !== 'personal') {
+      const requireMention =
+        (config as any).groups?.[activity.conversation.id]?.requireMention ?? true;
+      if (requireMention) {
+        const isMentioned = activity.entities?.some(
+          (entity) => entity.type === 'mention' && entity.mentioned?.id === activity.recipient.id
+        );
+        if (!isMentioned) {
+          return null;
+        }
+      }
+    }
+
     // Create incoming message
+    const attachments: MessageAttachment[] = [];
+    if (activity.attachments && activity.attachments.length > 0) {
+      for (const attachment of activity.attachments) {
+        attachments.push({
+          type: attachment.contentType?.startsWith('image/')
+            ? 'image'
+            : attachment.contentType?.startsWith('video/')
+              ? 'video'
+              : attachment.contentType?.startsWith('audio/')
+                ? 'audio'
+                : 'document',
+          url: attachment.contentUrl,
+          filename: attachment.name,
+          mimeType: attachment.contentType,
+        });
+      }
+    }
+
     const message: IncomingMessage = {
       id: activity.id,
       platform: 'teams',
@@ -201,6 +239,7 @@ export async function createTeamsChannel(
       chatId: activity.conversation.id,
       chatType: activity.conversation.conversationType === 'personal' ? 'dm' : 'group',
       text,
+      attachments: attachments.length > 0 ? attachments : undefined,
       timestamp: new Date(activity.timestamp),
     };
 
@@ -212,18 +251,44 @@ export async function createTeamsChannel(
   }
 
   /** Send message to Teams */
-  async function sendMessage(message: OutgoingMessage): Promise<void> {
+  async function sendMessage(message: OutgoingMessage): Promise<string | null> {
     const serviceUrl = serviceUrls.get(message.chatId);
     if (!serviceUrl) {
       logger.warn({ chatId: message.chatId }, 'No service URL for conversation');
-      return;
+      return null;
     }
 
     const token = await getAccessToken();
 
+    const attachments = message.attachments || [];
     const activity: OutgoingActivity = {
       type: 'message',
       text: message.text,
+      attachments: attachments.length > 0
+        ? attachments.map((attachment) => {
+            if (attachment.url) {
+              return {
+                contentType: attachment.mimeType || 'application/octet-stream',
+                contentUrl: attachment.url,
+                name: attachment.filename,
+                content: undefined,
+              };
+            }
+            if (attachment.data && attachment.mimeType) {
+              return {
+                contentType: attachment.mimeType,
+                contentUrl: `data:${attachment.mimeType};base64,${attachment.data}`,
+                name: attachment.filename,
+                content: undefined,
+              };
+            }
+            return {
+              contentType: attachment.mimeType || 'application/octet-stream',
+              content: attachment.data || attachment.filename || 'attachment',
+              name: attachment.filename,
+            };
+          })
+        : undefined,
     };
 
     const response = await fetch(
@@ -243,7 +308,64 @@ export async function createTeamsChannel(
       throw new Error(`Failed to send Teams message: ${response.status} ${error}`);
     }
 
+    const payload = await response.json() as { id?: string };
     logger.debug({ chatId: message.chatId }, 'Teams message sent');
+    return payload.id ?? null;
+  }
+
+  async function editMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+    const serviceUrl = serviceUrls.get(message.chatId);
+    if (!serviceUrl) {
+      logger.warn({ chatId: message.chatId }, 'No service URL for conversation');
+      return;
+    }
+
+    const token = await getAccessToken();
+    const activity: OutgoingActivity = {
+      type: 'message',
+      text: message.text,
+    };
+
+    const response = await fetch(
+      `${serviceUrl}v3/conversations/${encodeURIComponent(message.chatId)}/activities/${encodeURIComponent(message.messageId)}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(activity),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to edit Teams message: ${response.status} ${error}`);
+    }
+  }
+
+  async function deleteMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+    const serviceUrl = serviceUrls.get(message.chatId);
+    if (!serviceUrl) {
+      logger.warn({ chatId: message.chatId }, 'No service URL for conversation');
+      return;
+    }
+
+    const token = await getAccessToken();
+    const response = await fetch(
+      `${serviceUrl}v3/conversations/${encodeURIComponent(message.chatId)}/activities/${encodeURIComponent(message.messageId)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to delete Teams message: ${response.status} ${error}`);
+    }
   }
 
   return {
@@ -258,8 +380,14 @@ export async function createTeamsChannel(
       logger.info('Microsoft Teams channel stopped');
     },
 
-    async sendMessage(message: OutgoingMessage): Promise<void> {
-      await sendMessage(message);
+    async sendMessage(message: OutgoingMessage): Promise<string | null> {
+      return sendMessage(message);
+    },
+    async editMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      await editMessage(message);
+    },
+    async deleteMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      await deleteMessage(message);
     },
 
     // Expose activity handler for webhook integration

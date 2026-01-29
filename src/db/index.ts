@@ -3,18 +3,33 @@
  */
 
 import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
-import { homedir } from 'os';
 import { join } from 'path';
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { logger } from '../utils/logger';
-import type { User, Session, Alert, Position, Market, Platform, TradingCredentials } from '../types';
+import { resolveStateDir } from '../utils/config';
+import type {
+  User,
+  Session,
+  Alert,
+  Position,
+  PortfolioSnapshot,
+  Market,
+  Platform,
+  TradingCredentials,
+  MarketIndexEntry,
+} from '../types';
 
-const DB_DIR = join(homedir(), '.clodds');
+const DB_DIR = resolveStateDir();
 const DB_FILE = join(DB_DIR, 'clodds.db');
+const BACKUP_DIR = join(DB_DIR, 'backups');
 
 export interface Database {
   close(): void;
   save(): void;
+  withConnection<T>(fn: (db: Database) => T | Promise<T>): Promise<T>;
+  backupNow(): void;
+  getVersion(): number;
+  setVersion(version: number): void;
 
   // Raw SQL access (for custom queries)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -25,14 +40,48 @@ export interface Database {
   // Users
   getUserByPlatformId(platform: string, platformUserId: string): User | undefined;
   getUser(userId: string): User | undefined;
+  listUsers(): User[];
   createUser(user: User): void;
   updateUserActivity(userId: string): void;
+  updateUserSettings(userId: string, settings: Partial<User['settings']>): boolean;
+  updateUserSettingsByPlatform(platform: string, platformUserId: string, settings: Partial<User['settings']>): boolean;
 
   // Sessions
   getSession(key: string): Session | undefined;
+  getLatestSessionForUser(userId: string): {
+    channel: string;
+    chatId: string;
+    chatType: 'dm' | 'group';
+    updatedAt: Date;
+  } | undefined;
   createSession(session: Session): void;
   updateSession(session: Session): void;
   deleteSession(key: string): void;
+  deleteSessionsBefore(cutoffMs: number): number;
+
+  // Cron jobs
+  listCronJobs(): Array<{
+    id: string;
+    data: string;
+    enabled: boolean;
+    createdAtMs: number;
+    updatedAtMs: number;
+  }>;
+  getCronJob(id: string): {
+    id: string;
+    data: string;
+    enabled: boolean;
+    createdAtMs: number;
+    updatedAtMs: number;
+  } | undefined;
+  upsertCronJob(record: {
+    id: string;
+    data: string;
+    enabled: boolean;
+    createdAtMs?: number;
+    updatedAtMs?: number;
+  }): void;
+  deleteCronJob(id: string): void;
 
   // Alerts
   getAlerts(userId: string): Alert[];
@@ -44,12 +93,82 @@ export interface Database {
 
   // Positions
   getPositions(userId: string): Position[];
+  listPositionsForPricing(): Array<{
+    id: string;
+    userId: string;
+    platform: Platform;
+    marketId: string;
+    outcomeId: string;
+    outcome: string;
+  }>;
+  updatePositionPrice(positionId: string, currentPrice: number): void;
   upsertPosition(userId: string, position: Position): void;
   deletePosition(positionId: string): void;
 
+  // Portfolio P&L snapshots
+  createPortfolioSnapshot(snapshot: {
+    userId: string;
+    totalValue: number;
+    totalPnl: number;
+    totalPnlPct: number;
+    totalCostBasis: number;
+    positionsCount: number;
+    byPlatform: Record<string, { value: number; pnl: number }>;
+    createdAt?: Date;
+  }): void;
+  getPortfolioSnapshots(
+    userId: string,
+    options?: { sinceMs?: number; limit?: number; order?: 'asc' | 'desc' }
+  ): PortfolioSnapshot[];
+  deletePortfolioSnapshotsBefore(cutoffMs: number): void;
+
+  // Stop-loss triggers
+  getStopLossTrigger(userId: string, platform: Platform, outcomeId: string): {
+    userId: string;
+    platform: Platform;
+    outcomeId: string;
+    marketId?: string;
+    status: string;
+    triggeredAt: Date;
+    lastPrice?: number;
+    lastError?: string;
+    cooldownUntil?: Date;
+  } | undefined;
+  upsertStopLossTrigger(record: {
+    userId: string;
+    platform: Platform;
+    outcomeId: string;
+    marketId?: string;
+    status: string;
+    triggeredAt: Date;
+    lastPrice?: number;
+    lastError?: string;
+    cooldownUntil?: Date;
+  }): void;
+  deleteStopLossTrigger(userId: string, platform: Platform, outcomeId: string): void;
+
   // Market cache
   cacheMarket(market: Market): void;
-  getCachedMarket(platform: string, marketId: string): Market | undefined;
+  getCachedMarket(platform: string, marketId: string, maxAgeMs?: number): Market | undefined;
+  pruneMarketCache(cutoffMs: number): number;
+
+  // Market index (semantic search)
+  upsertMarketIndex(entry: MarketIndexEntry): void;
+  getMarketIndexHash(platform: Platform, marketId: string): string | null;
+  getMarketIndexEmbedding(platform: Platform, marketId: string): { contentHash: string; vector: number[] } | null;
+  upsertMarketIndexEmbedding(
+    platform: Platform,
+    marketId: string,
+    contentHash: string,
+    vector: number[]
+  ): void;
+  listMarketIndex(options?: {
+    platform?: Platform;
+    limit?: number;
+    textQuery?: string;
+  }): MarketIndexEntry[];
+  countMarketIndex(platform?: Platform): number;
+  pruneMarketIndex(cutoffMs: number, platform?: Platform): number;
 
   // Trading Credentials (per-user, encrypted)
   getTradingCredentials(userId: string, platform: Platform): TradingCredentials | null;
@@ -61,32 +180,41 @@ export interface Database {
 
 let dbInstance: Database | null = null;
 let sqlJsDb: SqlJsDatabase | null = null;
+let dbInitPromise: Promise<Database> | null = null;
+let backupInterval: ReturnType<typeof setInterval> | null = null;
 
 export async function initDatabase(): Promise<Database> {
   if (dbInstance) return dbInstance;
+  if (dbInitPromise) return dbInitPromise;
 
-  // Ensure directory exists
-  if (!existsSync(DB_DIR)) {
-    mkdirSync(DB_DIR, { recursive: true });
-  }
+  dbInitPromise = (async () => {
+    // Ensure directory exists
+    if (!existsSync(DB_DIR)) {
+      mkdirSync(DB_DIR, { recursive: true });
+    }
 
-  logger.info(`Opening database: ${DB_FILE}`);
+    logger.info(`Opening database: ${DB_FILE}`);
 
-  // Initialize sql.js
-  const SQL = await initSqlJs();
+    // Initialize sql.js
+    const SQL = await initSqlJs();
 
-  // Load existing database or create new
-  if (existsSync(DB_FILE)) {
-    const buffer = readFileSync(DB_FILE);
-    sqlJsDb = new SQL.Database(buffer);
-  } else {
-    sqlJsDb = new SQL.Database();
-  }
+    // Load existing database or create new
+    if (existsSync(DB_FILE)) {
+      const buffer = readFileSync(DB_FILE);
+      sqlJsDb = new SQL.Database(buffer);
+    } else {
+      sqlJsDb = new SQL.Database();
+    }
 
-  const db = sqlJsDb;
+    const db = sqlJsDb;
 
-  // Create tables
-  db.run(`
+    // Create tables
+    db.run(`
+    CREATE TABLE IF NOT EXISTS _schema_version (
+      version INTEGER NOT NULL,
+      applied_at INTEGER NOT NULL
+    );
+
     -- Users table
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -107,6 +235,8 @@ export async function initDatabase(): Promise<Database> {
       name TEXT,
       market_id TEXT,
       platform TEXT,
+      channel TEXT,
+      chat_id TEXT,
       condition TEXT NOT NULL,
       enabled INTEGER DEFAULT 1,
       triggered INTEGER DEFAULT 0,
@@ -135,6 +265,34 @@ export async function initDatabase(): Promise<Database> {
       UNIQUE(user_id, platform, market_id, outcome_id)
     );
 
+    -- Portfolio P&L snapshots
+    CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      total_value REAL NOT NULL,
+      total_pnl REAL NOT NULL,
+      total_pnl_pct REAL NOT NULL,
+      total_cost_basis REAL NOT NULL,
+      positions_count INTEGER NOT NULL,
+      by_platform TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    -- Stop-loss triggers
+    CREATE TABLE IF NOT EXISTS stop_loss_triggers (
+      user_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      outcome_id TEXT NOT NULL,
+      market_id TEXT,
+      status TEXT NOT NULL,
+      triggered_at INTEGER NOT NULL,
+      last_price REAL,
+      last_error TEXT,
+      cooldown_until INTEGER,
+      PRIMARY KEY (user_id, platform, outcome_id)
+    );
+
     -- Market cache table
     CREATE TABLE IF NOT EXISTS markets (
       platform TEXT NOT NULL,
@@ -143,6 +301,45 @@ export async function initDatabase(): Promise<Database> {
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (platform, market_id)
     );
+
+    -- Market index table (semantic search)
+    CREATE TABLE IF NOT EXISTS market_index (
+      platform TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      slug TEXT,
+      question TEXT NOT NULL,
+      description TEXT,
+      outcomes_json TEXT,
+      tags_json TEXT,
+      status TEXT,
+      url TEXT,
+      end_date INTEGER,
+      resolved INTEGER,
+      volume_24h REAL,
+      liquidity REAL,
+      open_interest REAL,
+      predictions INTEGER,
+      content_hash TEXT,
+      updated_at INTEGER NOT NULL,
+      raw_json TEXT,
+      PRIMARY KEY (platform, market_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_market_index_platform ON market_index(platform);
+    CREATE INDEX IF NOT EXISTS idx_market_index_updated ON market_index(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_market_index_hash ON market_index(content_hash);
+
+    -- Market index embeddings (persistent vectors)
+    CREATE TABLE IF NOT EXISTS market_index_embeddings (
+      platform TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      vector TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (platform, market_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_market_index_embeddings_hash ON market_index_embeddings(content_hash);
 
     -- Sessions table
     CREATE TABLE IF NOT EXISTS sessions (
@@ -153,6 +350,15 @@ export async function initDatabase(): Promise<Database> {
       chat_id TEXT NOT NULL,
       chat_type TEXT NOT NULL,
       context TEXT DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    -- Cron jobs table
+    CREATE TABLE IF NOT EXISTS cron_jobs (
+      id TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -271,16 +477,55 @@ export async function initDatabase(): Promise<Database> {
 
     -- Create indexes
     CREATE INDEX IF NOT EXISTS idx_alerts_user ON alerts(user_id);
+    CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(enabled, triggered);
     CREATE INDEX IF NOT EXISTS idx_positions_user ON positions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_user ON portfolio_snapshots(user_id);
+    CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_created_at ON portfolio_snapshots(created_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_key ON sessions(key);
     CREATE INDEX IF NOT EXISTS idx_credentials_user ON trading_credentials(user_id);
+    CREATE INDEX IF NOT EXISTS idx_credentials_user_platform ON trading_credentials(user_id, platform);
+    CREATE INDEX IF NOT EXISTS idx_markets_platform_market ON markets(platform, market_id);
+    CREATE INDEX IF NOT EXISTS idx_users_platform_userid ON users(platform, platform_user_id);
     CREATE INDEX IF NOT EXISTS idx_watched_wallets_user ON watched_wallets(user_id);
     CREATE INDEX IF NOT EXISTS idx_paper_positions_user ON paper_positions(user_id);
     CREATE INDEX IF NOT EXISTS idx_paper_trades_user ON paper_trades(user_id);
   `);
 
-  // Save after schema creation
-  saveDb();
+    // Backfill new columns on existing databases
+    try {
+      db.run('ALTER TABLE market_index ADD COLUMN content_hash TEXT');
+    } catch {
+      // Column already exists or table missing; ignore.
+    }
+    try {
+      db.run('ALTER TABLE market_index ADD COLUMN volume_24h REAL');
+    } catch {}
+    try {
+      db.run('ALTER TABLE market_index ADD COLUMN liquidity REAL');
+    } catch {}
+    try {
+      db.run('ALTER TABLE market_index ADD COLUMN open_interest REAL');
+    } catch {}
+    try {
+      db.run('ALTER TABLE market_index ADD COLUMN predictions INTEGER');
+    } catch {}
+
+    // Ensure embeddings table exists for older DBs
+    db.run(`
+      CREATE TABLE IF NOT EXISTS market_index_embeddings (
+        platform TEXT NOT NULL,
+        market_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        vector TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (platform, market_id)
+      );
+    `);
+    db.run('CREATE INDEX IF NOT EXISTS idx_market_index_embeddings_hash ON market_index_embeddings(content_hash)');
+
+    // Save after schema creation
+    saveDb();
 
   function saveDb() {
     if (!sqlJsDb) return;
@@ -289,31 +534,90 @@ export async function initDatabase(): Promise<Database> {
     writeFileSync(DB_FILE, buffer);
   }
 
+  function getBackupConfig(): { enabled: boolean; intervalMs: number; maxFiles: number } {
+    const intervalMinutes = Number.parseInt(process.env.CLODDS_DB_BACKUP_INTERVAL_MINUTES || '60', 10);
+    const maxFiles = Number.parseInt(process.env.CLODDS_DB_BACKUP_MAX || '10', 10);
+    const intervalMs = Math.max(1, intervalMinutes) * 60 * 1000;
+    return {
+      enabled: intervalMinutes > 0 && maxFiles > 0,
+      intervalMs,
+      maxFiles,
+    };
+  }
+
+  function ensureBackupDir(): void {
+    if (!existsSync(BACKUP_DIR)) {
+      mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+  }
+
+  function listBackupFiles(): Array<{ name: string; path: string; mtimeMs: number }> {
+    if (!existsSync(BACKUP_DIR)) return [];
+    return readdirSync(BACKUP_DIR)
+      .filter((name) => name.endsWith('.db'))
+      .map((name) => {
+        const path = join(BACKUP_DIR, name);
+        const stats = statSync(path);
+        return { name, path, mtimeMs: stats.mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  }
+
+  function pruneBackups(maxFiles: number): void {
+    const files = listBackupFiles();
+    if (files.length <= maxFiles) return;
+    const toDelete = files.slice(maxFiles);
+    for (const file of toDelete) {
+      try {
+        unlinkSync(file.path);
+      } catch (error) {
+        logger.warn({ error, file: file.name }, 'Failed to delete old backup');
+      }
+    }
+  }
+
+  function createBackup(): void {
+    if (!sqlJsDb) return;
+    ensureBackupDir();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = join(BACKUP_DIR, `clodds-${timestamp}.db`);
+    const data = sqlJsDb.export();
+    writeFileSync(filePath, Buffer.from(data));
+
+    const { maxFiles } = getBackupConfig();
+    pruneBackups(maxFiles);
+  }
+
   // Helper to get single row
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function getOne<T>(sql: string, params: any[] = []): T | undefined {
     const stmt = db.prepare(sql);
-    stmt.bind(params);
-    if (stmt.step()) {
-      const row = stmt.getAsObject();
+    try {
+      stmt.bind(params);
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        return row as T;
+      }
+      return undefined;
+    } finally {
       stmt.free();
-      return row as T;
     }
-    stmt.free();
-    return undefined;
   }
 
   // Helper to get all rows
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function getAll<T>(sql: string, params: any[] = []): T[] {
     const stmt = db.prepare(sql);
-    stmt.bind(params);
-    const results: T[] = [];
-    while (stmt.step()) {
-      results.push(stmt.getAsObject() as T);
+    try {
+      stmt.bind(params);
+      const results: T[] = [];
+      while (stmt.step()) {
+        results.push(stmt.getAsObject() as T);
+      }
+      return results;
+    } finally {
+      stmt.free();
     }
-    stmt.free();
-    return results;
   }
 
   // Helper to run statement
@@ -327,13 +631,16 @@ export async function initDatabase(): Promise<Database> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function query<T>(sql: string, params: any[] = []): T[] {
     const stmt = db.prepare(sql);
-    stmt.bind(params);
-    const results: T[] = [];
-    while (stmt.step()) {
-      results.push(stmt.getAsObject() as T);
+    try {
+      stmt.bind(params);
+      const results: T[] = [];
+      while (stmt.step()) {
+        results.push(stmt.getAsObject() as T);
+      }
+      return results;
+    } finally {
+      stmt.free();
     }
-    stmt.free();
-    return results;
   }
 
   // Helper to parse row into typed object
@@ -350,6 +657,16 @@ export async function initDatabase(): Promise<Database> {
     };
   }
 
+  function extractAccountIdFromSessionKey(key: string): string | undefined {
+    const parts = key.split(':');
+    if (parts.length < 4) return undefined;
+    const platform = parts[2];
+    if (platform !== 'whatsapp') return undefined;
+    const candidate = parts[3];
+    if (candidate === 'group' || candidate === 'dm') return undefined;
+    return candidate || undefined;
+  }
+
   function parseSession(row: Record<string, unknown> | undefined): Session | undefined {
     if (!row) return undefined;
     const context = JSON.parse((row.context as string) || '{}');
@@ -358,6 +675,7 @@ export async function initDatabase(): Promise<Database> {
       key: row.key as string,
       userId: row.user_id as string,
       channel: row.channel as string,
+      accountId: extractAccountIdFromSessionKey(row.key as string),
       chatId: row.chat_id as string,
       chatType: row.chat_type as 'dm' | 'group',
       context,
@@ -376,6 +694,8 @@ export async function initDatabase(): Promise<Database> {
       name: row.name as string | undefined,
       marketId: row.market_id as string | undefined,
       platform: row.platform as Platform | undefined,
+      channel: row.channel as string | undefined,
+      chatId: row.chat_id as string | undefined,
       condition: JSON.parse((row.condition as string) || '{}'),
       enabled: Boolean(row.enabled),
       triggered: Boolean(row.triggered),
@@ -410,6 +730,29 @@ export async function initDatabase(): Promise<Database> {
     };
   }
 
+  function parsePortfolioSnapshot(row: Record<string, unknown>): PortfolioSnapshot {
+    const byPlatformRaw = row.by_platform as string | null | undefined;
+    let byPlatform: Record<string, { value: number; pnl: number }> = {};
+    if (byPlatformRaw) {
+      try {
+        byPlatform = JSON.parse(byPlatformRaw);
+      } catch {
+        byPlatform = {};
+      }
+    }
+
+    return {
+      userId: row.user_id as string,
+      totalValue: Number(row.total_value || 0),
+      totalPnl: Number(row.total_pnl || 0),
+      totalPnlPct: Number(row.total_pnl_pct || 0),
+      totalCostBasis: Number(row.total_cost_basis || 0),
+      positionsCount: Number(row.positions_count || 0),
+      byPlatform,
+      createdAt: new Date(row.created_at as number),
+    };
+  }
+
   function parseTradingCredentials(row: Record<string, unknown> | undefined): TradingCredentials | null {
     if (!row) return null;
     return {
@@ -426,27 +769,68 @@ export async function initDatabase(): Promise<Database> {
     };
   }
 
-  dbInstance = {
-    close() {
-      saveDb();
-      db.close();
-      sqlJsDb = null;
-      dbInstance = null;
+    const instance: Database = {
+      close() {
+        saveDb();
+        db.close();
+        sqlJsDb = null;
+        dbInstance = null;
+        dbInitPromise = null;
+      if (backupInterval) {
+        clearInterval(backupInterval);
+        backupInterval = null;
+      }
     },
 
     save() {
       saveDb();
     },
 
+    backupNow() {
+      createBackup();
+    },
+
+    getVersion(): number {
+      try {
+        const row = getOne<{ version: number }>(
+          'SELECT version FROM _schema_version ORDER BY version DESC LIMIT 1'
+        );
+        return row?.version ?? 0;
+      } catch {
+        return 0;
+      }
+    },
+
+    setVersion(version: number): void {
+      run('CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER NOT NULL, applied_at INTEGER NOT NULL)');
+      run('INSERT INTO _schema_version (version, applied_at) VALUES (?, ?)', [version, Date.now()]);
+    },
+
     // Users
     getUserByPlatformId(platform: string, platformUserId: string): User | undefined {
       return parseUser(
-        getOne('SELECT * FROM users WHERE platform = ? AND platform_user_id = ?', [platform, platformUserId])
+        getOne(
+          'SELECT id, platform, platform_user_id, username, settings, created_at, last_active_at FROM users WHERE platform = ? AND platform_user_id = ?',
+          [platform, platformUserId]
+        )
       );
     },
 
     getUser(userId: string): User | undefined {
-      return parseUser(getOne('SELECT * FROM users WHERE id = ?', [userId]));
+      return parseUser(
+        getOne(
+          'SELECT id, platform, platform_user_id, username, settings, created_at, last_active_at FROM users WHERE id = ?',
+          [userId]
+        )
+      );
+    },
+
+    listUsers(): User[] {
+      return getAll<Record<string, unknown>>(
+        'SELECT id, platform, platform_user_id, username, settings, created_at, last_active_at FROM users'
+      )
+        .map(parseUser)
+        .filter((user): user is User => Boolean(user));
     },
 
     createUser(user: User): void {
@@ -456,7 +840,7 @@ export async function initDatabase(): Promise<Database> {
           user.id,
           user.platform,
           user.platformUserId,
-          user.username,
+          user.username ?? null,
           JSON.stringify(user.settings),
           user.createdAt.getTime(),
           user.lastActiveAt.getTime(),
@@ -468,9 +852,56 @@ export async function initDatabase(): Promise<Database> {
       run('UPDATE users SET last_active_at = ? WHERE id = ?', [Date.now(), userId]);
     },
 
+    updateUserSettings(userId: string, settings: Partial<User['settings']>): boolean {
+      const user = instance.getUser(userId);
+      if (!user) return false;
+      const next = { ...user.settings, ...settings };
+      run('UPDATE users SET settings = ? WHERE id = ?', [JSON.stringify(next), userId]);
+      return true;
+    },
+
+    updateUserSettingsByPlatform(platform: string, platformUserId: string, settings: Partial<User['settings']>): boolean {
+      const user = instance.getUserByPlatformId(platform, platformUserId);
+      if (!user) return false;
+      return instance.updateUserSettings(user.id, settings);
+    },
+
     // Sessions
     getSession(key: string): Session | undefined {
-      return parseSession(getOne('SELECT * FROM sessions WHERE key = ?', [key]));
+      return parseSession(
+        getOne(
+          'SELECT id, key, user_id, channel, chat_id, chat_type, context, created_at, updated_at FROM sessions WHERE key = ?',
+          [key]
+        )
+      );
+    },
+
+    getLatestSessionForUser(userId: string) {
+      const row = getOne<{
+        channel: string;
+        chat_id: string;
+        chat_type: 'dm' | 'group';
+        updated_at: number;
+      }>(
+        'SELECT channel, chat_id, chat_type, updated_at FROM sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1',
+        [userId]
+      );
+      if (!row) return undefined;
+      return {
+        channel: row.channel,
+        chatId: row.chat_id,
+        chatType: row.chat_type,
+        updatedAt: new Date(row.updated_at),
+      };
+    },
+
+    getLatestSessionForChat(platform: string, chatId: string): Session | undefined {
+      return parseSession(
+        getOne(
+          'SELECT id, key, user_id, channel, chat_id, chat_type, context, created_at, updated_at FROM sessions WHERE channel = ? AND chat_id = ? ORDER BY updated_at DESC LIMIT 1',
+          [platform, chatId]
+        )
+      );
     },
 
     createSession(session: Session): void {
@@ -502,20 +933,77 @@ export async function initDatabase(): Promise<Database> {
       run('DELETE FROM sessions WHERE key = ?', [key]);
     },
 
+    deleteSessionsBefore(cutoffMs: number): number {
+      const rows = getAll<{ key: string }>('SELECT key FROM sessions WHERE updated_at < ?', [cutoffMs]);
+      if (rows.length === 0) return 0;
+      run('DELETE FROM sessions WHERE updated_at < ?', [cutoffMs]);
+      return rows.length;
+    },
+
+    // Cron jobs
+    listCronJobs() {
+      return getAll<Record<string, unknown>>(
+        'SELECT id, data, enabled, created_at, updated_at FROM cron_jobs ORDER BY created_at ASC'
+      ).map((row) => ({
+        id: row.id as string,
+        data: row.data as string,
+        enabled: Boolean(row.enabled),
+        createdAtMs: row.created_at as number,
+        updatedAtMs: row.updated_at as number,
+      }));
+    },
+
+    getCronJob(id: string) {
+      const row = getOne<Record<string, unknown>>(
+        'SELECT id, data, enabled, created_at, updated_at FROM cron_jobs WHERE id = ?',
+        [id]
+      );
+      if (!row) return undefined;
+      return {
+        id: row.id as string,
+        data: row.data as string,
+        enabled: Boolean(row.enabled),
+        createdAtMs: row.created_at as number,
+        updatedAtMs: row.updated_at as number,
+      };
+    },
+
+    upsertCronJob(record) {
+      const existing = record.createdAtMs ? null : this.getCronJob(record.id);
+      const createdAtMs = record.createdAtMs ?? existing?.createdAtMs ?? Date.now();
+      const updatedAtMs = record.updatedAtMs ?? Date.now();
+      run(
+        `INSERT INTO cron_jobs (id, data, enabled, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           data = excluded.data,
+           enabled = excluded.enabled,
+           updated_at = excluded.updated_at`,
+        [record.id, record.data, record.enabled ? 1 : 0, createdAtMs, updatedAtMs]
+      );
+    },
+
+    deleteCronJob(id: string): void {
+      run('DELETE FROM cron_jobs WHERE id = ?', [id]);
+    },
+
     // Alerts
     getAlerts(userId: string): Alert[] {
-      return getAll<Record<string, unknown>>('SELECT * FROM alerts WHERE user_id = ?', [userId]).map(parseAlert);
+      return getAll<Record<string, unknown>>(
+        'SELECT id, user_id, type, name, market_id, platform, channel, chat_id, condition, enabled, triggered, trigger_count, created_at, last_triggered_at FROM alerts WHERE user_id = ?',
+        [userId]
+      ).map(parseAlert);
     },
 
     getActiveAlerts(): Alert[] {
-      return getAll<Record<string, unknown>>('SELECT * FROM alerts WHERE enabled = 1 AND triggered = 0').map(
-        parseAlert
-      );
+      return getAll<Record<string, unknown>>(
+        'SELECT id, user_id, type, name, market_id, platform, channel, chat_id, condition, enabled, triggered, trigger_count, created_at, last_triggered_at FROM alerts WHERE enabled = 1 AND triggered = 0'
+      ).map(parseAlert);
     },
 
     createAlert(alert: Alert): void {
       run(
-        'INSERT INTO alerts (id, user_id, type, name, market_id, platform, condition, enabled, triggered, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO alerts (id, user_id, type, name, market_id, platform, channel, chat_id, condition, enabled, triggered, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           alert.id,
           alert.userId,
@@ -523,6 +1011,8 @@ export async function initDatabase(): Promise<Database> {
           alert.name || null,
           alert.marketId || null,
           alert.platform || null,
+          alert.channel || null,
+          alert.chatId || null,
           JSON.stringify(alert.condition),
           alert.enabled ? 1 : 0,
           alert.triggered ? 1 : 0,
@@ -532,10 +1022,12 @@ export async function initDatabase(): Promise<Database> {
     },
 
     updateAlert(alert: Alert): void {
-      run('UPDATE alerts SET name = ?, condition = ?, enabled = ? WHERE id = ?', [
+      run('UPDATE alerts SET name = ?, condition = ?, enabled = ?, channel = ?, chat_id = ? WHERE id = ?', [
         alert.name || null,
         JSON.stringify(alert.condition),
         alert.enabled ? 1 : 0,
+        alert.channel || null,
+        alert.chatId || null,
         alert.id,
       ]);
     },
@@ -553,7 +1045,30 @@ export async function initDatabase(): Promise<Database> {
 
     // Positions
     getPositions(userId: string): Position[] {
-      return getAll<Record<string, unknown>>('SELECT * FROM positions WHERE user_id = ?', [userId]).map(parsePosition);
+      return getAll<Record<string, unknown>>(
+        'SELECT id, user_id, platform, market_id, market_question, outcome, outcome_id, side, shares, avg_price, current_price, opened_at, updated_at FROM positions WHERE user_id = ?',
+        [userId]
+      ).map(parsePosition);
+    },
+
+    listPositionsForPricing() {
+      return getAll<Record<string, unknown>>(
+        'SELECT id, user_id, platform, market_id, outcome_id, outcome FROM positions'
+      ).map((row) => ({
+        id: row.id as string,
+        userId: row.user_id as string,
+        platform: row.platform as Platform,
+        marketId: row.market_id as string,
+        outcomeId: row.outcome_id as string,
+        outcome: row.outcome as string,
+      }));
+    },
+
+    updatePositionPrice(positionId: string, currentPrice: number): void {
+      run(
+        'UPDATE positions SET current_price = ?, updated_at = ? WHERE id = ?',
+        [currentPrice, Date.now(), positionId]
+      );
     },
 
     upsertPosition(userId: string, position: Position): void {
@@ -587,6 +1102,119 @@ export async function initDatabase(): Promise<Database> {
       run('DELETE FROM positions WHERE id = ?', [positionId]);
     },
 
+    // Portfolio snapshots
+    createPortfolioSnapshot(snapshot): void {
+      const createdAt = snapshot.createdAt?.getTime() ?? Date.now();
+      run(
+        `INSERT INTO portfolio_snapshots (user_id, total_value, total_pnl, total_pnl_pct, total_cost_basis, positions_count, by_platform, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          snapshot.userId,
+          snapshot.totalValue,
+          snapshot.totalPnl,
+          snapshot.totalPnlPct,
+          snapshot.totalCostBasis,
+          snapshot.positionsCount,
+          snapshot.byPlatform ? JSON.stringify(snapshot.byPlatform) : null,
+          createdAt,
+        ]
+      );
+    },
+
+    getPortfolioSnapshots(userId: string, options = {}): PortfolioSnapshot[] {
+      const sinceMs = options.sinceMs ?? 0;
+      const limit = options.limit ?? 200;
+      const order = options.order === 'asc' ? 'ASC' : 'DESC';
+      const rows = getAll<Record<string, unknown>>(
+        `SELECT user_id, total_value, total_pnl, total_pnl_pct, total_cost_basis, positions_count, by_platform, created_at
+         FROM portfolio_snapshots
+         WHERE user_id = ? AND created_at >= ?
+         ORDER BY created_at ${order}
+         LIMIT ?`,
+        [userId, sinceMs, limit]
+      );
+      return rows.map(parsePortfolioSnapshot);
+    },
+
+    deletePortfolioSnapshotsBefore(cutoffMs: number): void {
+      run('DELETE FROM portfolio_snapshots WHERE created_at < ?', [cutoffMs]);
+    },
+
+    // Stop-loss triggers
+    getStopLossTrigger(userId: string, platform: Platform, outcomeId: string) {
+      const row = getOne<{
+        user_id: string;
+        platform: Platform;
+        outcome_id: string;
+        market_id?: string;
+        status: string;
+        triggered_at: number;
+        last_price?: number;
+        last_error?: string;
+        cooldown_until?: number;
+      }>(
+        'SELECT user_id, platform, outcome_id, market_id, status, triggered_at, last_price, last_error, cooldown_until FROM stop_loss_triggers WHERE user_id = ? AND platform = ? AND outcome_id = ?',
+        [userId, platform, outcomeId]
+      );
+      if (!row) return undefined;
+      return {
+        userId: row.user_id,
+        platform: row.platform,
+        outcomeId: row.outcome_id,
+        marketId: row.market_id,
+        status: row.status,
+        triggeredAt: new Date(row.triggered_at),
+        lastPrice: row.last_price ?? undefined,
+        lastError: row.last_error ?? undefined,
+        cooldownUntil: row.cooldown_until ? new Date(row.cooldown_until) : undefined,
+      };
+    },
+
+    upsertStopLossTrigger(record: {
+      userId: string;
+      platform: Platform;
+      outcomeId: string;
+      marketId?: string;
+      status: string;
+      triggeredAt: Date;
+      lastPrice?: number;
+      lastError?: string;
+      cooldownUntil?: Date;
+    }): void {
+      run(
+        `
+        INSERT INTO stop_loss_triggers (user_id, platform, outcome_id, market_id, status, triggered_at, last_price, last_error, cooldown_until)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, platform, outcome_id) DO UPDATE SET
+          market_id = excluded.market_id,
+          status = excluded.status,
+          triggered_at = excluded.triggered_at,
+          last_price = excluded.last_price,
+          last_error = excluded.last_error,
+          cooldown_until = excluded.cooldown_until
+        `,
+        [
+          record.userId,
+          record.platform,
+          record.outcomeId,
+          record.marketId ?? null,
+          record.status,
+          record.triggeredAt.getTime(),
+          record.lastPrice ?? null,
+          record.lastError ?? null,
+          record.cooldownUntil ? record.cooldownUntil.getTime() : null,
+        ]
+      );
+    },
+
+    deleteStopLossTrigger(userId: string, platform: Platform, outcomeId: string): void {
+      run('DELETE FROM stop_loss_triggers WHERE user_id = ? AND platform = ? AND outcome_id = ?', [
+        userId,
+        platform,
+        outcomeId,
+      ]);
+    },
+
     // Markets cache
     cacheMarket(market: Market): void {
       run('INSERT OR REPLACE INTO markets (platform, market_id, data, updated_at) VALUES (?, ?, ?, ?)', [
@@ -597,18 +1225,216 @@ export async function initDatabase(): Promise<Database> {
       ]);
     },
 
-    getCachedMarket(platform: string, marketId: string): Market | undefined {
-      const row = getOne<{ data: string }>('SELECT * FROM markets WHERE platform = ? AND market_id = ?', [
-        platform,
-        marketId,
-      ]);
-      return row ? JSON.parse(row.data) : undefined;
+    getCachedMarket(platform: string, marketId: string, maxAgeMs?: number): Market | undefined {
+      const row = getOne<{ data: string; updated_at: number }>(
+        'SELECT data, updated_at FROM markets WHERE platform = ? AND market_id = ?',
+        [platform, marketId]
+      );
+      if (!row) return undefined;
+      if (maxAgeMs && row.updated_at < Date.now() - maxAgeMs) {
+        run('DELETE FROM markets WHERE platform = ? AND market_id = ?', [platform, marketId]);
+        return undefined;
+      }
+      return JSON.parse(row.data);
+    },
+
+    pruneMarketCache(cutoffMs: number): number {
+      const rows = getAll<{ count: number }>(
+        'SELECT COUNT(*) as count FROM markets WHERE updated_at < ?',
+        [cutoffMs]
+      );
+      const count = rows[0]?.count ?? 0;
+      if (count > 0) {
+        run('DELETE FROM markets WHERE updated_at < ?', [cutoffMs]);
+      }
+      return count;
+    },
+
+    // Market index
+    upsertMarketIndex(entry: MarketIndexEntry): void {
+      run(
+        `INSERT OR REPLACE INTO market_index (
+          platform, market_id, slug, question, description, outcomes_json, tags_json,
+          status, url, end_date, resolved, volume_24h, liquidity, open_interest, predictions,
+          content_hash, updated_at, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          entry.platform,
+          entry.marketId,
+          entry.slug || null,
+          entry.question,
+          entry.description || null,
+          entry.outcomesJson || null,
+          entry.tagsJson || null,
+          entry.status || null,
+          entry.url || null,
+          entry.endDate ? entry.endDate.getTime() : null,
+          entry.resolved ? 1 : 0,
+          entry.volume24h ?? null,
+          entry.liquidity ?? null,
+          entry.openInterest ?? null,
+          entry.predictions ?? null,
+          entry.contentHash || null,
+          entry.updatedAt.getTime(),
+          entry.rawJson || null,
+        ]
+      );
+    },
+
+    getMarketIndexHash(platform: Platform, marketId: string): string | null {
+      const row = getOne<{ content_hash: string | null }>(
+        'SELECT content_hash FROM market_index WHERE platform = ? AND market_id = ?',
+        [platform, marketId]
+      );
+      return row?.content_hash ?? null;
+    },
+
+    getMarketIndexEmbedding(platform: Platform, marketId: string): { contentHash: string; vector: number[] } | null {
+      const row = getOne<{ content_hash: string; vector: string }>(
+        'SELECT content_hash, vector FROM market_index_embeddings WHERE platform = ? AND market_id = ?',
+        [platform, marketId]
+      );
+      if (!row) return null;
+      try {
+        const vector = JSON.parse(row.vector) as number[];
+        return { contentHash: row.content_hash, vector };
+      } catch {
+        return null;
+      }
+    },
+
+    upsertMarketIndexEmbedding(
+      platform: Platform,
+      marketId: string,
+      contentHash: string,
+      vector: number[]
+    ): void {
+      run(
+        `INSERT OR REPLACE INTO market_index_embeddings (
+          platform, market_id, content_hash, vector, updated_at
+        ) VALUES (?, ?, ?, ?, ?)`,
+        [
+          platform,
+          marketId,
+          contentHash,
+          JSON.stringify(vector),
+          Date.now(),
+        ]
+      );
+    },
+
+    listMarketIndex(options = {}): MarketIndexEntry[] {
+      const params: unknown[] = [];
+      const where: string[] = [];
+
+      if (options.platform) {
+        where.push('platform = ?');
+        params.push(options.platform);
+      }
+
+      if (options.textQuery) {
+        where.push('(question LIKE ? OR description LIKE ? OR tags_json LIKE ?)');
+        const like = `%${options.textQuery}%`;
+        params.push(like, like, like);
+      }
+
+      let sql = 'SELECT * FROM market_index';
+      if (where.length > 0) {
+        sql += ` WHERE ${where.join(' AND ')}`;
+      }
+      sql += ' ORDER BY updated_at DESC';
+      if (options.limit) {
+        sql += ' LIMIT ?';
+        params.push(options.limit);
+      }
+
+      const rows = getAll<{
+        platform: Platform;
+        market_id: string;
+        slug: string | null;
+        question: string;
+        description: string | null;
+        outcomes_json: string | null;
+        tags_json: string | null;
+        status: string | null;
+        url: string | null;
+        end_date: number | null;
+        resolved: number | null;
+        volume_24h: number | null;
+        liquidity: number | null;
+        open_interest: number | null;
+        predictions: number | null;
+        content_hash: string | null;
+        updated_at: number;
+        raw_json: string | null;
+      }>(sql, params as Array<string | number>);
+
+      return rows.map((row) => ({
+        platform: row.platform,
+        marketId: row.market_id,
+        slug: row.slug ?? undefined,
+        question: row.question,
+        description: row.description ?? undefined,
+        outcomesJson: row.outcomes_json ?? undefined,
+        tagsJson: row.tags_json ?? undefined,
+        status: row.status ?? undefined,
+        url: row.url ?? undefined,
+        endDate: row.end_date ? new Date(row.end_date) : undefined,
+        resolved: Boolean(row.resolved),
+        volume24h: row.volume_24h ?? undefined,
+        liquidity: row.liquidity ?? undefined,
+        openInterest: row.open_interest ?? undefined,
+        predictions: row.predictions ?? undefined,
+        contentHash: row.content_hash ?? undefined,
+        updatedAt: new Date(row.updated_at),
+        rawJson: row.raw_json ?? undefined,
+      }));
+    },
+
+    countMarketIndex(platform?: Platform): number {
+      if (platform) {
+        const rows = getAll<{ count: number }>(
+          'SELECT COUNT(*) as count FROM market_index WHERE platform = ?',
+          [platform]
+        );
+        return rows[0]?.count ?? 0;
+      }
+      const rows = getAll<{ count: number }>('SELECT COUNT(*) as count FROM market_index');
+      return rows[0]?.count ?? 0;
+    },
+
+    pruneMarketIndex(cutoffMs: number, platform?: Platform): number {
+      if (platform) {
+        const rows = getAll<{ count: number }>(
+          'SELECT COUNT(*) as count FROM market_index WHERE platform = ? AND updated_at < ?',
+          [platform, cutoffMs]
+        );
+        const count = rows[0]?.count ?? 0;
+        if (count > 0) {
+          run('DELETE FROM market_index WHERE platform = ? AND updated_at < ?', [platform, cutoffMs]);
+          run('DELETE FROM market_index_embeddings WHERE platform = ? AND updated_at < ?', [platform, cutoffMs]);
+        }
+        return count;
+      }
+      const rows = getAll<{ count: number }>(
+        'SELECT COUNT(*) as count FROM market_index WHERE updated_at < ?',
+        [cutoffMs]
+      );
+      const count = rows[0]?.count ?? 0;
+      if (count > 0) {
+        run('DELETE FROM market_index WHERE updated_at < ?', [cutoffMs]);
+        run('DELETE FROM market_index_embeddings WHERE updated_at < ?', [cutoffMs]);
+      }
+      return count;
     },
 
     // Trading Credentials
     getTradingCredentials(userId: string, platform: Platform): TradingCredentials | null {
       return parseTradingCredentials(
-        getOne('SELECT * FROM trading_credentials WHERE user_id = ? AND platform = ?', [userId, platform])
+        getOne(
+          'SELECT user_id, platform, mode, encrypted_data, enabled, last_used_at, failed_attempts, cooldown_until, created_at, updated_at FROM trading_credentials WHERE user_id = ? AND platform = ?',
+          [userId, platform]
+        )
       );
     },
 
@@ -661,9 +1487,30 @@ export async function initDatabase(): Promise<Database> {
     // Raw SQL access
     run,
     query,
+
+    async withConnection<T>(fn: (db: Database) => T | Promise<T>): Promise<T> {
+      return fn(dbInstance!);
+    },
   };
 
-  return dbInstance;
+    dbInstance = instance;
+
+    const backupConfig = getBackupConfig();
+    if (backupConfig.enabled && !backupInterval) {
+      ensureBackupDir();
+      backupInterval = setInterval(() => {
+        try {
+          createBackup();
+        } catch (error) {
+          logger.warn({ error }, 'Database backup failed');
+        }
+      }, backupConfig.intervalMs);
+    }
+
+    return instance;
+  })();
+
+  return dbInitPromise;
 }
 
 // Sync wrapper for backwards compatibility

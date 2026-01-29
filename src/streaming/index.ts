@@ -48,10 +48,12 @@ export interface StreamContext {
   buffer: string;
   lastFlush: number;
   isClosed: boolean;
+  interrupted?: boolean;
+  interruptReason?: string;
 }
 
 /** Callback for sending messages */
-export type SendCallback = (msg: OutgoingMessage) => Promise<void>;
+export type SendCallback = (msg: OutgoingMessage) => Promise<string | null>;
 
 /** Callback for editing messages */
 export type EditCallback = (msg: OutgoingMessage & { messageId: string }) => Promise<void>;
@@ -77,6 +79,15 @@ export interface StreamingService {
 
   /** Close the stream and send any remaining content */
   close(ctx: StreamContext): Promise<void>;
+
+  /** Interrupt a stream without sending remaining content */
+  interrupt(ctx: StreamContext, reason?: string): Promise<void>;
+
+  /** Interrupt by platform/chat */
+  interruptByChat(platform: string, chatId: string, reason?: string): Promise<void>;
+
+  /** List active stream contexts */
+  listActive(): StreamContext[];
 
   /** Set the send callback */
   setSendCallback(callback: SendCallback): void;
@@ -285,6 +296,7 @@ export function createStreamingService(configInput?: StreamConfig): StreamingSer
         buffer: '',
         lastFlush: Date.now(),
         isClosed: false,
+        interrupted: false,
       };
       contexts.set(key, ctx);
 
@@ -299,7 +311,7 @@ export function createStreamingService(configInput?: StreamConfig): StreamingSer
     },
 
     append(ctx: StreamContext, text: string): void {
-      if (ctx.isClosed) {
+      if (ctx.isClosed || ctx.interrupted) {
         logger.warn('Attempted to append to closed stream');
         return;
       }
@@ -308,6 +320,9 @@ export function createStreamingService(configInput?: StreamConfig): StreamingSer
 
     async flush(ctx: StreamContext): Promise<void> {
       if (ctx.buffer.length === 0 || !sendCallback) {
+        return;
+      }
+      if (ctx.interrupted || ctx.isClosed) {
         return;
       }
 
@@ -331,13 +346,33 @@ export function createStreamingService(configInput?: StreamConfig): StreamingSer
       ctx.isClosed = true;
 
       // Final flush
-      if (ctx.buffer.length > 0 && sendCallback) {
+      if (ctx.buffer.length > 0 && sendCallback && !ctx.interrupted) {
         await this.flush(ctx);
       }
 
       // Remove from active contexts
       const key = `${ctx.platform}:${ctx.chatId}`;
       contexts.delete(key);
+    },
+
+    async interrupt(ctx: StreamContext, reason?: string): Promise<void> {
+      if (ctx.isClosed || ctx.interrupted) return;
+      ctx.interrupted = true;
+      ctx.interruptReason = reason;
+      ctx.buffer = '';
+      const key = `${ctx.platform}:${ctx.chatId}`;
+      contexts.delete(key);
+    },
+
+    async interruptByChat(platform: string, chatId: string, reason?: string): Promise<void> {
+      const key = `${platform}:${chatId}`;
+      const ctx = contexts.get(key);
+      if (!ctx) return;
+      await this.interrupt(ctx, reason);
+    },
+
+    listActive(): StreamContext[] {
+      return Array.from(contexts.values());
     },
 
     setSendCallback(callback: SendCallback): void {

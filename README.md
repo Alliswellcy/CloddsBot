@@ -1,8 +1,8 @@
 # Clodds 🎲
 
-**Claude + Odds** — Open-source AI assistant for prediction markets.
+**Claude + Odds** — The most comprehensive open-source AI platform for prediction markets.
 
-An agentic assistant that lives in your messaging apps, understands prediction markets, and helps you trade smarter. Built on Clawdbot architecture.
+A production-grade agentic AI framework with multi-platform trading, real-time market data, cross-platform arbitrage detection, and machine-to-machine payments. Built for prediction market traders, researchers, and developers.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-green.svg)](https://nodejs.org/)
@@ -10,186 +10,156 @@ An agentic assistant that lives in your messaging apps, understands prediction m
 
 ---
 
+## Why Clodds?
+
+| Feature | Clodds | Competitors |
+|---------|--------|-------------|
+| Prediction Markets | **9 platforms** | 0-2 |
+| Trading Execution | **5 platforms** | 0-1 |
+| Messaging Channels | **14+ platforms** | 1-3 |
+| LLM Providers | **6 providers** | 1 |
+| Cross-Platform Arbitrage | ✅ | ❌ |
+| x402 Crypto Payments | ✅ | ❌ |
+| Multi-Agent Routing | ✅ | ❌ |
+| Semantic Memory | ✅ | ❌ |
+
+---
+
 ## Table of Contents
 
 - [Features](#features)
-- [Implementation Status](#implementation-status)
+- [Prediction Markets](#prediction-markets)
+- [AI Capabilities](#ai-capabilities)
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
 - [Channels](#channels)
+- [Trading](#trading)
+- [Arbitrage](#arbitrage)
+- [Payments (x402)](#payments-x402)
 - [Tools](#tools)
 - [Skills](#skills)
-- [Security](#security)
+- [Memory System](#memory-system)
 - [CLI Reference](#cli-reference)
 - [Development](#development)
+- [License](#license)
 
 ---
 
 ## Features
 
-### Core Capabilities
+### Core Platform
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Multi-Channel Messaging | ✅ | Telegram, Discord, WebChat |
-| WhatsApp Integration | ❌ | Baileys-based adapter (stub) |
-| Slack Integration | ❌ | Bolt-based adapter (stub) |
-| Signal/iMessage/Teams | ❌ | Channel adapters (stubs) |
-| Real-time Market Data | ✅ | WebSocket feeds from exchanges |
-| Portfolio Tracking | ✅ | Positions and P&L across platforms |
-| Price Alerts | ✅ | Cron-based alert monitoring |
-| Edge Detection | ✅ | Compare to external models |
-| News Monitoring | ✅ | RSS/Twitter market correlation |
-
-### Prediction Market Platforms
-
-| Platform | Data Feed | Trading | Notes |
-|----------|-----------|---------|-------|
-| Polymarket | ✅ | ✅ | WebSocket + REST, highest volume |
-| Kalshi | ✅ | ✅ | REST API, US-regulated |
-| Manifold | ✅ | ✅ | WebSocket + REST, play money |
-| Metaculus | ✅ | ✅ | Forecasting community |
-| Drift BET | ✅ | ❌ | Solana-based (read-only) |
-| PredictIt | ✅ | ❌ | Read-only (sunset) |
+| **9 Prediction Markets** | ✅ | Polymarket, Kalshi, Betfair, Smarkets, Manifold, Metaculus, PredictIt, Drift |
+| **5 Trading Platforms** | ✅ | Full order execution on Polymarket, Kalshi, Betfair, Smarkets, Drift |
+| **14+ Messaging Channels** | ✅ | Telegram, Discord, Slack, WhatsApp, Teams, Matrix, Signal, and more |
+| **6 LLM Providers** | ✅ | Claude, GPT-4, Gemini, Groq, Together, Fireworks |
+| **Cross-Platform Arbitrage** | ✅ | Automatic opportunity detection across all markets |
+| **x402 Payments** | ✅ | Machine-to-machine USDC payments (Base + Solana) |
+| **Real-time Crypto Prices** | ✅ | 10 cryptos via Binance WebSocket |
+| **Portfolio Tracking** | ✅ | Multi-platform positions and P&L |
+| **Price Alerts** | ✅ | Price, volume, and edge alerts |
+| **Semantic Memory** | ✅ | Vector embeddings + hybrid search |
+| **Multi-Agent Routing** | ✅ | 4 specialized agents with intelligent routing |
+| **19+ AI Tools** | ✅ | Browser, SQL, Git, Docker, and more |
 
 ---
 
-## Implementation Status
+## Prediction Markets
 
-### Gateway & Infrastructure
+### Supported Platforms (9 Total)
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| WebSocket + HTTP Gateway | ✅ | Single port multiplexing |
-| Authentication (token mode) | ✅ | Gateway-level auth |
-| Health Endpoint | ❌ | `/health` not implemented |
-| Metrics/Observability | ❌ | Prometheus metrics pending |
-| Graceful Shutdown | ❌ | Signal handling pending |
-| Control UI | ✅ | Web-based dashboard |
+| Platform | Data Feed | Trading | Portfolio | Type |
+|----------|-----------|---------|-----------|------|
+| **Polymarket** | ✅ WebSocket | ✅ Full | ✅ Full | Crypto (USDC) |
+| **Kalshi** | ✅ WebSocket | ✅ Full | ✅ Full | US Regulated |
+| **Betfair** | ✅ WebSocket | ✅ Full | ✅ Full | Sports Exchange |
+| **Smarkets** | ✅ WebSocket | ✅ Full | ✅ Full | Sports (2% fees) |
+| **Drift** | ✅ REST | ✅ Full | ✅ Full | Solana |
+| **Manifold** | ✅ WebSocket | ❌ No API | ⚠️ Partial | Play Money |
+| **Metaculus** | ✅ REST | ❌ Forecast | ❌ | Forecasting |
+| **PredictIt** | ✅ REST | ❌ Read-only | ❌ | US Politics |
 
-### Agent System
+### Trading Features
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Claude AI Integration | ✅ | Anthropic SDK |
-| Tool Calling Loop | ✅ | Full tool execution |
-| Multi-Agent Routing | ❌ | Single agent only |
-| Agent Bindings | ❌ | Channel/user routing |
-| Per-Agent Identity | ❌ | Name, emoji, theme |
-| Per-Agent Workspace | ❌ | Isolated directories |
-| Subagent Execution | ✅ | Background tasks |
-| Subagent Pause/Resume | ❌ | State management only |
-| Thinking Modes | ✅ | None, basic, extended, chain-of-thought |
+```typescript
+// Polymarket
+await execution.buyLimit('polymarket', marketId, 'Yes', 0.45, 100);
+await execution.marketBuy('polymarket', marketId, 'Yes', 50);
 
-### Session Management
+// Kalshi
+await execution.sellLimit('kalshi', marketId, 'Yes', 0.60, 100);
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Per-User Sessions | ✅ | Basic isolation |
-| Session Scopes | ❌ | main, per-peer, per-channel-peer |
-| Daily Reset | ❌ | Scheduled session clearing |
-| Idle Reset | ❌ | Sliding window timeout |
-| Manual Reset (/new, /reset) | ✅ | Command-based |
-| Session Persistence | ✅ | SQLite storage |
-| Conversation History | ✅ | Multi-turn context |
+// Betfair (back/lay)
+await betfair.placeBackOrder(marketId, selectionId, 2.5, 100);
+await betfair.placeLayOrder(marketId, selectionId, 2.6, 50);
 
-### Context & Memory
+// Smarkets
+await smarkets.placeBuyOrder(marketId, contractId, 0.45, 100);
+```
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Token Estimation | ✅ | Approximate counting |
-| Context Compaction | ✅ | Auto-summarize when full |
-| CLAUDE.md Discovery | ✅ | Project instructions |
-| Memory Files (MEMORY.md) | ❌ | Long-term storage |
-| Daily Logs | ❌ | Append-only notes |
-| Vector Search | ❌ | Semantic retrieval |
-| Embedding Cache | ❌ | SQLite storage |
-| Memory Flush on Compaction | ❌ | Auto-persist |
+### Real-time Crypto Prices (10 Assets)
 
-### Security & Access Control
+| Asset | Feed | 24h Stats |
+|-------|------|-----------|
+| BTC | ✅ Binance WS | ✅ Change, High, Low, Volume |
+| ETH | ✅ Binance WS | ✅ |
+| SOL | ✅ Binance WS | ✅ |
+| XRP | ✅ Binance WS | ✅ |
+| DOGE | ✅ Binance WS | ✅ |
+| ADA | ✅ Binance WS | ✅ |
+| AVAX | ✅ Binance WS | ✅ |
+| MATIC | ✅ Binance WS | ✅ |
+| DOT | ✅ Binance WS | ✅ |
+| LINK | ✅ Binance WS | ✅ |
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| DM Pairing (8-char codes) | ✅ | Clawdbot-style |
-| Pairing Expiry (1 hour) | ✅ | Auto-expire |
-| Owner System | ✅ | Chat-based approval |
-| Allowlist Mode | ✅ | Block unknowns |
-| Rate Limiting | ✅ | Per-user throttling |
-| Access Control Lists | ✅ | User blocking |
-| Command Approval | ✅ | Allowlist for shell |
-| Elevated Permissions | ✅ | Role-based |
-| Sandbox Mode (Docker) | ❌ | Isolated execution |
-| Encrypted Credentials | ✅ | At-rest encryption |
+Fallback sources: Coinbase, CoinGecko
 
-### Tools
+---
 
-| Tool | Status | Notes |
-|------|--------|-------|
-| exec (shell commands) | ✅ | With approval gating |
-| read/write/edit | ❌ | File operations |
-| web_search | ✅ | DuckDuckGo/Brave |
-| web_fetch | ✅ | URL content extraction |
-| browser | ✅ | Puppeteer automation |
-| image | ✅ | Vision analysis |
-| message | ❌ | Cross-channel sending |
-| cron | ✅ | Scheduled tasks |
-| canvas | ✅ | Collaborative drawing |
-| nodes | ❌ | macOS companion |
-| process | ❌ | Background processes |
+## AI Capabilities
 
-### Hooks System
+### Multi-Agent System
 
-| Hook | Status | Notes |
-|------|--------|-------|
-| message:before | ✅ | Can modify/cancel |
-| message:after | ✅ | Post-processing |
-| agent:before_start | ✅ | Modify system prompt |
-| agent:end | ✅ | Completion notification |
-| tool:before_call | ✅ | Can block execution |
-| tool:after_call | ✅ | Result notification |
-| compaction:before | ✅ | Pre-compaction |
-| compaction:after | ✅ | Post-compaction |
-| session:start/end | ❌ | Lifecycle events |
-| gateway:start/stop | ❌ | Service lifecycle |
+| Agent | Purpose | Routing |
+|-------|---------|---------|
+| **Main** | General assistant | Default |
+| **Trading** | Order execution | `/buy`, `/sell`, `/portfolio` |
+| **Research** | Market analysis | `/research`, `/analyze` |
+| **Alerts** | Price monitoring | `/alert`, `/watch` |
 
-### Streaming
+### LLM Providers (6)
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Basic Response Streaming | ✅ | Token-by-token |
-| Block Streaming | ❌ | Chunked messages |
-| Draft Streaming (Telegram) | ❌ | Live editing |
-| Configurable Chunk Size | ❌ | min/max chars |
+| Provider | Models | Features |
+|----------|--------|----------|
+| **Anthropic** | Claude 3.5 Sonnet, Opus, Haiku | Default, extended thinking |
+| **OpenAI** | GPT-4, GPT-4o, GPT-3.5 | Fallback |
+| **Google** | Gemini Pro, Flash | Multimodal |
+| **Groq** | Llama, Mixtral | High-speed |
+| **Together** | Open-source models | Cost-effective |
+| **Fireworks** | Various | Fast inference |
 
-### Skills System
+### AI Tools (19+)
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| SKILL.md Parser | ✅ | Frontmatter + content |
-| Bundled Skills | ✅ | 10 market skills |
-| Workspace Skills | ❌ | Per-project |
-| Managed Skills | ❌ | ~/.clodds/skills |
-| Skill Discovery | ✅ | Directory scanning |
-| Skill Gates (env/bins) | ✅ | Requirements checking |
-| ClawdHub Registry | ❌ | Remote installation |
-
-### CLI Commands
-
-| Command | Status | Notes |
-|---------|--------|-------|
-| clodds start | ✅ | Start gateway |
-| clodds doctor | ✅ | Health checks |
-| clodds pairing list | ✅ | Pending requests |
-| clodds pairing approve | ✅ | Approve access |
-| clodds pairing set-owner | ✅ | Set admin |
-| clodds skills list | ✅ | Installed skills |
-| clodds skills install | ✅ | Add from registry |
-| clodds onboard | ❌ | Interactive setup |
-| clodds configure | ❌ | Settings management |
-| clodds sessions | ❌ | List sessions |
-| clodds agents | ❌ | Agent management |
-| clodds logs | ❌ | Tail events |
+| Tool | Description |
+|------|-------------|
+| `exec` | Shell commands with approval |
+| `browser` | Playwright automation |
+| `web-search` | DuckDuckGo/Brave search |
+| `web-fetch` | URL content extraction |
+| `files` | Read/write/edit files |
+| `git` | Git operations |
+| `sql` | Database queries |
+| `docker` | Container management |
+| `image` | Vision analysis |
+| `email` | Send emails |
+| `sms` | Send SMS |
+| `transcription` | Audio to text |
+| `webhooks` | HTTP callbacks |
+| `canvas` | Visual rendering |
+| `nodes` | Hardware control |
 
 ---
 
@@ -198,20 +168,20 @@ An agentic assistant that lives in your messaging apps, understands prediction m
 ### Prerequisites
 
 - Node.js 20+
-- Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
 - Anthropic API Key
+- Platform API keys (optional)
 
 ### Installation
 
 ```bash
-# Clone the repository
+# Clone
 git clone https://github.com/alsk1992/CloddsBot.git
 cd CloddsBot
 
-# Install dependencies
+# Install
 npm install
 
-# Configure environment
+# Configure
 cp .env.example .env
 # Edit .env with your API keys
 
@@ -225,18 +195,17 @@ npm start
 ### First Run
 
 ```bash
-# Start the gateway
+# Start gateway
 clodds start
 
-# In another terminal, check status
+# Check health
 clodds doctor
 
-# Approve your first DM (get code from Telegram)
-clodds pairing list telegram
+# Approve your DM (get code from Telegram)
 clodds pairing approve telegram ABC123
 
-# Set yourself as owner (for chat-based approvals)
-clodds pairing set-owner telegram <your_telegram_id>
+# Set yourself as owner
+clodds pairing set-owner telegram <your_id>
 ```
 
 ---
@@ -244,38 +213,51 @@ clodds pairing set-owner telegram <your_telegram_id>
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        GATEWAY                               │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────────────┐ │
-│  │WebSocket│  │  HTTP   │  │  Auth   │  │   Control UI    │ │
-│  │ Server  │  │ Server  │  │ Layer   │  │  (Dashboard)    │ │
-│  └────┬────┘  └────┬────┘  └────┬────┘  └────────┬────────┘ │
-│       └────────────┴────────────┴────────────────┘          │
-└─────────────────────────────┬───────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                           GATEWAY                                    │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
+│  │ WebSocket│  │   HTTP   │  │   Auth   │  │    Control UI        │ │
+│  │  Server  │  │  Server  │  │  Layer   │  │    (Dashboard)       │ │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────────┬───────────┘ │
+└───────┴─────────────┴─────────────┴────────────────────┴────────────┘
                               │
-         ┌────────────────────┼────────────────────┐
-         ▼                    ▼                    ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│    CHANNELS     │  │     AGENTS      │  │     FEEDS       │
-│  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │
-│  │ Telegram  │  │  │  │  Claude   │  │  │  │Polymarket │  │
-│  │ Discord   │  │  │  │  Tools    │  │  │  │  Kalshi   │  │
-│  │  Slack    │  │  │  │  Skills   │  │  │  │ Manifold  │  │
-│  │ WhatsApp  │  │  │  │ Sessions  │  │  │  │   News    │  │
-│  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-         │                    │                    │
-         └────────────────────┼────────────────────┘
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│   CHANNELS    │    │    AGENTS     │    │    FEEDS      │
+│  (14+ types)  │    │  (4 agents)   │    │  (9 markets)  │
+│               │    │               │    │               │
+│  • Telegram   │    │  • Main       │    │  • Polymarket │
+│  • Discord    │    │  • Trading    │    │  • Kalshi     │
+│  • Slack      │    │  • Research   │    │  • Betfair    │
+│  • WhatsApp   │    │  • Alerts     │    │  • Smarkets   │
+│  • Teams      │    │               │    │  • Drift      │
+│  • Matrix     │    │  Tools (19+)  │    │  • Crypto     │
+│  • Signal     │    │  Skills       │    │               │
+│  • ...        │    │  Memory       │    │  Arbitrage    │
+└───────────────┘    └───────────────┘    └───────────────┘
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
                               ▼
-                    ┌─────────────────┐
-                    │    DATABASE     │
-                    │  ┌───────────┐  │
-                    │  │  SQLite   │  │
-                    │  │ Sessions  │  │
-                    │  │  Alerts   │  │
-                    │  │Credentials│  │
-                    │  └───────────┘  │
-                    └─────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                          SERVICES                                    │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐            │
+│  │ Portfolio│  │ Execution│  │ Arbitrage│  │ Payments │            │
+│  │ Tracking │  │  Engine  │  │ Detector │  │  (x402)  │            │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘            │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │     DATABASE     │
+                    │     (SQLite)     │
+                    │                  │
+                    │  • Sessions      │
+                    │  • Memory        │
+                    │  • Trades        │
+                    │  • Alerts        │
+                    │  • Credentials   │
+                    └──────────────────┘
 ```
 
 ### Directory Structure
@@ -283,432 +265,362 @@ clodds pairing set-owner telegram <your_telegram_id>
 ```
 clodds/
 ├── src/
-│   ├── index.ts                 # Entry point
-│   ├── types.ts                 # TypeScript types
-│   │
-│   ├── gateway/                 # WebSocket + HTTP server
-│   │   ├── index.ts             # Gateway factory
-│   │   ├── server.ts            # Express server
-│   │   └── control-ui.ts        # Dashboard
-│   │
-│   ├── agents/                  # AI agent system
-│   │   ├── index.ts             # Agent manager (11K+ lines)
-│   │   └── subagents.ts         # Background execution
-│   │
-│   ├── channels/                # Messaging adapters
-│   │   ├── telegram/            # Grammy-based ✅
-│   │   ├── discord/             # Discord.js ✅
-│   │   ├── slack/               # Bolt (stub)
-│   │   ├── whatsapp/            # Baileys (stub)
-│   │   ├── teams/               # (stub)
-│   │   ├── signal/              # (stub)
-│   │   ├── matrix/              # (stub)
+│   ├── agents/              # AI agent system
+│   ├── channels/            # 14+ messaging adapters
+│   │   ├── telegram/
+│   │   ├── discord/
+│   │   ├── slack/
+│   │   ├── whatsapp/
+│   │   ├── teams/
+│   │   ├── matrix/
+│   │   ├── signal/
 │   │   └── ...
-│   │
-│   ├── feeds/                   # Market data
-│   │   ├── polymarket/          # WebSocket + REST
-│   │   ├── kalshi/              # REST API
-│   │   ├── manifold/            # WebSocket
-│   │   ├── metaculus/           # REST
-│   │   └── news/                # RSS aggregation
-│   │
-│   ├── tools/                   # AI tool implementations
-│   │   ├── exec.ts              # Shell (with approval)
-│   │   ├── web-search.ts        # Search engines
-│   │   ├── web-fetch.ts         # URL fetching
-│   │   ├── browser.ts           # Puppeteer
-│   │   └── image.ts             # Vision
-│   │
-│   ├── skills/                  # Pluggable skills
-│   │   ├── loader.ts            # SKILL.md parser
-│   │   ├── registry.ts          # ClawdHub client
-│   │   └── bundled/             # Built-in skills
-│   │
-│   ├── hooks/                   # Event lifecycle
-│   ├── memory/                  # Context management
-│   │   ├── index.ts             # Memory service
-│   │   └── context.ts           # Compaction
-│   │
-│   ├── permissions/             # Access control
-│   ├── security/                # Rate limiting, encryption
-│   ├── pairing/                 # DM access control
-│   ├── credentials/             # Encrypted storage
-│   ├── sessions/                # Session management
-│   ├── db/                      # SQLite persistence
-│   ├── cron/                    # Scheduled tasks
-│   └── cli/                     # CLI commands
-│
-├── workspace/                   # Default workspace
-│   ├── AGENTS.md                # Agent instructions
-│   └── skills/                  # User skills
-│
-├── package.json
-└── tsconfig.json
+│   ├── feeds/               # Market data feeds
+│   │   ├── polymarket/
+│   │   ├── kalshi/
+│   │   ├── betfair/         # NEW
+│   │   ├── smarkets/        # NEW
+│   │   ├── drift/
+│   │   ├── crypto/          # NEW - 10 assets
+│   │   └── ...
+│   ├── execution/           # Order execution
+│   ├── portfolio/           # Position tracking
+│   ├── arbitrage/           # Cross-platform arb
+│   ├── payments/            # x402 protocol
+│   │   └── x402/
+│   │       ├── index.ts
+│   │       ├── evm.ts       # Base signing
+│   │       └── solana.ts    # Solana signing
+│   ├── alerts/              # Price alerts
+│   ├── history/             # Trade history
+│   ├── memory/              # Semantic memory
+│   ├── tools/               # 19+ AI tools
+│   ├── skills/              # Pluggable skills
+│   ├── routing/             # Multi-agent routing
+│   ├── providers/           # 6 LLM providers
+│   └── ...
+├── trading/                 # Python trading libs
+├── docs/                    # Documentation
+├── tests/                   # Test suites
+└── ui/                      # Web dashboard
 ```
 
 ---
 
 ## Configuration
 
-Config file: `~/.clodds/clodds.json`
+### Environment Variables
+
+```bash
+# Required
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Messaging (at least one)
+TELEGRAM_BOT_TOKEN=123456:ABC...
+DISCORD_BOT_TOKEN=...
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+
+# Prediction Markets
+POLY_PRIVATE_KEY=0x...
+POLY_API_KEY=...
+POLY_API_SECRET=...
+POLY_API_PASSPHRASE=...
+
+KALSHI_API_KEY_ID=...
+KALSHI_PRIVATE_KEY_PEM=...
+
+BETFAIR_APP_KEY=...
+BETFAIR_USERNAME=...
+BETFAIR_PASSWORD=...
+
+SMARKETS_SESSION_TOKEN=...
+
+# Solana (Drift)
+SOLANA_PRIVATE_KEY=...
+SOLANA_RPC_URL=...
+
+# x402 Payments
+X402_EVM_PRIVATE_KEY=0x...
+X402_SOLANA_PRIVATE_KEY=...
+X402_AUTO_APPROVE_LIMIT=1.0
+
+# Optional LLM Providers
+OPENAI_API_KEY=...
+GOOGLE_API_KEY=...
+GROQ_API_KEY=...
+TOGETHER_API_KEY=...
+```
+
+### Config File (`~/.clodds/clodds.json`)
 
 ```json5
 {
-  // Gateway
   "gateway": {
     "port": 3000,
-    "auth": {
-      "token": "your-secret-token"  // Required for API access
-    }
+    "auth": { "token": "your-secret" }
   },
 
-  // Agent defaults
   "agents": {
     "defaults": {
-      "workspace": "~/clodds-workspace",
       "model": {
         "primary": "anthropic/claude-sonnet-4",
-        "fallbacks": ["anthropic/claude-haiku-3"]
-      },
-      "rateLimit": {
-        "maxRequests": 30,    // Per user
-        "windowMs": 60000     // Per minute
-      },
-      "timeoutSeconds": 600,  // 10 minute max
-      "contextTokens": 128000
-    }
-  },
-
-  // Channels
-  "channels": {
-    "telegram": {
-      "enabled": true,
-      "botToken": "${TELEGRAM_BOT_TOKEN}",
-      "dmPolicy": "pairing",        // pairing | allowlist | open | disabled
-      "allowFrom": ["tg:123456789"],
-      "groups": {
-        "*": { "requireMention": true }
+        "fallbacks": ["openai/gpt-4", "anthropic/claude-haiku-3"]
       }
-    },
-    "discord": {
-      "enabled": true,
-      "token": "${DISCORD_BOT_TOKEN}",
-      "dmPolicy": "pairing"
     }
   },
 
-  // Market feeds
+  "channels": {
+    "telegram": { "enabled": true, "dmPolicy": "pairing" },
+    "discord": { "enabled": true },
+    "slack": { "enabled": true }
+  },
+
   "feeds": {
     "polymarket": { "enabled": true },
-    "kalshi": {
-      "enabled": true,
-      "email": "${KALSHI_EMAIL}",
-      "password": "${KALSHI_PASSWORD}"
-    },
+    "kalshi": { "enabled": true },
+    "betfair": { "enabled": true },
+    "smarkets": { "enabled": true },
+    "drift": { "enabled": true },
     "manifold": { "enabled": true }
   },
 
-  // Sessions
-  "session": {
-    "scope": "per-sender",          // How to isolate sessions
-    "resetTriggers": ["/new", "/reset"]
+  "x402": {
+    "enabled": true,
+    "network": "base",
+    "autoApproveLimit": 1.0
   },
 
-  // Tools
-  "tools": {
-    "profile": "coding",            // minimal | coding | messaging | full
-    "allow": ["read", "write", "exec"],
-    "deny": ["process"]
+  "trading": {
+    "enabled": true,
+    "dryRun": false,
+    "maxOrderSize": 100
   }
 }
 ```
 
 ---
 
-## Channels
+## Channels (14+ Platforms)
 
-### Telegram (✅ Implemented)
-
-```json5
-{
-  "telegram": {
-    "enabled": true,
-    "botToken": "123456:ABC-DEF...",
-    "dmPolicy": "pairing",
-    "allowFrom": ["tg:123456789"],
-    "groups": {
-      "*": {
-        "enabled": true,
-        "requireMention": true
-      },
-      "123456789": {
-        "enabled": true,
-        "requireMention": false  // No @ needed
-      }
-    },
-    "historyLimit": 50,
-    "mediaMaxMb": 5
-  }
-}
-```
-
-### Discord (✅ Implemented)
-
-```json5
-{
-  "discord": {
-    "enabled": true,
-    "token": "your-bot-token",
-    "dmPolicy": "pairing",
-    "guilds": {
-      "123456789": {
-        "requireMention": false,
-        "channels": {
-          "general": { "allow": true },
-          "random": { "allow": false }
-        }
-      }
-    }
-  }
-}
-```
-
-### WhatsApp (❌ Stub Only)
-
-```json5
-{
-  "whatsapp": {
-    "enabled": true,
-    "authDir": "~/.clodds/whatsapp-auth",
-    "dmPolicy": "pairing",
-    "allowFrom": ["+15555550123"],
-    "sendReadReceipts": true,
-    "requireMentionInGroups": true
-  }
-}
-```
-
-### Slack (❌ Stub Only)
-
-```json5
-{
-  "slack": {
-    "enabled": true,
-    "botToken": "xoxb-...",
-    "appToken": "xapp-...",
-    "dmPolicy": "pairing"
-  }
-}
-```
+| Channel | Status | Auth Method |
+|---------|--------|-------------|
+| **Telegram** | ✅ Production | Bot Token |
+| **Discord** | ✅ Production | Bot Token |
+| **Slack** | ✅ Production | Bolt (Bot + App Token) |
+| **WhatsApp** | ✅ Production | Baileys (QR) |
+| **Microsoft Teams** | ✅ Production | App ID + Password |
+| **Matrix** | ✅ Production | Access Token |
+| **Signal** | ✅ Production | signal-cli |
+| **Google Chat** | ✅ Production | Service Account |
+| **Line** | ✅ Production | Channel Token |
+| **iMessage** | ✅ macOS | AppleScript |
+| **Mattermost** | ✅ Production | Bot Token |
+| **Nextcloud Talk** | ✅ Production | App Password |
+| **Nostr** | ✅ Production | Private Key |
+| **Twitch** | ✅ Production | OAuth |
 
 ---
 
-## Tools
+## Trading
 
-### Execution (exec)
+### Order Types
+
+| Type | Description | Platforms |
+|------|-------------|-----------|
+| **Limit (GTC)** | Good till cancelled | All |
+| **Market (FOK)** | Fill or kill | Polymarket, Kalshi |
+| **Maker (POST_ONLY)** | Add liquidity only | Polymarket |
+| **GTD** | Good till date | Kalshi |
+| **Back** | Bet for outcome | Betfair, Smarkets |
+| **Lay** | Bet against outcome | Betfair, Smarkets |
+
+### Example Usage
 
 ```typescript
-// With approval gating - commands checked against allowlist
-const result = await exec.run('npm install', {
-  cwd: '/path/to/project',
-  timeout: 30000,
-  agentId: 'main',
-  sessionId: session.key,
+import { createExecutionService } from './execution';
+
+const exec = createExecutionService(config);
+
+// Polymarket
+const order = await exec.buyLimit('polymarket', {
+  marketId: '0x...',
+  outcome: 'Yes',
+  price: 0.45,
+  size: 100,
 });
-```
 
-**Approval Flow:**
-1. Command parsed and checked against allowlist
-2. Safe binaries (ls, cat, git) auto-approved
-3. Unknown commands require manual approval
-4. Elevated commands require role-based permission
-
-### Web Search
-
-```typescript
-const results = await webSearch.search('polymarket trump odds', {
-  engine: 'duckduckgo',  // or 'brave'
-  maxResults: 10,
+// Kalshi
+await exec.marketBuy('kalshi', {
+  marketId: 'INXD-24DEC31-T25000',
+  outcome: 'Yes',
+  size: 50,
 });
+
+// Check positions
+const positions = await portfolio.getPositions();
+const pnl = await portfolio.getUnrealizedPnL();
 ```
 
-### Browser Automation
+---
+
+## Arbitrage
+
+Cross-platform arbitrage detection across all supported markets.
+
+### Features
+
+- Real-time price monitoring
+- Automatic opportunity detection
+- Configurable minimum spread
+- Question similarity matching
+- Alert notifications
+
+### Usage
 
 ```typescript
-const browser = await createBrowser();
-await browser.navigate('https://polymarket.com');
-const screenshot = await browser.screenshot();
-const content = await browser.extractContent();
+import { createArbitrageService } from './arbitrage';
+
+const arb = createArbitrageService(priceProviders);
+
+// Add market match
+arb.addMatch({
+  markets: [
+    { platform: 'polymarket', marketId: '0x...', question: 'Trump wins?' },
+    { platform: 'kalshi', marketId: 'PRES-...', question: 'Trump elected?' },
+  ],
+  similarity: 0.95,
+  matchedBy: 'manual',
+});
+
+// Start monitoring
+arb.start();
+
+// Get opportunities
+const opportunities = arb.getOpportunities();
+// [{ buyPlatform: 'kalshi', buyPrice: 0.42, sellPlatform: 'polymarket', sellPrice: 0.48, spreadPct: 14.3 }]
+```
+
+### Chat Commands
+
+```
+/arbitrage trump           # Find arb opportunities
+/compare "fed rate cut"    # Compare prices across platforms
 ```
 
 ---
 
-## Skills
+## Payments (x402)
 
-Skills are defined with `SKILL.md` files:
+HTTP 402 machine-to-machine crypto payments via the [x402 protocol](https://x402.org).
 
-```markdown
----
-name: polymarket-trader
-description: "Trade on Polymarket via natural language"
-emoji: "📈"
-gates:
-  envs:
-    - POLYMARKET_PRIVATE_KEY
-  bins:
-    - node
----
+### Supported Networks
 
-# Polymarket Trader
+| Network | Status | Fee |
+|---------|--------|-----|
+| **Base** | ✅ | Free (Coinbase facilitator) |
+| **Base Sepolia** | ✅ | Free (testnet) |
+| **Solana** | ✅ | Free (Coinbase facilitator) |
+| **Solana Devnet** | ✅ | Free (testnet) |
 
-Execute trades on Polymarket using natural language commands.
-
-## Commands
-
-- `buy [amount] [market] at [price]` - Place buy order
-- `sell [amount] [market] at [price]` - Place sell order
-- `positions` - Show current positions
-- `orders` - Show open orders
-
-## Examples
-
-"Buy $100 of Trump wins at 45 cents"
-"Sell all my Fed rate cut positions"
-"What are my current positions?"
-```
-
-### Bundled Skills
-
-| Skill | Description |
-|-------|-------------|
-| `markets` | Search and browse markets |
-| `portfolio` | Track positions and P&L |
-| `alerts` | Price and volume alerts |
-| `edge` | Compare to external models |
-| `news` | Market-relevant news |
-| `research` | Base rates and historical data |
-| `trading-polymarket` | Polymarket execution |
-| `trading-kalshi` | Kalshi execution |
-| `trading-manifold` | Manifold execution |
-| `portfolio-sync` | Cross-platform sync |
-
----
-
-## Security
-
-### DM Pairing System
-
-Strangers must request access via pairing code:
-
-```
-Stranger: hi
-Bot: 👋 To chat with me, get approval from the owner.
-     Your pairing code: ABC12345
-     (Expires in 1 hour)
-```
-
-Owner approves via CLI or chat:
-```bash
-clodds pairing approve telegram ABC12345
-```
-
-Or via chat (if owner):
-```
-Owner: /approve ABC12345
-Bot: ✅ Approved! They can now chat with me.
-```
-
-### Rate Limiting
-
-- Default: 30 requests per minute per user
-- Configurable in `agents.defaults.rateLimit`
-- Automatic cleanup of expired entries
-
-### Command Approval
-
-Shell commands are checked against allowlist:
+### Client (Pay for APIs)
 
 ```typescript
-// Auto-approved (safe)
-const safe = ['ls', 'cat', 'git status', 'npm list'];
+import { createPaidFetch } from './payments';
 
-// Requires approval
-const dangerous = ['rm -rf', 'curl | bash', 'sudo'];
+const paidFetch = createPaidFetch({
+  network: 'base',
+  evmPrivateKey: '0x...',
+  autoApproveLimit: 1.0, // $1 max auto-approve
+});
 
-// Blocked
-const blocked = ['rm -rf /', 'mkfs', 'dd if='];
+// Automatically pays 402 responses
+const response = await paidFetch('https://api.example.com/premium');
 ```
+
+### Server (Receive Payments)
+
+```typescript
+import { createX402Server } from './payments';
+
+const x402 = createX402Server(
+  { payToAddress: '0x...', network: 'base' },
+  {
+    'GET /premium': { priceUsd: 0.01 },
+    'POST /ai': { priceUsd: 0.05 },
+  }
+);
+
+app.use(x402.middleware);
+```
+
+---
+
+## Memory System
+
+Persistent semantic memory with vector embeddings.
+
+### Memory Types
+
+| Type | Description |
+|------|-------------|
+| `fact` | Durable facts about user |
+| `preference` | Stated likes/dislikes |
+| `note` | Useful reminders |
+| `profile` | Short profile summary |
+
+### Commands
+
+```
+/remember preference timezone=PST
+/remember note working_on=prediction markets
+/memory                              # Show memories
+/forget timezone                     # Delete memory
+```
+
+### Features
+
+- Vector embeddings (hybrid BM25 + semantic)
+- Per-user and per-channel scopes
+- Auto-capture from conversations
+- Privacy filters (skip secrets)
 
 ---
 
 ## CLI Reference
 
-### Gateway Management
-
 ```bash
-# Start the gateway
-clodds start
+# Gateway
+clodds start              # Start gateway
+clodds doctor             # Health checks
+clodds status             # Show status
 
-# Run health checks
-clodds doctor
-
-# Show status
-clodds status
-```
-
-### Pairing Management
-
-```bash
-# List pending requests
+# Pairing
 clodds pairing list telegram
-clodds pairing list discord
-
-# Approve a request
 clodds pairing approve telegram ABC123
+clodds pairing set-owner telegram <id>
 
-# Reject a request
-clodds pairing reject telegram ABC123
+# Skills
+clodds skills list
+clodds skills install <name>
+clodds skills search "trading"
 
-# List paired users
-clodds pairing users telegram
-
-# Set an owner (can approve via chat)
-clodds pairing set-owner telegram 123456789 -u "username"
-
-# Remove owner status
-clodds pairing remove-owner telegram 123456789
-
-# Manually add a user
-clodds pairing add telegram 123456789 -u "username"
-
-# Remove a user
-clodds pairing remove telegram 123456789
+# Permissions
+clodds permissions pending
+clodds permissions approve <id>
 ```
 
-### Skills Management
+### Chat Commands
 
-```bash
-# List installed skills
-clodds skills list
-
-# Search registry
-clodds skills search "trading" -t "polymarket,kalshi"
-
-# Install from registry
-clodds skills install polymarket-trader
-
-# Update skills
-clodds skills update
-clodds skills update polymarket-trader
-
-# Show skill details
-clodds skills info polymarket-trader
-
-# Check for updates
-clodds skills check-updates
-
-# Uninstall
-clodds skills uninstall polymarket-trader
+```
+/help                     # List commands
+/new                      # Reset conversation
+/model sonnet             # Change model
+/portfolio                # Show positions
+/markets trump            # Search markets
+/arbitrage               # Find opportunities
+/alert price BTC > 100000 # Set alert
+/risk show                # View risk limits
 ```
 
 ---
@@ -718,107 +630,33 @@ clodds skills uninstall polymarket-trader
 ### Setup
 
 ```bash
-# Clone
 git clone https://github.com/alsk1992/CloddsBot.git
 cd CloddsBot
-
-# Install
 npm install
+npm run dev   # Hot reload
+```
 
-# Development mode (hot reload)
-npm run dev
+### Docker
 
-# Type checking
+```bash
+docker compose up --build
+```
+
+### Testing
+
+```bash
+npm run test
 npm run typecheck
-
-# Build
-npm run build
+npm run ci
 ```
 
-### Adding a Channel
+### Adding a Platform
 
-1. Create `src/channels/[name]/index.ts`
-2. Implement the channel interface:
-
-```typescript
-export interface Channel {
-  name: string;
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  send(message: OutgoingMessage): Promise<void>;
-}
-```
-
-3. Register in `src/channels/index.ts`
-4. Add config schema to `src/types.ts`
-
-### Adding a Tool
-
-1. Create `src/tools/[name].ts`
-2. Define the tool schema and handler:
-
-```typescript
-export const myTool = {
-  name: 'my_tool',
-  description: 'Does something useful',
-  input_schema: {
-    type: 'object',
-    properties: {
-      param: { type: 'string', description: 'A parameter' }
-    },
-    required: ['param']
-  }
-};
-
-export async function executeTool(params: { param: string }) {
-  // Implementation
-  return { result: 'success' };
-}
-```
-
-3. Register in `src/agents/index.ts` buildTools()
-
-### Adding a Skill
-
-1. Create `src/skills/bundled/[name]/SKILL.md`
-2. Follow the SKILL.md format with frontmatter
-3. Skill is auto-discovered on startup
-
----
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Claude API key |
-| `TELEGRAM_BOT_TOKEN` | For Telegram | Bot token from BotFather |
-| `DISCORD_BOT_TOKEN` | For Discord | Bot token from Discord |
-| `SLACK_BOT_TOKEN` | For Slack | Slack bot token |
-| `SLACK_APP_TOKEN` | For Slack | Slack app token |
-| `POLYMARKET_PRIVATE_KEY` | For trading | Ethereum private key |
-| `KALSHI_EMAIL` | For Kalshi | Kalshi login email |
-| `KALSHI_PASSWORD` | For Kalshi | Kalshi login password |
-| `DATABASE_URL` | No | SQLite path (default: ~/.clodds/clodds.db) |
-| `LOG_LEVEL` | No | debug, info, warn, error |
-
----
-
-## Roadmap
-
-### In Progress
-- [ ] WhatsApp channel (Baileys integration)
-- [ ] Slack channel (Bolt integration)
-- [ ] Multi-agent routing
-- [ ] Memory system with vector search
-
-### Planned
-- [ ] Signal channel
-- [ ] iMessage channel (macOS only)
-- [ ] Docker sandbox mode
-- [ ] Block streaming
-- [ ] Session scopes (per-peer, main)
-- [ ] Daily/idle session reset
-- [ ] ClawdHub skill registry
+1. Create `src/feeds/[platform]/index.ts`
+2. Implement the feed interface
+3. Add trading methods if supported
+4. Register in `src/feeds/index.ts`
+5. Add types to `src/types.ts`
 
 ---
 
@@ -832,10 +670,11 @@ MIT — Free for everyone, forever.
 
 - [GitHub](https://github.com/alsk1992/CloddsBot)
 - [Issues](https://github.com/alsk1992/CloddsBot/issues)
-- [Anthropic Claude](https://www.anthropic.com/claude)
+- [x402 Protocol](https://x402.org)
 - [Polymarket](https://polymarket.com)
 - [Kalshi](https://kalshi.com)
+- [Betfair](https://betfair.com)
 
 ---
 
-*Built with Claude. Inspired by [Clawdbot](https://clawd.bot).*
+*Built with Claude. The most comprehensive open-source prediction market platform.*

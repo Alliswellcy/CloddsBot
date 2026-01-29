@@ -8,10 +8,10 @@
  */
 
 import WebSocket from 'ws';
-import * as crypto from 'crypto';
 import { EventEmitter } from 'events';
 import { logger } from '../../utils/logger.js';
 import type { PolymarketCredentials } from '../../types.js';
+import { buildPolymarketHeadersForUrl } from '../../utils/polymarket-auth.js';
 
 const USER_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/user';
 
@@ -43,22 +43,6 @@ export interface UserWebSocket extends EventEmitter {
 }
 
 /**
- * Generate HMAC signature for Polymarket WebSocket auth
- */
-function generateSignature(
-  apiKey: string,
-  apiSecret: string,
-  timestamp: string,
-  method: string,
-  path: string
-): string {
-  const message = timestamp + method + path;
-  const hmac = crypto.createHmac('sha256', Buffer.from(apiSecret, 'base64'));
-  hmac.update(message);
-  return hmac.digest('base64');
-}
-
-/**
  * Create authenticated WebSocket connection for a user
  */
 export function createUserWebSocket(
@@ -78,25 +62,18 @@ export function createUserWebSocket(
 
     return new Promise((resolve, reject) => {
       try {
-        // Generate auth headers
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const signature = generateSignature(
-          credentials.apiKey,
-          credentials.apiSecret,
-          timestamp,
+        const headers = buildPolymarketHeadersForUrl(
+          {
+            address: credentials.funderAddress,
+            apiKey: credentials.apiKey,
+            apiSecret: credentials.apiSecret,
+            apiPassphrase: credentials.apiPassphrase,
+          },
           'GET',
-          '/ws/user'
+          USER_WS_URL
         );
 
-        ws = new WebSocket(USER_WS_URL, {
-          headers: {
-            'POLY-ADDRESS': credentials.funderAddress,
-            'POLY-SIGNATURE': signature,
-            'POLY-TIMESTAMP': timestamp,
-            'POLY-API-KEY': credentials.apiKey,
-            'POLY-PASSPHRASE': credentials.apiPassphrase,
-          },
-        });
+        ws = new WebSocket(USER_WS_URL, { headers });
 
         ws.on('open', () => {
           connected = true;

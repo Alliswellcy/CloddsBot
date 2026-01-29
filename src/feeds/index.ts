@@ -4,11 +4,14 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { createPolymarketFeed } from './polymarket/index';
+import { createPolymarketRtds, PolymarketRtds } from './polymarket/rtds';
 import { createKalshiFeed } from './kalshi/index';
 import { createManifoldFeed } from './manifold/index';
 import { createMetaculusFeed } from './metaculus/index';
 import { createPredictItFeed } from './predictit/index';
 import { createDriftFeed } from './drift/index';
+import { createBetfairFeed, BetfairFeed } from './betfair/index';
+import { createSmarketsFeed, SmarketsFeed } from './smarkets/index';
 import { createNewsFeed, NewsFeed } from './news/index';
 import { analyzeEdge, calculateKelly, EdgeAnalysis } from './external/index';
 import { logger } from '../utils/logger';
@@ -48,6 +51,7 @@ export interface FeedManager extends EventEmitter {
     halfKelly: number;
     quarterKelly: number;
   };
+  getRtdsEvents?(): PolymarketRtds | null;
 }
 
 interface FeedAdapter {
@@ -57,6 +61,7 @@ interface FeedAdapter {
   stop?(): void;
   searchMarkets(query: string): Promise<Market[]>;
   getMarket(id: string): Promise<Market | null>;
+  getOrderbook?(platform: string, marketId: string): Promise<Orderbook | null>;
   subscribeToMarket?(id: string): void;
   unsubscribeFromMarket?(id: string): void;
   on?(event: string, handler: (...args: unknown[]) => void): void;
@@ -66,6 +71,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
   const emitter = new EventEmitter() as FeedManager;
   const feeds = new Map<string, FeedAdapter>();
   let newsFeed: NewsFeed | null = null;
+  let polymarketRtds: PolymarketRtds | null = null;
 
   // Initialize Polymarket
   if (config.polymarket?.enabled) {
@@ -76,12 +82,29 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
     polymarket.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
     });
+
+    if (config.polymarket.rtds?.enabled) {
+      polymarketRtds = createPolymarketRtds({
+        enabled: true,
+        url: config.polymarket.rtds.url,
+        pingIntervalMs: config.polymarket.rtds.pingIntervalMs,
+        reconnectDelayMs: config.polymarket.rtds.reconnectDelayMs,
+        subscriptions: config.polymarket.rtds.subscriptions,
+      });
+
+      polymarketRtds.on('rtds', (msg) => {
+        emitter.emit('rtds', msg);
+      });
+    }
   }
 
   // Initialize Kalshi
   if (config.kalshi?.enabled) {
     logger.info('Initializing Kalshi feed');
     const kalshi = await createKalshiFeed({
+      apiKeyId: config.kalshi.apiKeyId,
+      privateKeyPem: config.kalshi.privateKeyPem,
+      privateKeyPath: config.kalshi.privateKeyPath,
       email: config.kalshi.email,
       password: config.kalshi.password,
     });
@@ -119,10 +142,45 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
   // Initialize Drift BET (Solana)
   if (config.drift?.enabled) {
     logger.info('Initializing Drift BET feed');
-    const drift = await createDriftFeed();
+    const drift = await createDriftFeed({
+      betApiUrl: config.drift.betApiUrl,
+      requestTimeoutMs: config.drift.requestTimeoutMs,
+    });
     feeds.set('drift', drift as unknown as FeedAdapter);
 
     drift.on('price', (update: PriceUpdate) => {
+      emitter.emit('price', update);
+    });
+  }
+
+  // Initialize Betfair (sports betting exchange)
+  if ((config as any).betfair?.enabled) {
+    logger.info('Initializing Betfair feed');
+    const betfairConfig = (config as any).betfair;
+    const betfair = await createBetfairFeed({
+      appKey: betfairConfig.appKey,
+      username: betfairConfig.username,
+      password: betfairConfig.password,
+      sessionToken: betfairConfig.sessionToken,
+    });
+    feeds.set('betfair', betfair as unknown as FeedAdapter);
+
+    betfair.on('price', (update: PriceUpdate) => {
+      emitter.emit('price', update);
+    });
+  }
+
+  // Initialize Smarkets (betting exchange with lower fees)
+  if ((config as any).smarkets?.enabled) {
+    logger.info('Initializing Smarkets feed');
+    const smarketsConfig = (config as any).smarkets;
+    const smarkets = await createSmarketsFeed({
+      apiToken: smarketsConfig.apiToken,
+      sessionToken: smarketsConfig.sessionToken,
+    });
+    feeds.set('smarkets', smarkets as unknown as FeedAdapter);
+
+    smarkets.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
     });
   }
@@ -155,6 +213,9 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
     if (newsFeed) {
       startPromises.push(newsFeed.start());
     }
+    if (polymarketRtds) {
+      startPromises.push(polymarketRtds.start());
+    }
 
     await Promise.all(startPromises);
     logger.info('All feeds started');
@@ -173,6 +234,9 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
 
     if (newsFeed) {
       newsFeed.stop();
+    }
+    if (polymarketRtds) {
+      await polymarketRtds.stop();
     }
   };
 
@@ -235,9 +299,33 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
     return null;
   };
 
-  // Get orderbook (placeholder)
-  emitter.getOrderbook = async (_platform: string, _marketId: string): Promise<Orderbook | null> => {
-    // TODO: Implement orderbook fetching for platforms that support it
+  // Get orderbook
+  emitter.getOrderbook = async (platform: string, marketId: string): Promise<Orderbook | null> => {
+    const feed = feeds.get(platform) as FeedAdapter | undefined;
+
+    if (feed?.getOrderbook) {
+      return feed.getOrderbook(platform, marketId);
+    }
+
+    if (feed?.getMarket) {
+      const market = await feed.getMarket(marketId);
+      if (!market || !market.outcomes.length) return null;
+      const outcome = market.outcomes[0];
+      if (!Number.isFinite(outcome.price)) return null;
+      const sizeSource = outcome.volume24h || market.volume24h || 0;
+      const size = Math.max(1, sizeSource > 0 ? sizeSource : 1);
+      return {
+        platform: market.platform,
+        marketId: market.id,
+        outcomeId: outcome.id,
+        bids: [[outcome.price, size]],
+        asks: [[outcome.price, size]],
+        spread: 0,
+        midPrice: outcome.price,
+        timestamp: Date.now(),
+      };
+    }
+
     return null;
   };
 
@@ -272,6 +360,8 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
       }
     };
   };
+
+  emitter.getRtdsEvents = () => polymarketRtds;
 
   // News methods
   emitter.getRecentNews = (limit = 20): NewsItem[] => {

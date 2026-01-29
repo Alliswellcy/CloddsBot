@@ -7,10 +7,117 @@
  * - Max 3 pending requests per channel
  * - Persistent storage in DB
  * - Trust levels: owner > paired > stranger
+ * - Auto-approve local connections
+ * - Tailscale/Tailnet integration
  */
 
 import { Database } from '../db/index';
 import { logger } from '../utils/logger';
+import { networkInterfaces } from 'os';
+import { execSync } from 'child_process';
+
+// =============================================================================
+// LOCAL & TAILNET DETECTION
+// =============================================================================
+
+/** Get all local IP addresses */
+function getLocalIPs(): Set<string> {
+  const ips = new Set<string>(['127.0.0.1', '::1', 'localhost']);
+
+  try {
+    const interfaces = networkInterfaces();
+    for (const iface of Object.values(interfaces)) {
+      if (!iface) continue;
+      for (const config of iface) {
+        ips.add(config.address);
+      }
+    }
+  } catch (err) {
+    logger.debug({ error: err }, 'Failed to get network interfaces');
+  }
+
+  return ips;
+}
+
+/** Check if an IP/hostname is local */
+function isLocalConnection(remoteAddress?: string): boolean {
+  if (!remoteAddress) return false;
+
+  const localIPs = getLocalIPs();
+
+  // Strip IPv6 prefix if present
+  const cleanAddress = remoteAddress.replace(/^::ffff:/, '');
+
+  return localIPs.has(cleanAddress) || cleanAddress === 'localhost';
+}
+
+/** Tailscale status info */
+interface TailscaleStatus {
+  available: boolean;
+  selfIP?: string;
+  selfHostname?: string;
+  peers: Map<string, { hostname: string; online: boolean; userId?: string }>;
+}
+
+/** Get Tailscale network status */
+function getTailscaleStatus(): TailscaleStatus {
+  const status: TailscaleStatus = {
+    available: false,
+    peers: new Map(),
+  };
+
+  try {
+    // Check if tailscale CLI is available
+    const result = execSync('tailscale status --json 2>/dev/null', {
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+
+    const data = JSON.parse(result);
+    status.available = true;
+    status.selfIP = data.Self?.TailscaleIPs?.[0];
+    status.selfHostname = data.Self?.HostName;
+
+    // Parse peers
+    if (data.Peer) {
+      for (const [id, peer] of Object.entries(data.Peer as Record<string, any>)) {
+        const peerIP = peer.TailscaleIPs?.[0];
+        if (peerIP) {
+          status.peers.set(peerIP, {
+            hostname: peer.HostName || id,
+            online: peer.Online ?? false,
+            userId: peer.UserID?.toString(),
+          });
+        }
+      }
+    }
+
+    logger.debug({ selfIP: status.selfIP, peerCount: status.peers.size }, 'Tailscale status loaded');
+  } catch (err) {
+    // Tailscale not available or not running
+    logger.debug('Tailscale not available');
+  }
+
+  return status;
+}
+
+/** Check if an IP is a Tailscale peer */
+function isTailscalePeer(remoteAddress?: string): { isPeer: boolean; peerInfo?: { hostname: string; online: boolean } } {
+  if (!remoteAddress) return { isPeer: false };
+
+  const status = getTailscaleStatus();
+  if (!status.available) return { isPeer: false };
+
+  const cleanAddress = remoteAddress.replace(/^::ffff:/, '');
+  const peerInfo = status.peers.get(cleanAddress);
+
+  return {
+    isPeer: !!peerInfo,
+    peerInfo,
+  };
+}
+
+export { isLocalConnection, isTailscalePeer, getTailscaleStatus };
 
 // Characters that are unambiguous (excludes 0, O, 1, I)
 const PAIRING_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -60,6 +167,18 @@ interface PairedUserRow {
   isOwner: number;
 }
 
+/** Pairing service configuration */
+export interface PairingConfig {
+  /** Auto-approve connections from localhost */
+  autoApproveLocal?: boolean;
+  /** Auto-approve connections from Tailscale peers */
+  autoApproveTailscale?: boolean;
+  /** Trust level for auto-approved local connections */
+  localTrustLevel?: TrustLevel;
+  /** Trust level for auto-approved Tailscale peers */
+  tailscaleTrustLevel?: TrustLevel;
+}
+
 export interface PairingService {
   /** Generate a new pairing code for a pending user */
   createPairingRequest(channel: string, userId: string, username?: string): Promise<string | null>;
@@ -69,6 +188,13 @@ export interface PairingService {
 
   /** Approve a pending request (by owner) */
   approveRequest(channel: string, code: string): Promise<boolean>;
+
+  /** Check if connection should be auto-approved (local or tailscale) */
+  checkAutoApprove(channel: string, userId: string, remoteAddress?: string): {
+    approved: boolean;
+    reason?: 'local' | 'tailscale';
+    peerInfo?: { hostname: string };
+  };
 
   /** Reject a pending request */
   rejectRequest(channel: string, code: string): Promise<boolean>;
@@ -118,7 +244,16 @@ function generateCode(): string {
   return code;
 }
 
-export function createPairingService(db: Database): PairingService {
+const DEFAULT_PAIRING_CONFIG: PairingConfig = {
+  autoApproveLocal: true,
+  autoApproveTailscale: true,
+  localTrustLevel: 'owner',
+  tailscaleTrustLevel: 'paired',
+};
+
+export function createPairingService(db: Database, configInput?: PairingConfig): PairingService {
+  const config: PairingConfig = { ...DEFAULT_PAIRING_CONFIG, ...configInput };
+
   // In-memory cache (also persisted to DB)
   const pendingRequests = new Map<string, PairingRequest>(); // code -> request
   const pairedUsers = new Map<string, PairedUser>(); // `${channel}:${userId}` -> user
@@ -174,6 +309,39 @@ export function createPairingService(db: Database): PairingService {
   }, 60000); // Check every minute
 
   return {
+    checkAutoApprove(channel, userId, remoteAddress?) {
+      // Check for local connection
+      if (config.autoApproveLocal && isLocalConnection(remoteAddress)) {
+        logger.info({ channel, userId, remoteAddress }, 'Auto-approving local connection');
+        this.addPairedUser(channel, userId, undefined, 'auto');
+
+        // Set as owner if configured
+        if (config.localTrustLevel === 'owner') {
+          this.setOwner(channel, userId);
+        }
+
+        return { approved: true, reason: 'local' as const };
+      }
+
+      // Check for Tailscale peer
+      if (config.autoApproveTailscale) {
+        const tailscale = isTailscalePeer(remoteAddress);
+        if (tailscale.isPeer && tailscale.peerInfo) {
+          logger.info({ channel, userId, remoteAddress, peer: tailscale.peerInfo.hostname }, 'Auto-approving Tailscale peer');
+          this.addPairedUser(channel, userId, tailscale.peerInfo.hostname, 'auto');
+
+          // Set as owner if configured
+          if (config.tailscaleTrustLevel === 'owner') {
+            this.setOwner(channel, userId, tailscale.peerInfo.hostname);
+          }
+
+          return { approved: true, reason: 'tailscale' as const, peerInfo: tailscale.peerInfo };
+        }
+      }
+
+      return { approved: false };
+    },
+
     async createPairingRequest(channel, userId, username) {
       // Check if already paired
       const key = `${channel}:${userId}`;

@@ -21,6 +21,7 @@ import {
   TransientError,
   isRetryableError,
 } from '../infra/retry';
+import { GroqProvider, TogetherProvider, FireworksProvider } from './discovery';
 
 // =============================================================================
 // TYPES
@@ -75,6 +76,170 @@ export interface Provider {
   stream(messages: Message[], options?: CompletionOptions): AsyncIterable<StreamChunk>;
   listModels(): Promise<string[]>;
   isAvailable(): Promise<boolean>;
+}
+
+// =============================================================================
+// GEMINI PROVIDER (Google Generative Language API)
+// =============================================================================
+
+export class GeminiProvider implements Provider {
+  name = 'gemini';
+  private apiKey: string;
+  private baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+  private defaultModel = process.env.CLODDS_GEMINI_MODEL || 'gemini-1.5-pro';
+
+  constructor(apiKey: string) {
+    this.apiKey = apiKey;
+  }
+
+  private endpoint(model: string, method: 'generateContent' | 'streamGenerateContent'): string {
+    const cleanModel = model.startsWith('models/') ? model : `models/${model}`;
+    return `${this.baseUrl}/${cleanModel}:${method}?key=${this.apiKey}`;
+  }
+
+  private toGeminiMessages(messages: Message[]): Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> {
+    const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n').trim();
+    const rest = messages.filter(m => m.role !== 'system');
+
+    const mapped = rest.map((m) => {
+      const role: 'user' | 'model' = m.role === 'assistant' ? 'model' : 'user';
+      return {
+        role,
+        parts: [{ text: m.content }],
+      };
+    });
+
+    if (system) {
+      mapped.unshift({
+        role: 'user',
+        parts: [{ text: `System instruction:\n${system}` }],
+      });
+    }
+
+    return mapped;
+  }
+
+  async complete(messages: Message[], options: CompletionOptions = {}): Promise<CompletionResult> {
+    const startTime = Date.now();
+    const model = options.model || this.defaultModel;
+
+    const response = await fetch(this.endpoint(model, 'generateContent'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: this.toGeminiMessages(messages),
+        generationConfig: {
+          temperature: options.temperature,
+          topP: options.topP,
+          maxOutputTokens: options.maxTokens,
+          stopSequences: options.stopSequences,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gemini error: ${response.status}`);
+    }
+
+    const data = await response.json() as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
+      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+      modelVersion?: string;
+    };
+
+    const content = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+    const finish = data.candidates?.[0]?.finishReason;
+
+    return {
+      content,
+      model: data.modelVersion || model,
+      usage: {
+        inputTokens: data.usageMetadata?.promptTokenCount || 0,
+        outputTokens: data.usageMetadata?.candidatesTokenCount || 0,
+        totalTokens: data.usageMetadata?.totalTokenCount || 0,
+      },
+      finishReason: finish === 'STOP' ? 'end_turn' : 'end_turn',
+      latency: Date.now() - startTime,
+    };
+  }
+
+  async *stream(messages: Message[], options: CompletionOptions = {}): AsyncIterable<StreamChunk> {
+    const model = options.model || this.defaultModel;
+
+    const response = await fetch(this.endpoint(model, 'streamGenerateContent'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: this.toGeminiMessages(messages),
+        generationConfig: {
+          temperature: options.temperature,
+          topP: options.topP,
+          maxOutputTokens: options.maxTokens,
+          stopSequences: options.stopSequences,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gemini streaming error: ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Gemini streaming responses are JSON lines.
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        try {
+          const event = JSON.parse(trimmed) as {
+            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+          };
+          const content = event.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+          if (content) {
+            yield { content, done: false };
+          }
+        } catch {
+          // Ignore malformed chunks.
+        }
+      }
+    }
+
+    yield { content: '', done: true };
+  }
+
+  async listModels(): Promise<string[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/models?key=${this.apiKey}`);
+      if (!response.ok) return [];
+      const data = await response.json() as { models?: Array<{ name: string }> };
+      return data.models?.map(m => m.name.replace(/^models\//, '')) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async isAvailable(): Promise<boolean> {
+    try {
+      const models = await this.listModels();
+      return models.length > 0;
+    } catch {
+      return false;
+    }
+  }
 }
 
 // =============================================================================
@@ -649,6 +814,70 @@ export class ProviderManager extends EventEmitter {
   private providers: Map<string, Provider> = new Map();
   private defaultProvider: string | null = null;
   private fallbackChain: string[] = [];
+  private circuits: Map<string, {
+    failures: number;
+    successes: number;
+    openUntil?: number;
+  }> = new Map();
+
+  private readonly circuitConfig = {
+    failureThreshold: Number(process.env.CLODDS_PROVIDER_CB_FAILURE_THRESHOLD || 3),
+    cooldownMs: Number(process.env.CLODDS_PROVIDER_CB_COOLDOWN_MS || 60_000),
+    successResetThreshold: Number(process.env.CLODDS_PROVIDER_CB_SUCCESS_RESET || 2),
+  };
+
+  private getCircuit(provider: string) {
+    let state = this.circuits.get(provider);
+    if (!state) {
+      state = { failures: 0, successes: 0 };
+      this.circuits.set(provider, state);
+    }
+    return state;
+  }
+
+  private isCircuitOpen(provider: string): boolean {
+    const state = this.getCircuit(provider);
+    if (!state.openUntil) return false;
+    if (Date.now() >= state.openUntil) {
+      state.openUntil = undefined;
+      state.failures = 0;
+      state.successes = 0;
+      logger.info({ provider }, 'Provider circuit cooldown expired');
+      return false;
+    }
+    return true;
+  }
+
+  private reportSuccess(provider: string): void {
+    const state = this.getCircuit(provider);
+    state.successes += 1;
+    state.failures = Math.max(0, state.failures - 1);
+    if (state.openUntil && state.successes >= this.circuitConfig.successResetThreshold) {
+      state.openUntil = undefined;
+      state.failures = 0;
+      state.successes = 0;
+      logger.info({ provider }, 'Provider circuit closed after successes');
+    }
+  }
+
+  private reportFailure(provider: string, error: unknown): void {
+    const state = this.getCircuit(provider);
+    state.failures += 1;
+    state.successes = 0;
+
+    if (state.failures >= this.circuitConfig.failureThreshold) {
+      state.openUntil = Date.now() + this.circuitConfig.cooldownMs;
+      logger.warn(
+        {
+          provider,
+          failures: state.failures,
+          openUntil: state.openUntil,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Provider circuit opened'
+      );
+    }
+  }
 
   /** Register a provider */
   register(provider: Provider): this {
@@ -702,13 +931,19 @@ export class ProviderManager extends EventEmitter {
     let lastError: Error | null = null;
 
     for (const providerName of chain) {
+      if (this.isCircuitOpen(providerName)) {
+        logger.warn({ provider: providerName }, 'Provider circuit open, skipping');
+        continue;
+      }
       try {
         const provider = this.get(providerName);
         const result = await provider.complete(messages, options);
+        this.reportSuccess(providerName);
         this.emit('completion', { provider: providerName, result });
         return result;
       } catch (error) {
         lastError = error as Error;
+        this.reportFailure(providerName, error);
         logger.warn({ provider: providerName, error }, 'Provider failed, trying next');
         this.emit('fallback', { provider: providerName, error });
       }
@@ -730,14 +965,20 @@ export class ProviderManager extends EventEmitter {
     let lastError: Error | null = null;
 
     for (const providerName of chain) {
+      if (this.isCircuitOpen(providerName)) {
+        logger.warn({ provider: providerName }, 'Provider circuit open, skipping stream');
+        continue;
+      }
       try {
         const provider = this.get(providerName);
         for await (const chunk of provider.stream(messages, options)) {
           yield chunk;
         }
+        this.reportSuccess(providerName);
         return;
       } catch (error) {
         lastError = error as Error;
+        this.reportFailure(providerName, error);
         logger.warn({ provider: providerName, error }, 'Provider streaming failed, trying next');
       }
     }
@@ -800,6 +1041,10 @@ export function createProviders(options: {
   anthropicKey?: string;
   openaiKey?: string;
   ollamaUrl?: string;
+  groqKey?: string;
+  togetherKey?: string;
+  fireworksKey?: string;
+  geminiKey?: string;
 } = {}): ProviderManager {
   const manager = new ProviderManager();
 
@@ -813,6 +1058,22 @@ export function createProviders(options: {
 
   if (options.ollamaUrl) {
     manager.register(new OllamaProvider(options.ollamaUrl));
+  }
+
+  if (options.groqKey) {
+    manager.register(new GroqProvider(options.groqKey));
+  }
+
+  if (options.togetherKey) {
+    manager.register(new TogetherProvider(options.togetherKey));
+  }
+
+  if (options.fireworksKey) {
+    manager.register(new FireworksProvider(options.fireworksKey));
+  }
+
+  if (options.geminiKey) {
+    manager.register(new GeminiProvider(options.geminiKey));
   }
 
   return manager;
@@ -832,3 +1093,26 @@ if (process.env.ANTHROPIC_API_KEY) {
 if (process.env.OPENAI_API_KEY) {
   providers.register(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY }));
 }
+
+if (process.env.OLLAMA_URL) {
+  providers.register(new OllamaProvider(process.env.OLLAMA_URL));
+}
+
+if (process.env.GROQ_API_KEY) {
+  providers.register(new GroqProvider(process.env.GROQ_API_KEY));
+}
+
+if (process.env.TOGETHER_API_KEY) {
+  providers.register(new TogetherProvider(process.env.TOGETHER_API_KEY));
+}
+
+if (process.env.FIREWORKS_API_KEY) {
+  providers.register(new FireworksProvider(process.env.FIREWORKS_API_KEY));
+}
+
+if (process.env.GEMINI_API_KEY) {
+  providers.register(new GeminiProvider(process.env.GEMINI_API_KEY));
+}
+
+export { createProviderHealthMonitor } from './health';
+export type { ProviderHealthMonitor, ProviderHealthSnapshot, ProviderHealthStatus } from './health';

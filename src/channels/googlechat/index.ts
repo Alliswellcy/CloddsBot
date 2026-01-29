@@ -12,7 +12,7 @@
 
 import { logger } from '../../utils/logger';
 import type { ChannelAdapter, ChannelCallbacks } from '../index';
-import type { IncomingMessage, OutgoingMessage } from '../../types';
+import type { IncomingMessage, OutgoingMessage, MessageAttachment } from '../../types';
 import type { PairingService } from '../../pairing/index';
 
 export interface GoogleChatConfig {
@@ -31,6 +31,8 @@ export interface GoogleChatConfig {
   allowFrom?: string[];
   /** Space allowlist (empty = all allowed) */
   spaces?: string[];
+  /** Per-space group policies */
+  groups?: Record<string, { requireMention?: boolean }>;
 }
 
 // Google Chat message types (simplified)
@@ -44,6 +46,11 @@ interface ChatMessage {
   };
   createTime: string;
   text?: string;
+  attachments?: Array<{
+    contentName?: string;
+    contentType?: string;
+    downloadUri?: string;
+  }>;
   space: {
     name: string;
     type: 'ROOM' | 'DM' | 'SPACE';
@@ -175,7 +182,29 @@ export async function createGoogleChatChannel(
 
     // Get message text (argumentText excludes @mention)
     const text = msg.argumentText?.trim() || msg.text?.trim() || '';
-    if (!text) {
+
+    const attachments: MessageAttachment[] = (msg.attachments || []).map((attachment) => ({
+      type: attachment.contentType?.startsWith('image/')
+        ? 'image'
+        : attachment.contentType?.startsWith('video/')
+          ? 'video'
+          : attachment.contentType?.startsWith('audio/')
+            ? 'audio'
+            : 'document',
+      url: attachment.downloadUri,
+      filename: attachment.contentName,
+      mimeType: attachment.contentType,
+    }));
+
+    if (spaceType !== 'DM') {
+      const requireMention =
+        (config as any).groups?.[msg.space.name]?.requireMention ?? true;
+      if (requireMention && !msg.argumentText) {
+        return null;
+      }
+    }
+
+    if (!text && attachments.length === 0) {
       return null;
     }
 
@@ -187,6 +216,7 @@ export async function createGoogleChatChannel(
       chatId: msg.space.name,
       chatType: spaceType === 'DM' ? 'dm' : 'group',
       text,
+      attachments: attachments.length > 0 ? attachments : undefined,
       timestamp: new Date(msg.createTime),
     };
 
@@ -236,8 +266,32 @@ export async function createGoogleChatChannel(
       logger.info('Google Chat channel stopped');
     },
 
-    async sendMessage(message: OutgoingMessage): Promise<void> {
+    async sendMessage(message: OutgoingMessage): Promise<string | null> {
+      if (message.attachments && message.attachments.length > 0) {
+        const attachmentLines = message.attachments.map((attachment) => {
+          const label = attachment.filename || attachment.mimeType || 'attachment';
+          return attachment.url ? `${label}: ${attachment.url}` : label;
+        });
+        const text = [message.text, ...attachmentLines].filter(Boolean).join('\n');
+        await sendToGoogleChat({ ...message, text });
+        return null;
+      }
       await sendToGoogleChat(message);
+      return null;
+    },
+
+    async editMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      logger.warn(
+        { chatId: message.chatId, messageId: message.messageId },
+        'Google Chat edit not supported in webhook mode'
+      );
+    },
+
+    async deleteMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      logger.warn(
+        { chatId: message.chatId, messageId: message.messageId },
+        'Google Chat delete not supported in webhook mode'
+      );
     },
 
     // Expose event handler for webhook integration

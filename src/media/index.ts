@@ -9,12 +9,15 @@
  * - Image resizing for vision models
  */
 
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'fs';
-import { homedir } from 'os';
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from 'fs';
+import { homedir, tmpdir } from 'os';
 import { join, basename, extname } from 'path';
 import { pipeline } from 'stream/promises';
 import * as https from 'https';
 import * as http from 'http';
+import { execFile, spawnSync } from 'child_process';
+import { promisify } from 'util';
+import { randomBytes } from 'crypto';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -384,7 +387,7 @@ export function createMediaService(): MediaService {
 }
 
 // =============================================================================
-// TRANSCRIPTION (placeholder for Whisper/Deepgram integration)
+// TRANSCRIPTION
 // =============================================================================
 
 export interface TranscriptionResult {
@@ -392,28 +395,310 @@ export interface TranscriptionResult {
   language?: string;
   duration?: number;
   segments?: Array<{ start: number; end: number; text: string }>;
+  engine?: 'openai' | 'whisper' | 'vosk';
+}
+
+export interface TranscriptionOptions {
+  engine?: 'openai' | 'whisper' | 'vosk';
+  language?: string;
+  prompt?: string;
+  model?: string;
+  temperature?: number;
+  timestamps?: boolean;
+  timeoutMs?: number;
+  maxBytes?: number;
 }
 
 export interface TranscriptionService {
-  transcribe(audioPath: string): Promise<TranscriptionResult>;
+  transcribe(audioPath: string, options?: TranscriptionOptions): Promise<TranscriptionResult>;
   isAvailable(): boolean;
 }
 
-/** Create a placeholder transcription service */
-export function createTranscriptionService(): TranscriptionService {
-  // TODO: Integrate with Whisper API or Deepgram
+const execFileAsync = promisify(execFile);
+
+const DEFAULT_TRANSCRIBE_TIMEOUT_MS = 60_000;
+const DEFAULT_TRANSCRIBE_MAX_BYTES = 25 * 1024 * 1024; // 25MB
+const DEFAULT_OPENAI_MODEL = process.env.CLODDS_TRANSCRIBE_MODEL?.trim() || 'gpt-4o-mini-transcribe';
+const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
+
+const SUPPORTED_AUDIO_EXTENSIONS = new Set([
+  '.mp3',
+  '.m4a',
+  '.mp4',
+  '.mpeg',
+  '.mpga',
+  '.wav',
+  '.webm',
+  '.ogg',
+]);
+
+function commandExists(command: string): boolean {
+  return Boolean(resolveCommand(command));
+}
+
+function resolveCommand(command: string): string | null {
+  const whichResult = spawnSync('which', [command], { encoding: 'utf-8' });
+  if (whichResult.status === 0 && whichResult.stdout) {
+    const resolved = whichResult.stdout.trim();
+    if (resolved) return resolved;
+  }
+
+  // Python user bin fallback: ~/Library/Python/*/bin/<command>
+  const userPythonRoot = join(homedir(), 'Library', 'Python');
+  if (!existsSync(userPythonRoot)) return null;
+
+  try {
+    const versions = readdirSync(userPythonRoot);
+    for (const version of versions) {
+      const candidate = join(userPythonRoot, version, 'bin', command);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // ignore discovery errors; caller will handle null
+  }
+
+  return null;
+}
+
+function normalizeLanguage(language?: string): string | undefined {
+  if (!language) return undefined;
+  return language.split('-')[0]?.toLowerCase() || undefined;
+}
+
+function validateAudioFile(audioPath: string, options?: TranscriptionOptions): void {
+  if (!existsSync(audioPath)) {
+    throw new Error(`Audio file not found: ${audioPath}`);
+  }
+
+  const stats = statSync(audioPath);
+  const envMaxBytes = Number(process.env.CLODDS_TRANSCRIBE_MAX_BYTES || 0);
+  const maxBytes =
+    options?.maxBytes ??
+    (envMaxBytes > 0 ? envMaxBytes : DEFAULT_TRANSCRIBE_MAX_BYTES);
+  if (stats.size > maxBytes) {
+    throw new Error(`Audio file too large: ${stats.size} bytes (max ${maxBytes})`);
+  }
+
+  const ext = extname(audioPath).toLowerCase();
+  if (ext && !SUPPORTED_AUDIO_EXTENSIONS.has(ext)) {
+    throw new Error(`Unsupported audio format: ${ext}. Supported: ${Array.from(SUPPORTED_AUDIO_EXTENSIONS).join(', ')}`);
+  }
+}
+
+function pickEngine(options?: TranscriptionOptions): 'openai' | 'whisper' | 'vosk' | null {
+  const requested = options?.engine || (process.env.CLODDS_STT_ENGINE as TranscriptionOptions['engine'] | undefined);
+  const openaiAvailable = Boolean(process.env.OPENAI_API_KEY);
+  const whisperAvailable = commandExists('whisper');
+  const voskAvailable = commandExists('vosk-transcriber');
+
+  if (requested) {
+    if (requested === 'openai' && openaiAvailable) return 'openai';
+    if (requested === 'whisper' && whisperAvailable) return 'whisper';
+    if (requested === 'vosk' && voskAvailable) return 'vosk';
+    return null;
+  }
+
+  if (openaiAvailable) return 'openai';
+  if (whisperAvailable) return 'whisper';
+  if (voskAvailable) return 'vosk';
+  return null;
+}
+
+async function transcribeWithOpenAI(audioPath: string, options: TranscriptionOptions, startedAt: number): Promise<TranscriptionResult> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is required for OpenAI transcription');
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const fileBuffer = readFileSync(audioPath);
+    const blob = new Blob([fileBuffer]);
+    const form = new FormData();
+    form.set('file', blob, basename(audioPath));
+    form.set('model', options.model || DEFAULT_OPENAI_MODEL);
+
+    const language = normalizeLanguage(options.language);
+    if (language) form.set('language', language);
+    if (options.prompt?.trim()) form.set('prompt', options.prompt.trim());
+    if (typeof options.temperature === 'number') form.set('temperature', String(options.temperature));
+    if (options.timestamps) {
+      form.set('response_format', 'verbose_json');
+    }
+
+    const res = await fetch(OPENAI_TRANSCRIBE_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: form,
+      signal: controller.signal,
+    });
+
+    const data = (await res.json()) as {
+      text?: string;
+      language?: string;
+      duration?: number;
+      segments?: Array<{ start: number; end: number; text: string }>;
+      error?: { message?: string };
+    };
+
+    if (!res.ok) {
+      const detail = data?.error?.message || `HTTP ${res.status}`;
+      throw new Error(`OpenAI transcription failed: ${detail}`);
+    }
+
+    return {
+      text: data.text || '',
+      language: data.language || options.language,
+      duration: data.duration,
+      segments: data.segments,
+      engine: 'openai',
+    };
+  } finally {
+    clearTimeout(timeout);
+    logger.debug({ ms: Date.now() - startedAt }, 'OpenAI transcription completed');
+  }
+}
+
+async function transcribeWithWhisperCli(audioPath: string, options: TranscriptionOptions, startedAt: number): Promise<TranscriptionResult> {
+  const language = normalizeLanguage(options.language) || 'en';
+  const outputDir = mkdtempSync(join(tmpdir(), 'clodds-whisper-'));
+  const base = basename(audioPath, extname(audioPath));
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS;
+  const whisperCmd = resolveCommand('whisper');
+  if (!whisperCmd) {
+    throw new Error('Whisper CLI not found. Install `openai-whisper` or add whisper to PATH.');
+  }
+  const ffmpegCmd = resolveCommand('ffmpeg');
+  if (!ffmpegCmd) {
+    throw new Error('ffmpeg not found. Whisper requires ffmpeg to decode audio.');
+  }
+
+  try {
+    const args = [
+      audioPath,
+      '--language', language,
+      '--task', 'transcribe',
+      '--output_format', options.timestamps ? 'json' : 'txt',
+      '--output_dir', outputDir,
+    ];
+
+    await execFileAsync(whisperCmd, args, { timeout: timeoutMs });
+
+    const jsonPath = join(outputDir, `${base}.json`);
+    const txtPath = join(outputDir, `${base}.txt`);
+
+    if (options.timestamps && existsSync(jsonPath)) {
+      const parsed = JSON.parse(readFileSync(jsonPath, 'utf-8')) as {
+        text?: string;
+        language?: string;
+        segments?: Array<{ start: number; end: number; text: string }>;
+      };
+      return {
+        text: parsed.text || '',
+        language: parsed.language || language,
+        segments: parsed.segments,
+        duration: Date.now() - startedAt,
+        engine: 'whisper',
+      };
+    }
+
+    if (existsSync(txtPath)) {
+      const text = readFileSync(txtPath, 'utf-8');
+      return {
+        text: text.trim(),
+        language,
+        duration: Date.now() - startedAt,
+        engine: 'whisper',
+      };
+    }
+
+    throw new Error('Whisper CLI did not produce an output file');
+  } finally {
+    try {
+      rmSync(outputDir, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup
+    }
+    logger.debug({ ms: Date.now() - startedAt }, 'Whisper CLI transcription completed');
+  }
+}
+
+async function transcribeWithVoskCli(audioPath: string, options: TranscriptionOptions, startedAt: number): Promise<TranscriptionResult> {
+  const language = options.language || 'en-US';
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS;
+  const args = ['-l', language, '-i', audioPath];
+  const voskCmd = resolveCommand('vosk-transcriber');
+  if (!voskCmd) {
+    throw new Error('vosk-transcriber not found. Install it or add it to PATH.');
+  }
+  const { stdout } = await execFileAsync(voskCmd, args, { timeout: timeoutMs });
+
+  const parsed = JSON.parse(stdout) as {
+    text?: string;
+    confidence?: number;
+    result?: Array<{ word: string; start?: number; end?: number }>;
+  };
+
+  const textFromWords = parsed.result?.map(r => r.word).filter(Boolean).join(' ').trim();
+  const text = (parsed.text || textFromWords || '').trim();
+
   return {
-    async transcribe(_audioPath) {
-      throw new Error('Transcription not configured. Set OPENAI_API_KEY for Whisper or DEEPGRAM_API_KEY for Deepgram.');
+    text,
+    language,
+    duration: Date.now() - startedAt,
+    segments: text
+      ? [{ start: 0, end: 0, text }]
+      : undefined,
+    engine: 'vosk',
+  };
+}
+
+/** Create a transcription service with OpenAI + local CLI fallbacks */
+export function createTranscriptionService(): TranscriptionService {
+  return {
+    async transcribe(audioPath: string, options: TranscriptionOptions = {}) {
+      const startedAt = Date.now();
+      validateAudioFile(audioPath, options);
+
+      const engine = pickEngine(options);
+      if (!engine) {
+        throw new Error(
+          'No transcription engine available. Configure OPENAI_API_KEY, install `whisper`, or install `vosk-transcriber`.'
+        );
+      }
+
+      logger.info({ engine, audioPath }, 'Starting transcription');
+
+      switch (engine) {
+        case 'openai':
+          return transcribeWithOpenAI(audioPath, options, startedAt);
+        case 'whisper':
+          return transcribeWithWhisperCli(audioPath, options, startedAt);
+        case 'vosk':
+          return transcribeWithVoskCli(audioPath, options, startedAt);
+        default:
+          throw new Error(`Unsupported transcription engine: ${engine as string}`);
+      }
     },
     isAvailable() {
-      return !!(process.env.OPENAI_API_KEY || process.env.DEEPGRAM_API_KEY);
+      return Boolean(
+        process.env.OPENAI_API_KEY ||
+        commandExists('whisper') ||
+        commandExists('vosk-transcriber')
+      );
     },
   };
 }
 
 // =============================================================================
-// IMAGE PROCESSING (placeholder for Sharp integration)
+// IMAGE PROCESSING
 // =============================================================================
 
 export interface ImageProcessingOptions {
@@ -428,24 +713,50 @@ export interface ImageProcessingService {
   getInfo(imagePath: string): Promise<{ width: number; height: number; format: string }>;
 }
 
-/** Create a placeholder image processing service */
+async function loadSharp() {
+  try {
+    const mod = await import('sharp');
+    return (mod as { default?: typeof import('sharp') }).default ?? (mod as typeof import('sharp'));
+  } catch (error) {
+    throw new Error(
+      'Image processing requires the "sharp" package. Install it with: npm install sharp'
+    );
+  }
+}
+
+/** Create an image processing service */
 export function createImageProcessingService(): ImageProcessingService {
-  // TODO: Integrate with Sharp
   return {
     async resize(imagePath, _options) {
-      // Just return original for now
-      return readFileSync(imagePath);
+      const sharp = await loadSharp();
+      const options = _options || {};
+      const transformer = sharp(imagePath);
+
+      if (options.maxWidth || options.maxHeight) {
+        transformer.resize({
+          width: options.maxWidth,
+          height: options.maxHeight,
+          fit: 'inside',
+          withoutEnlargement: true,
+        });
+      }
+
+      if (options.format) {
+        transformer.toFormat(options.format, {
+          quality: options.quality,
+        });
+      }
+
+      return transformer.toBuffer();
     },
     async getInfo(imagePath) {
-      const buffer = readFileSync(imagePath);
-      // Basic detection from magic bytes
-      if (buffer[0] === 0xff && buffer[1] === 0xd8) {
-        return { width: 0, height: 0, format: 'jpeg' };
-      }
-      if (buffer[0] === 0x89 && buffer[1] === 0x50) {
-        return { width: 0, height: 0, format: 'png' };
-      }
-      return { width: 0, height: 0, format: 'unknown' };
+      const sharp = await loadSharp();
+      const info = await sharp(imagePath).metadata();
+      return {
+        width: info.width || 0,
+        height: info.height || 0,
+        format: info.format || 'unknown',
+      };
     },
   };
 }

@@ -68,7 +68,8 @@ export interface WebhookManager {
   handle(
     path: string,
     payload: unknown,
-    signature?: string
+    signature?: string,
+    rawBody?: string
   ): Promise<{ success: boolean; error?: string }>;
 
   /** Verify webhook signature */
@@ -92,6 +93,7 @@ export function createWebhookManager(): WebhookManager {
   const webhooks = new Map<string, Webhook>();
   const pathIndex = new Map<string, string>(); // path -> webhook id
   const rateLimits = new Map<string, RateLimitEntry>();
+  const requireSignature = process.env.CLODDS_WEBHOOK_REQUIRE_SIGNATURE !== '0';
 
   /** Check rate limit */
   function checkRateLimit(webhook: Webhook): boolean {
@@ -174,7 +176,7 @@ export function createWebhookManager(): WebhookManager {
       return webhooks.get(id);
     },
 
-    async handle(path, payload, signature) {
+    async handle(path, payload, signature, rawBody) {
       const normalizedPath = path.startsWith('/') ? path : `/${path}`;
       const webhookId = pathIndex.get(normalizedPath);
 
@@ -191,14 +193,19 @@ export function createWebhookManager(): WebhookManager {
         return { success: false, error: 'Webhook disabled' };
       }
 
-      // Verify signature if provided
-      if (signature) {
-        const payloadStr =
-          typeof payload === 'string' ? payload : JSON.stringify(payload);
-        if (!this.verify(webhookId, payloadStr, signature)) {
-          logger.warn({ webhookId, path }, 'Invalid webhook signature');
-          return { success: false, error: 'Invalid signature' };
+      // Verify signature (required by default)
+      const payloadStr =
+        rawBody ||
+        (typeof payload === 'string' ? payload : JSON.stringify(payload));
+
+      if (!signature) {
+        if (requireSignature) {
+          logger.warn({ webhookId, path }, 'Missing webhook signature');
+          return { success: false, error: 'Missing signature' };
         }
+      } else if (!this.verify(webhookId, payloadStr, signature)) {
+        logger.warn({ webhookId, path }, 'Invalid webhook signature');
+        return { success: false, error: 'Invalid signature' };
       }
 
       // Check rate limit
@@ -268,10 +275,11 @@ export function createWebhookMiddleware(manager: WebhookManager) {
   return async (req: any, res: any) => {
     const path = req.path || req.url;
     const payload = req.body;
+    const rawBody = req.rawBody;
     const signature =
       req.headers['x-webhook-signature'] || req.headers['x-hub-signature-256'];
 
-    const result = await manager.handle(path, payload, signature);
+    const result = await manager.handle(path, payload, signature, rawBody);
 
     if (result.success) {
       res.status(200).json({ ok: true });
@@ -281,7 +289,7 @@ export function createWebhookMiddleware(manager: WebhookManager) {
           ? 429
           : result.error === 'Webhook not found'
             ? 404
-            : result.error === 'Invalid signature'
+            : result.error === 'Invalid signature' || result.error === 'Missing signature'
               ? 401
               : 500;
 

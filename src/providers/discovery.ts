@@ -746,7 +746,65 @@ export class FireworksProvider implements Provider {
   }
 
   async *stream(messages: Message[], options: CompletionOptions = {}): AsyncIterable<StreamChunk> {
-    yield { content: 'Streaming not implemented', done: true };
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: options.model || this.defaultModel,
+        messages,
+        max_tokens: options.maxTokens || 4096,
+        temperature: options.temperature,
+        top_p: options.topP,
+        stop: options.stopSequences,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Fireworks streaming error: ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (!data) continue;
+        if (data === '[DONE]') {
+          yield { content: '', done: true };
+          return;
+        }
+
+        try {
+          const event = JSON.parse(data) as {
+            choices?: Array<{ delta?: { content?: string } }>;
+          };
+          const content = event.choices?.[0]?.delta?.content;
+          if (content) {
+            yield { content, done: false };
+          }
+        } catch {
+          // Ignore malformed streaming chunks.
+        }
+      }
+    }
+
+    yield { content: '', done: true };
   }
 
   async listModels(): Promise<string[]> {

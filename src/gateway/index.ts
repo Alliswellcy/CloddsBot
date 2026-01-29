@@ -16,6 +16,31 @@ import * as https from 'https';
 import { EventEmitter } from 'events';
 import { randomBytes } from 'crypto';
 import { logger } from '../utils/logger';
+import { RateLimiter, type RateLimitConfig } from '../security';
+import type { Config, IncomingMessage, OutgoingMessage, ReactionMessage, PollMessage } from '../types';
+import { createServer as createHttpGatewayServer } from './server';
+import { createDatabase } from '../db';
+import { createMigrationRunner } from '../db/migrations';
+import { createFeedManager } from '../feeds';
+import { createSessionManager } from '../sessions';
+import { createAgentManager } from '../agents';
+import { createChannelManager } from '../channels';
+import { createPairingService } from '../pairing';
+import { createMemoryService } from '../memory';
+import { createCronService, type CronService } from '../cron';
+import { createCredentialsManager } from '../credentials';
+import { createCommandRegistry, createDefaultCommands } from '../commands/registry';
+import { createWebhookManager } from '../automation';
+import { createWebhookTool, WebhookTool } from '../tools/webhooks';
+import { createProviders, createProviderHealthMonitor, ProviderHealthMonitor } from '../providers';
+import { createMonitoringService, MonitoringService } from '../monitoring';
+import { createEmbeddingsService } from '../embeddings';
+import { createMarketIndexService } from '../market-index';
+import chokidar, { FSWatcher } from 'chokidar';
+import path from 'path';
+import { loadConfig, CONFIG_FILE } from '../utils/config';
+import { configureHttpClient } from '../utils/http';
+import { normalizeIncomingMessage } from '../messages/unified';
 
 // =============================================================================
 // TYPES
@@ -344,26 +369,860 @@ export function createGatewayServer(config?: GatewayConfig): GatewayServer {
   return new GatewayServer(config);
 }
 
-/** Create gateway from full application config (for CLI compatibility) */
-export async function createGateway(config: { gateway: { port?: number; auth?: { token?: string; type?: string }; host?: string; path?: string } }): Promise<GatewayServer> {
-  // Normalize the config with defaults
-  const gw = config.gateway;
+export interface AppGateway {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
 
-  // Convert simple auth config to full auth config
-  let auth: GatewayConfig['auth'] = { type: 'none' };
-  if (gw.auth?.token) {
-    auth = { type: 'token', tokens: [gw.auth.token] };
-  } else if (gw.auth?.type === 'token' || gw.auth?.type === 'basic' || gw.auth?.type === 'none') {
-    auth = gw.auth as GatewayConfig['auth'];
+/**
+ * Create the full application gateway (HTTP + channels + agent).
+ *
+ * This wires together:
+ * - HTTP/WebSocket server (for webchat + health)
+ * - Channel manager (Telegram/Slack/etc)
+ * - Sessions, feeds, DB, memory
+ * - Command registry and command handling
+ * - Agent manager for non-command messages
+ */
+export async function createGateway(config: Config): Promise<AppGateway> {
+  let currentConfig = config;
+  configureHttpClient(currentConfig.http);
+  const configPath = process.env.CLODDS_CONFIG_PATH || CONFIG_FILE;
+  const db = createDatabase();
+  try {
+    const runner = createMigrationRunner(db);
+    runner.migrate();
+  } catch (error) {
+    logger.error({ error }, 'Database migration failed');
+    throw error;
+  }
+  let feeds = await createFeedManager(config.feeds);
+  const sessions = createSessionManager(db, config.session);
+  const memory = createMemoryService(db);
+  const pairing = createPairingService(db);
+  const webhookManager = createWebhookManager();
+  const providerManager = createProviders({
+    anthropicKey: process.env.ANTHROPIC_API_KEY,
+    openaiKey: process.env.OPENAI_API_KEY,
+    ollamaUrl: process.env.OLLAMA_URL,
+    groqKey: process.env.GROQ_API_KEY,
+    togetherKey: process.env.TOGETHER_API_KEY,
+    fireworksKey: process.env.FIREWORKS_API_KEY,
+    geminiKey: process.env.GEMINI_API_KEY,
+  });
+  const providerHealth: ProviderHealthMonitor | null =
+    providerManager.list().length > 0
+      ? createProviderHealthMonitor(providerManager)
+      : null;
+  let monitoring: MonitoringService | null = null;
+
+  const commands = createCommandRegistry();
+  commands.registerMany(createDefaultCommands());
+
+  const httpGateway = createHttpGatewayServer(config.gateway, webhookManager);
+
+  let channels: Awaited<ReturnType<typeof createChannelManager>> | null = null;
+  const watchers: FSWatcher[] = [];
+  let started = false;
+  let reloadInFlight: Promise<void> | null = null;
+  let pendingReload = false;
+  let channelRateLimitCleanupInterval: NodeJS.Timeout | null = null;
+  let positionPriceUpdateInterval: NodeJS.Timeout | null = null;
+  let marketCacheCleanupInterval: NodeJS.Timeout | null = null;
+  let marketIndexSyncInterval: NodeJS.Timeout | null = null;
+  const channelRateLimiters = new Map<string, { config: RateLimitConfig; limiter: RateLimiter }>();
+  const embeddings = createEmbeddingsService(db);
+  const marketIndex = createMarketIndexService(db, embeddings, {
+    platformWeights: config.marketIndex?.platformWeights,
+  });
+  const cronCredentials = createCredentialsManager(db);
+  let cronService: CronService | null = null;
+
+  const sendMessage = async (message: OutgoingMessage): Promise<string | null> => {
+    if (!channels) {
+      logger.warn({ platform: message.platform }, 'Channel manager not ready; dropping message');
+      return null;
+    }
+    return channels.send(message);
+  };
+
+  const editMessage = async (message: OutgoingMessage & { messageId: string }): Promise<void> => {
+    if (!channels) {
+      logger.warn({ platform: message.platform }, 'Channel manager not ready; dropping edit');
+      return;
+    }
+    await channels.edit(message);
+  };
+
+  const deleteMessage = async (message: OutgoingMessage & { messageId: string }): Promise<void> => {
+    if (!channels) {
+      logger.warn({ platform: message.platform }, 'Channel manager not ready; dropping delete');
+      return;
+    }
+    await channels.delete(message);
+  };
+
+  const reactMessage = async (message: ReactionMessage): Promise<void> => {
+    if (!channels) {
+      logger.warn({ platform: message.platform }, 'Channel manager not ready; dropping reaction');
+      return;
+    }
+    await channels.react(message);
+  };
+
+  const createPoll = async (message: PollMessage): Promise<string | null> => {
+    if (!channels) {
+      logger.warn({ platform: message.platform }, 'Channel manager not ready; dropping poll');
+      return null;
+    }
+    return channels.sendPoll(message);
+  };
+
+  const startMonitoring = () => {
+    monitoring?.stop();
+    monitoring = createMonitoringService({
+      config: currentConfig.monitoring,
+      providerHealth,
+      sendMessage,
+      resolveAccountId: (target) => {
+        if (target.accountId) return target.accountId;
+        if (!target.platform || !target.chatId) return undefined;
+        const session = db.getLatestSessionForChat(target.platform, target.chatId);
+        return session?.accountId;
+      },
+    });
+    monitoring.start();
+  };
+
+  async function startCronService(): Promise<void> {
+    const cronEnabled = currentConfig.cron?.enabled !== false;
+    if (!cronEnabled) {
+      cronService?.stop();
+      cronService = null;
+      logger.info('Cron service disabled');
+      return;
+    }
+
+    cronService?.stop();
+    cronService = createCronService({
+      db,
+      feeds,
+      sendMessage,
+      credentials: cronCredentials,
+      config: currentConfig,
+    });
+
+    await cronService.start();
   }
 
-  const gatewayConfig: GatewayConfig = {
-    port: gw.port ?? 8080,
-    host: gw.host ?? '0.0.0.0',
-    path: gw.path ?? '/gateway',
-    heartbeatInterval: 45000,
-    maxClients: 1000,
-    auth,
+  async function updatePositionPrices(): Promise<void> {
+    const positions = db.listPositionsForPricing();
+    if (positions.length === 0) return;
+
+    const grouped = new Map<string, typeof positions>();
+    for (const position of positions) {
+      const key = `${position.platform}:${position.marketId}`;
+      const list = grouped.get(key) || [];
+      list.push(position);
+      grouped.set(key, list);
+    }
+
+    for (const [key, entries] of grouped.entries()) {
+      const [platform, marketId] = key.split(':');
+      try {
+        const market = await feeds.getMarket(marketId, platform);
+        if (!market) continue;
+
+        for (const position of entries) {
+          const outcome = market.outcomes.find((o) =>
+            o.id === position.outcomeId ||
+            o.name.toLowerCase() === position.outcome.toLowerCase()
+          );
+          if (!outcome) continue;
+          if (Number.isFinite(outcome.price)) {
+            db.updatePositionPrice(position.id, outcome.price);
+          }
+        }
+      } catch (error) {
+        logger.warn({ error, platform, marketId }, 'Failed to update position prices for market');
+      }
+    }
+
+    const positionConfig = currentConfig.positions ?? {};
+    if (positionConfig.pnlSnapshotsEnabled !== false) {
+      const userIds = new Set(positions.map((pos) => pos.userId));
+      for (const userId of userIds) {
+        const userPositions = db.getPositions(userId);
+        if (userPositions.length === 0) continue;
+
+        let totalValue = 0;
+        let totalPnl = 0;
+        let totalCostBasis = 0;
+        const byPlatform: Record<string, { value: number; pnl: number }> = {};
+
+        for (const pos of userPositions) {
+          const value = pos.shares * pos.currentPrice;
+          const costBasis = pos.shares * pos.avgPrice;
+          const pnl = value - costBasis;
+
+          totalValue += value;
+          totalPnl += pnl;
+          totalCostBasis += costBasis;
+
+          const agg = byPlatform[pos.platform] || { value: 0, pnl: 0 };
+          agg.value += value;
+          agg.pnl += pnl;
+          byPlatform[pos.platform] = agg;
+        }
+
+        const totalPnlPct = totalCostBasis > 0 ? totalPnl / totalCostBasis : 0;
+
+        db.createPortfolioSnapshot({
+          userId,
+          totalValue,
+          totalPnl,
+          totalPnlPct,
+          totalCostBasis,
+          positionsCount: userPositions.length,
+          byPlatform,
+        });
+      }
+
+      const historyDays = positionConfig.pnlHistoryDays ?? 90;
+      if (historyDays > 0) {
+        const cutoffMs = Date.now() - historyDays * 24 * 60 * 60 * 1000;
+        db.deletePortfolioSnapshotsBefore(cutoffMs);
+      }
+    }
+  }
+
+  function startMarketCacheCleanup(): void {
+    const cacheConfig = currentConfig.marketCache ?? {};
+    if (cacheConfig.enabled === false) return;
+    const ttlMs = cacheConfig.ttlMs ?? 30 * 60 * 1000;
+    const intervalMs = cacheConfig.cleanupIntervalMs ?? 15 * 60 * 1000;
+
+    const runCleanup = () => {
+      const cutoff = Date.now() - ttlMs;
+      const removed = db.pruneMarketCache(cutoff);
+      if (removed > 0) {
+        logger.info({ removed, cutoff }, 'Market cache cleanup completed');
+      }
+    };
+
+    runCleanup();
+    if (!marketCacheCleanupInterval) {
+      marketCacheCleanupInterval = setInterval(() => {
+        runCleanup();
+      }, intervalMs);
+      logger.info({ ttlMs, intervalMs }, 'Market cache cleanup started');
+    }
+  }
+
+  function startMarketIndexSync(): void {
+    const indexConfig = currentConfig.marketIndex ?? {};
+    if (indexConfig.enabled === false) return;
+    const intervalMs = indexConfig.syncIntervalMs ?? 6 * 60 * 60 * 1000;
+    const staleAfterMs = indexConfig.staleAfterMs ?? 7 * 24 * 60 * 60 * 1000;
+    const limitPerPlatform = indexConfig.limitPerPlatform ?? 300;
+    const status = indexConfig.status ?? 'open';
+    const excludeSports = indexConfig.excludeSports ?? true;
+    const platforms = indexConfig.platforms ?? ['polymarket', 'kalshi', 'manifold', 'metaculus'];
+    const minVolume24h = indexConfig.minVolume24h ?? 0;
+    const minLiquidity = indexConfig.minLiquidity ?? 0;
+    const minOpenInterest = indexConfig.minOpenInterest ?? 0;
+    const minPredictions = indexConfig.minPredictions ?? 0;
+    const excludeResolved = indexConfig.excludeResolved ?? false;
+
+    const runSync = async () => {
+      try {
+        const result = await marketIndex.sync({
+          platforms,
+          limitPerPlatform,
+          status,
+          excludeSports,
+          minVolume24h,
+          minLiquidity,
+          minOpenInterest,
+          minPredictions,
+          excludeResolved,
+          prune: true,
+          staleAfterMs,
+        });
+        logger.info({ result }, 'Market index sync completed');
+      } catch (error) {
+        logger.warn({ error }, 'Market index sync failed');
+      }
+    };
+
+    void runSync();
+    if (!marketIndexSyncInterval) {
+      marketIndexSyncInterval = setInterval(() => {
+        void runSync();
+      }, intervalMs);
+      logger.info(
+        {
+          intervalMs,
+          platforms,
+          limitPerPlatform,
+          status,
+          minVolume24h,
+          minLiquidity,
+          minOpenInterest,
+          minPredictions,
+          staleAfterMs,
+        },
+        'Market index sync scheduled'
+      );
+    }
+  }
+
+  const getConfig = (): Config => currentConfig;
+  let webhookTool: WebhookTool | undefined;
+  let agents = await createAgentManager(
+    currentConfig,
+    feeds,
+    db,
+    sessions,
+    sendMessage,
+    editMessage,
+    deleteMessage,
+    reactMessage,
+    createPoll,
+    memory,
+    getConfig,
+    () => webhookTool
+  );
+
+  webhookTool = createWebhookTool({
+    manager: webhookManager,
+    gatewayPort: currentConfig.gateway.port,
+    sessions,
+    commands,
+    feeds,
+    db,
+    memory,
+    sendMessage,
+    handleAgentMessage: (message, session) => agents.handleMessage(message, session),
+  });
+
+  let skillWatcher: FSWatcher | null = null;
+  let skillReloadTimer: NodeJS.Timeout | null = null;
+  let configReloadTimer: NodeJS.Timeout | null = null;
+
+  function getSkillWatchPaths(cfg: Config): string[] {
+    const bundledDir = path.join(__dirname, '..', 'skills', 'bundled');
+    const managedDir = path.join(process.cwd(), '.clodds', 'skills');
+    const workspaceDir = path.join(cfg.agents.defaults.workspace, 'skills');
+    return [bundledDir, managedDir, workspaceDir];
+  }
+
+  function scheduleSkillReload(trigger: string): void {
+    if (skillReloadTimer) {
+      clearTimeout(skillReloadTimer);
+    }
+    skillReloadTimer = setTimeout(() => {
+      logger.info({ trigger }, 'Reloading skills');
+      agents.reloadSkills();
+    }, 150);
+  }
+
+  function setupSkillWatcher(): void {
+    if (skillWatcher) {
+      skillWatcher.close().catch(() => {});
+    }
+
+    const paths = getSkillWatchPaths(currentConfig);
+    skillWatcher = chokidar.watch(paths, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+    });
+
+    skillWatcher.on('add', () => scheduleSkillReload('add'));
+    skillWatcher.on('change', () => scheduleSkillReload('change'));
+    skillWatcher.on('unlink', () => scheduleSkillReload('unlink'));
+
+    watchers.push(skillWatcher);
+    logger.info({ paths }, 'Skill hot-reload watcher started');
+  }
+
+  async function rebuildRuntime(reason: string, workspaceChanged: boolean): Promise<void> {
+    if (!started) return;
+
+    if (reloadInFlight) {
+      pendingReload = true;
+      logger.info({ reason }, 'Reload already in progress; queued follow-up reload');
+      await reloadInFlight;
+      return;
+    }
+
+    reloadInFlight = (async () => {
+      logger.info({ reason }, 'Rebuilding feeds/channels/agent from updated config');
+
+      const oldChannels = channels;
+      const oldFeeds = feeds;
+      const oldAgents = agents;
+
+      monitoring?.stop();
+      monitoring = null;
+
+      try {
+        await oldChannels?.stop();
+      } catch (error) {
+        logger.warn({ error }, 'Failed to stop old channels during reload');
+      }
+
+      try {
+        await oldFeeds.stop();
+      } catch (error) {
+        logger.warn({ error }, 'Failed to stop old feeds during reload');
+      }
+
+      try {
+        oldAgents.dispose();
+      } catch (error) {
+        logger.warn({ error }, 'Failed to dispose old agent during reload');
+      }
+
+      feeds = await createFeedManager(currentConfig.feeds);
+      agents = await createAgentManager(
+        currentConfig,
+        feeds,
+        db,
+        sessions,
+        sendMessage,
+        editMessage,
+        deleteMessage,
+        reactMessage,
+        createPoll,
+        memory,
+        getConfig,
+        () => webhookTool
+      );
+
+      channels = await createChannelManager(
+        currentConfig.channels,
+        {
+          onMessage: handleIncomingMessage,
+          pairing,
+          commands,
+        },
+        { offlineQueue: currentConfig.messages?.offlineQueue }
+      );
+      httpGateway.setChannelWebhookHandler(async (platform, event, req) => {
+        if (!channels) {
+          logger.warn({ platform }, 'Channel webhook received before channels initialized');
+          return null;
+        }
+        const adapter = channels.getAdapters()[platform];
+        if (!adapter?.handleEvent) {
+          logger.warn({ platform }, 'Channel webhook handler not registered');
+          return null;
+        }
+        return adapter.handleEvent(event, req);
+      });
+
+      const wss = httpGateway.getWebSocketServer();
+      if (wss) {
+        channels.attachWebSocket(wss);
+      }
+
+      await feeds.start();
+      await channels.start();
+      await startCronService();
+      startMonitoring();
+
+      if (workspaceChanged) {
+        setupSkillWatcher();
+      } else {
+        scheduleSkillReload('config');
+      }
+
+      logger.info('Runtime rebuild complete');
+    })()
+      .catch((error) => {
+        logger.error({ error }, 'Runtime rebuild failed');
+      })
+      .finally(async () => {
+        reloadInFlight = null;
+        if (pendingReload) {
+          pendingReload = false;
+          await rebuildRuntime('pending reload', true);
+        }
+      });
+
+    await reloadInFlight;
+  }
+
+  function setupConfigWatcher(): void {
+    const watcher = chokidar.watch(configPath, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+    });
+
+    const scheduleConfigReload = () => {
+      if (configReloadTimer) {
+        clearTimeout(configReloadTimer);
+      }
+
+      configReloadTimer = setTimeout(async () => {
+        try {
+          const previousWorkspace = currentConfig.agents.defaults.workspace;
+          const next = await loadConfig(configPath);
+          currentConfig = next;
+          configureHttpClient(currentConfig.http);
+
+          const workspaceChanged = next.agents.defaults.workspace !== previousWorkspace;
+          agents.reloadConfig(next);
+          await rebuildRuntime('config change', workspaceChanged);
+
+          logger.info({ configPath }, 'Config hot-reloaded');
+        } catch (error) {
+          logger.error({ error, configPath }, 'Failed to hot-reload config');
+        }
+      }, 250);
+    };
+
+    watcher.on('add', scheduleConfigReload);
+    watcher.on('change', scheduleConfigReload);
+    watcher.on('unlink', scheduleConfigReload);
+
+    watchers.push(watcher);
+    logger.info({ configPath }, 'Config hot-reload watcher started');
+  }
+
+  function getChannelRateLimitConfig(platform: string): RateLimitConfig | null {
+    const channelConfig =
+      (currentConfig.channels as Record<string, { rateLimit?: RateLimitConfig }> | undefined)?.[
+        platform
+      ];
+    if (!channelConfig?.rateLimit) return null;
+    return channelConfig.rateLimit;
+  }
+
+  function getChannelRateLimiter(
+    platform: string,
+    config: RateLimitConfig
+  ): { config: RateLimitConfig; limiter: RateLimiter } {
+    const existing = channelRateLimiters.get(platform);
+    if (
+      existing &&
+      existing.config.maxRequests === config.maxRequests &&
+      existing.config.windowMs === config.windowMs &&
+      existing.config.perUser === config.perUser
+    ) {
+      return existing;
+    }
+
+    const limiter = new RateLimiter(config);
+    const entry = { config, limiter };
+    channelRateLimiters.set(platform, entry);
+    return entry;
+  }
+
+  const handleIncomingMessage = async (message: IncomingMessage): Promise<void> => {
+    const normalized = normalizeIncomingMessage(message);
+    const channelRateLimit = getChannelRateLimitConfig(normalized.platform);
+    if (channelRateLimit) {
+      const limiterEntry = getChannelRateLimiter(normalized.platform, channelRateLimit);
+      const rateLimitKey = channelRateLimit.perUser
+        ? `${normalized.platform}:${normalized.userId}`
+        : `${normalized.platform}:global`;
+      const rateLimitResult = limiterEntry.limiter.check(rateLimitKey);
+      if (!rateLimitResult.allowed) {
+        const resetInSeconds = Math.ceil(rateLimitResult.resetIn / 1000);
+        logger.warn(
+          { platform: normalized.platform, userId: normalized.userId, resetInSeconds },
+          'Channel rate limit exceeded'
+        );
+        await sendMessage({
+          platform: normalized.platform,
+          chatId: normalized.chatId,
+          text: `Rate limit exceeded for ${normalized.platform}. Try again in ${resetInSeconds}s.`,
+          parseMode: 'Markdown',
+          thread: normalized.thread,
+        });
+        return;
+      }
+    }
+    const session = await sessions.getOrCreateSession(normalized);
+
+    const commandResponse = await commands.handle(normalized, {
+      session,
+      sessions,
+      feeds,
+      db,
+      memory,
+      send: sendMessage,
+    });
+
+    if (commandResponse) {
+      await sendMessage({
+        platform: normalized.platform,
+        chatId: normalized.chatId,
+        text: commandResponse,
+        parseMode: 'Markdown',
+        thread: normalized.thread,
+      });
+      return;
+    }
+
+    const responseText = await agents.handleMessage(normalized, session);
+    if (responseText !== null) {
+      await sendMessage({
+        platform: normalized.platform,
+        chatId: normalized.chatId,
+        text: responseText,
+        parseMode: 'Markdown',
+        thread: normalized.thread,
+      });
+    }
   };
-  return new GatewayServer(gatewayConfig);
+
+  channels = await createChannelManager(
+    config.channels,
+    {
+      onMessage: handleIncomingMessage,
+      pairing,
+      commands,
+    },
+    { offlineQueue: config.messages?.offlineQueue }
+  );
+
+  httpGateway.setChannelWebhookHandler(async (platform, event, req) => {
+    if (!channels) {
+      logger.warn({ platform }, 'Channel webhook received before channels initialized');
+      return null;
+    }
+    const adapter = channels.getAdapters()[platform];
+    if (!adapter?.handleEvent) {
+      logger.warn({ platform }, 'Channel webhook handler not registered');
+      return null;
+    }
+    return adapter.handleEvent(event, req);
+  });
+
+  httpGateway.setMarketIndexHandler(async (req) => {
+    if (!currentConfig.marketIndex || currentConfig.marketIndex.enabled === false) {
+      return { error: 'Market index disabled', status: 503 };
+    }
+
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!query) {
+      return { error: 'Missing query parameter: q', status: 400 };
+    }
+
+    const platform = typeof req.query.platform === 'string' ? req.query.platform : undefined;
+    const limit = req.query.limit ? Number.parseInt(String(req.query.limit), 10) : undefined;
+    const maxCandidates = req.query.maxCandidates
+      ? Number.parseInt(String(req.query.maxCandidates), 10)
+      : undefined;
+    const minScore = req.query.minScore ? Number.parseFloat(String(req.query.minScore)) : undefined;
+
+    let platformWeights: Record<string, number> | undefined;
+    if (typeof req.query.platformWeights === 'string') {
+      try {
+        platformWeights = JSON.parse(req.query.platformWeights);
+      } catch {
+        return { error: 'Invalid platformWeights JSON', status: 400 };
+      }
+    }
+
+    const results = await marketIndex.search({
+      query,
+      platform: platform as any,
+      limit,
+      maxCandidates,
+      minScore,
+      platformWeights: platformWeights as any,
+    });
+
+    return {
+      results: results.map((r) => ({
+        score: Number(r.score.toFixed(4)),
+        market: {
+          platform: r.item.platform,
+          id: r.item.marketId,
+          slug: r.item.slug,
+          question: r.item.question,
+          description: r.item.description,
+          url: r.item.url,
+          status: r.item.status,
+          endDate: r.item.endDate,
+          resolved: r.item.resolved,
+          volume24h: r.item.volume24h,
+          liquidity: r.item.liquidity,
+          openInterest: r.item.openInterest,
+          predictions: r.item.predictions,
+        },
+      })),
+    };
+  });
+
+  httpGateway.setMarketIndexStatsHandler(async (req) => {
+    if (!currentConfig.marketIndex || currentConfig.marketIndex.enabled === false) {
+      return { error: 'Market index disabled', status: 503 };
+    }
+
+    const platforms = typeof req.query.platforms === 'string'
+      ? req.query.platforms.split(',').map((p) => p.trim()).filter(Boolean)
+      : undefined;
+
+    const stats = marketIndex.stats(platforms as any);
+    return { stats };
+  });
+
+  httpGateway.setMarketIndexSyncHandler(async (req) => {
+    if (!currentConfig.marketIndex || currentConfig.marketIndex.enabled === false) {
+      return { error: 'Market index disabled', status: 503 };
+    }
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const platforms = Array.isArray(body.platforms)
+      ? body.platforms
+      : typeof body.platforms === 'string'
+        ? body.platforms.split(',').map((p) => p.trim()).filter(Boolean)
+        : undefined;
+    const limitPerPlatform = typeof body.limitPerPlatform === 'number' ? body.limitPerPlatform : undefined;
+    const status = typeof body.status === 'string' ? body.status : undefined;
+    const excludeSports = typeof body.excludeSports === 'boolean' ? body.excludeSports : undefined;
+    const minVolume24h = typeof body.minVolume24h === 'number' ? body.minVolume24h : undefined;
+    const minLiquidity = typeof body.minLiquidity === 'number' ? body.minLiquidity : undefined;
+    const minOpenInterest = typeof body.minOpenInterest === 'number' ? body.minOpenInterest : undefined;
+    const minPredictions = typeof body.minPredictions === 'number' ? body.minPredictions : undefined;
+    const excludeResolved = typeof body.excludeResolved === 'boolean' ? body.excludeResolved : undefined;
+    const prune = typeof body.prune === 'boolean' ? body.prune : undefined;
+    const staleAfterMs = typeof body.staleAfterMs === 'number' ? body.staleAfterMs : undefined;
+
+    const result = await marketIndex.sync({
+      platforms: platforms as any,
+      limitPerPlatform,
+      status: status as any,
+      excludeSports,
+      minVolume24h,
+      minLiquidity,
+      minOpenInterest,
+      minPredictions,
+      excludeResolved,
+      prune,
+      staleAfterMs,
+    });
+
+    return { result };
+  });
+
+  return {
+    async start(): Promise<void> {
+      logger.info('Starting gateway services');
+
+      await httpGateway.start();
+
+      const wss = httpGateway.getWebSocketServer();
+      if (wss) {
+        channels!.attachWebSocket(wss);
+      }
+
+      await feeds.start();
+      await channels!.start();
+      providerHealth?.start();
+      await startCronService();
+      startMonitoring();
+
+      started = true;
+      if (!channelRateLimitCleanupInterval) {
+        channelRateLimitCleanupInterval = setInterval(() => {
+          for (const entry of channelRateLimiters.values()) {
+            entry.limiter.cleanup();
+          }
+        }, 5 * 60 * 1000);
+      }
+
+      startMarketCacheCleanup();
+      startMarketIndexSync();
+
+      const positionConfig = currentConfig.positions ?? {};
+      const positionUpdatesEnabled = positionConfig.enabled !== false;
+      if (positionUpdatesEnabled) {
+        const intervalMs = positionConfig.priceUpdateIntervalMs ?? 5 * 60 * 1000;
+        if (!positionPriceUpdateInterval) {
+          updatePositionPrices().catch((error) => {
+            logger.warn({ error }, 'Initial position price update failed');
+          });
+          positionPriceUpdateInterval = setInterval(() => {
+            updatePositionPrices().catch((error) => {
+              logger.warn({ error }, 'Position price update failed');
+            });
+          }, intervalMs);
+          logger.info({ intervalMs }, 'Position price updater started');
+        }
+      }
+      setupSkillWatcher();
+      setupConfigWatcher();
+
+      logger.info({ port: currentConfig.gateway.port }, 'Gateway started');
+    },
+
+    async stop(): Promise<void> {
+      logger.info('Stopping gateway services');
+
+      if (cronService) {
+        cronService.stop();
+        cronService = null;
+      }
+
+      for (const watcher of watchers) {
+        try {
+          await watcher.close();
+        } catch (error) {
+          logger.warn({ error }, 'Failed to close watcher cleanly');
+        }
+      }
+      if (skillReloadTimer) {
+        clearTimeout(skillReloadTimer);
+        skillReloadTimer = null;
+      }
+      if (configReloadTimer) {
+        clearTimeout(configReloadTimer);
+        configReloadTimer = null;
+      }
+      if (reloadInFlight) {
+        await reloadInFlight;
+      }
+      if (channelRateLimitCleanupInterval) {
+        clearInterval(channelRateLimitCleanupInterval);
+        channelRateLimitCleanupInterval = null;
+      }
+      if (positionPriceUpdateInterval) {
+        clearInterval(positionPriceUpdateInterval);
+        positionPriceUpdateInterval = null;
+      }
+      if (marketCacheCleanupInterval) {
+        clearInterval(marketCacheCleanupInterval);
+        marketCacheCleanupInterval = null;
+      }
+      if (marketIndexSyncInterval) {
+        clearInterval(marketIndexSyncInterval);
+        marketIndexSyncInterval = null;
+      }
+
+      agents.dispose();
+      providerHealth?.stop();
+      monitoring?.stop();
+      monitoring = null;
+      await channels?.stop();
+      await feeds.stop();
+      await httpGateway.stop();
+      sessions.dispose();
+      started = false;
+
+      // Close DB if it exposes a close method
+      try {
+        await db.close();
+      } catch (error) {
+        logger.warn({ error }, 'Failed to close database cleanly');
+      }
+
+      logger.info('Gateway stopped');
+    },
+  };
 }

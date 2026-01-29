@@ -21,30 +21,69 @@ import {
 import { Database } from '../db/index.js';
 import { logger } from '../utils/logger.js';
 
-// Encryption key from environment (32 bytes for AES-256)
-const ENCRYPTION_KEY = process.env.CLODDS_CREDENTIAL_KEY ||
-  'default-key-change-me-in-production';
+// Encryption key from environment
+const ENCRYPTION_KEY = process.env.CLODDS_CREDENTIAL_KEY;
+const HAS_ENCRYPTION_KEY = Boolean(ENCRYPTION_KEY && ENCRYPTION_KEY.trim().length > 0);
+
+const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+const LEGACY_ALGORITHM = 'aes-256-cbc';
+const LEGACY_SALT = 'salt';
+const VERSION_PREFIX = 'v2';
 
 /**
  * Encrypt credentials for storage
  */
 function encrypt(data: string): string {
-  const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  if (!HAS_ENCRYPTION_KEY) {
+    throw new Error('CLODDS_CREDENTIAL_KEY is required to encrypt credentials');
+  }
+
+  const salt = crypto.randomBytes(16);
+  const key = crypto.scryptSync(ENCRYPTION_KEY as string, salt, 32);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv);
   let encrypted = cipher.update(data, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  return iv.toString('hex') + ':' + encrypted;
+  const authTag = cipher.getAuthTag();
+  return [
+    VERSION_PREFIX,
+    salt.toString('hex'),
+    iv.toString('hex'),
+    authTag.toString('hex'),
+    encrypted,
+  ].join(':');
 }
 
 /**
  * Decrypt credentials from storage
  */
 function decrypt(encryptedData: string): string {
-  const [ivHex, encrypted] = encryptedData.split(':');
-  const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
+  if (!HAS_ENCRYPTION_KEY) {
+    throw new Error('CLODDS_CREDENTIAL_KEY is required to decrypt credentials');
+  }
+
+  const parts = encryptedData.split(':');
+  if (parts[0] === VERSION_PREFIX && parts.length >= 5) {
+    const [, saltHex, ivHex, authTagHex, encrypted] = parts;
+    const salt = Buffer.from(saltHex, 'hex');
+    const iv = Buffer.from(ivHex, 'hex');
+    const authTag = Buffer.from(authTagHex, 'hex');
+    const key = crypto.scryptSync(ENCRYPTION_KEY as string, salt, 32);
+    const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, key, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  }
+
+  // Legacy v1 (aes-256-cbc)
+  const [ivHex, encrypted] = parts;
+  if (!ivHex || !encrypted) {
+    throw new Error('Invalid encrypted credential payload');
+  }
+  const key = crypto.scryptSync(ENCRYPTION_KEY as string, LEGACY_SALT, 32);
   const iv = Buffer.from(ivHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+  const decipher = crypto.createDecipheriv(LEGACY_ALGORITHM, key, iv);
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
   return decrypted;
@@ -108,15 +147,28 @@ const MAX_COOLDOWN_MS = 24 * 60 * 60 * 1000;  // 24 hours
 const MAX_FAILED_ATTEMPTS = 5;
 
 export function createCredentialsManager(db: Database): CredentialsManager {
+  if (!HAS_ENCRYPTION_KEY) {
+    logger.warn('CLODDS_CREDENTIAL_KEY is not set. Credential encryption is disabled and operations will fail.');
+  }
   return {
     async setCredentials(userId, platform, credentials) {
       const encryptedData = encrypt(JSON.stringify(credentials));
 
       const existing = db.getTradingCredentials(userId, platform);
+      const isKalshiLegacy = platform === 'kalshi'
+        && 'email' in credentials
+        && Boolean(credentials.email && (credentials as KalshiCredentials).password)
+        && !('apiKeyId' in credentials && (credentials as KalshiCredentials).apiKeyId);
+      const mode = platform === 'polymarket'
+        ? 'wallet'
+        : isKalshiLegacy
+          ? 'legacy_login'
+          : 'api_key';
 
       if (existing) {
         db.updateTradingCredentials({
           ...existing,
+          mode,
           encryptedData,
           enabled: true,
           failedAttempts: 0,
@@ -127,7 +179,7 @@ export function createCredentialsManager(db: Database): CredentialsManager {
         db.createTradingCredentials({
           userId,
           platform,
-          mode: platform === 'polymarket' ? 'wallet' : 'api_key',
+          mode,
           encryptedData,
           enabled: true,
           failedAttempts: 0,
@@ -151,7 +203,28 @@ export function createCredentialsManager(db: Database): CredentialsManager {
 
       try {
         const decrypted = decrypt(creds.encryptedData);
-        return JSON.parse(decrypted) as T;
+        const parsed = JSON.parse(decrypted) as T;
+
+        if (platform === 'kalshi') {
+          const kalshi = parsed as unknown as KalshiCredentials;
+          const hasApiKey = Boolean(kalshi.apiKeyId && kalshi.privateKeyPem);
+          const hasLegacy = Boolean(kalshi.email && kalshi.password) && !kalshi.apiKeyId;
+          const desiredMode = hasLegacy ? 'legacy_login' : hasApiKey ? 'api_key' : creds.mode;
+
+          if (desiredMode !== creds.mode) {
+            db.updateTradingCredentials({
+              ...creds,
+              mode: desiredMode,
+              updatedAt: new Date(),
+            });
+
+            if (hasLegacy) {
+              logger.warn(`Kalshi credentials for ${userId} use legacy login; migrate to API key auth.`);
+            }
+          }
+        }
+
+        return parsed as T;
       } catch (err) {
         logger.error(`Failed to decrypt credentials for ${userId}/${platform}: ${err}`);
         return null;

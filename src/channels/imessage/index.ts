@@ -12,12 +12,14 @@
 import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
+import { promises as fsPromises } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { logger } from '../../utils/logger';
 import type { ChannelAdapter, ChannelCallbacks } from '../index';
-import type { IncomingMessage, OutgoingMessage } from '../../types';
+import type { IncomingMessage, OutgoingMessage, MessageAttachment } from '../../types';
 import type { PairingService } from '../../pairing/index';
+import { resolveAttachment, guessAttachmentType } from '../../utils/attachments';
 
 const execAsync = promisify(exec);
 
@@ -31,6 +33,8 @@ export interface iMessageConfig {
   groupAllowlist?: string[];
   /** Poll interval in ms (default: 2000) */
   pollInterval?: number;
+  /** Per-group policies */
+  groups?: Record<string, { requireMention?: boolean }>;
 }
 
 /** Message from Messages.app database */
@@ -115,7 +119,9 @@ export async function createiMessageChannel(
         LEFT JOIN handle h ON m.handle_id = h.ROWID
         WHERE m.ROWID > ${lastMessageId}
           AND m.is_from_me = 0
-          AND m.text IS NOT NULL
+          AND (m.text IS NOT NULL OR EXISTS (
+            SELECT 1 FROM message_attachment_join maj WHERE maj.message_id = m.ROWID
+          ))
         ORDER BY m.ROWID ASC
         LIMIT 100
       `;
@@ -156,6 +162,20 @@ export async function createiMessageChannel(
           continue;
         }
 
+        const attachments = await getAttachmentsForMessage(msg.rowid);
+
+        if (!msg.text && attachments.length === 0) {
+          continue;
+        }
+
+        if (isGroup) {
+          const requireMention = config.groups?.[msg.chat_id]?.requireMention ?? false;
+          if (requireMention) {
+            // iMessage chat.db doesn't expose mention metadata reliably.
+            continue;
+          }
+        }
+
         // Create incoming message
         const message: IncomingMessage = {
           id: msg.guid,
@@ -163,7 +183,8 @@ export async function createiMessageChannel(
           userId: sender,
           chatId: isGroup ? msg.chat_id : sender,
           chatType: isGroup ? 'group' : 'dm',
-          text: msg.text,
+          text: msg.text || '',
+          attachments: attachments.length > 0 ? attachments : undefined,
           timestamp: new Date(msg.date / 1000000 + 978307200000), // Apple epoch
         };
 
@@ -195,42 +216,135 @@ export async function createiMessageChannel(
   }
 
   /** Send message via AppleScript */
-  async function sendMessage(message: OutgoingMessage): Promise<void> {
-    const escapedText = message.text
-      .replace(/\\/g, '\\\\')
-      .replace(/"/g, '\\"');
-
+  async function sendMessage(message: OutgoingMessage): Promise<string | null> {
     const chatId = message.chatId;
 
     // Determine if phone number or email
     const isPhone = /^\+?[0-9\s-]+$/.test(chatId);
     const service = isPhone ? 'SMS' : 'iMessage';
 
-    const script = `
-      tell application "Messages"
-        set targetService to 1st account whose service type = ${service}
-        set targetBuddy to participant "${chatId}" of targetService
-        send "${escapedText}" to targetBuddy
-      end tell
-    `;
+    const sendText = async (): Promise<void> => {
+      if (!message.text) return;
+      const escapedText = message.text
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"');
+
+      const script = `
+        tell application "Messages"
+          set targetService to 1st account whose service type = ${service}
+          set targetBuddy to participant "${chatId}" of targetService
+          send "${escapedText}" to targetBuddy
+        end tell
+      `;
+
+      await execAsync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`);
+      logger.debug({ chatId }, 'iMessage text sent');
+    };
+
+    const sendFile = async (filePath: string): Promise<void> => {
+      const script = `
+        tell application "Messages"
+          set targetService to 1st account whose service type = ${service}
+          set targetBuddy to participant "${chatId}" of targetService
+          send (POSIX file "${filePath}") to targetBuddy
+        end tell
+      `;
+      await execAsync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`);
+    };
 
     try {
-      await execAsync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`);
-      logger.debug({ chatId }, 'iMessage sent');
+      const attachments = message.attachments || [];
+      if (message.text) {
+        await sendText();
+      }
+
+      for (const attachment of attachments) {
+        if (attachment.url && attachment.url.startsWith('/')) {
+          await sendFile(attachment.url);
+          continue;
+        }
+
+        const resolved = await resolveAttachment(attachment);
+        if (!resolved) continue;
+
+        const tempPath = path.join(
+          os.tmpdir(),
+          `clodds-imessage-${Date.now()}-${resolved.filename}`
+        );
+        await fsPromises.writeFile(tempPath, resolved.buffer);
+        await sendFile(tempPath);
+        await fsPromises.unlink(tempPath).catch(() => {});
+      }
     } catch (error) {
       // Try alternative method for group chats
       if (chatId.includes('chat')) {
-        const groupScript = `
-          tell application "Messages"
-            set targetChat to chat id "${chatId}"
-            send "${escapedText}" to targetChat
-          end tell
-        `;
-        await execAsync(`osascript -e '${groupScript.replace(/'/g, "'\"'\"'")}'`);
+        const attachments = message.attachments || [];
+        if (message.text) {
+          const escapedText = message.text
+            .replace(/\\/g, '\\\\')
+            .replace(/"/g, '\\"');
+          const groupScript = `
+            tell application "Messages"
+              set targetChat to chat id "${chatId}"
+              send "${escapedText}" to targetChat
+            end tell
+          `;
+          await execAsync(`osascript -e '${groupScript.replace(/'/g, "'\"'\"'")}'`);
+        }
+
+        for (const attachment of attachments) {
+          const resolved = await resolveAttachment(attachment);
+          if (!resolved) continue;
+          const tempPath = path.join(
+            os.tmpdir(),
+            `clodds-imessage-${Date.now()}-${resolved.filename}`
+          );
+          await fsPromises.writeFile(tempPath, resolved.buffer);
+          const groupFileScript = `
+            tell application "Messages"
+              set targetChat to chat id "${chatId}"
+              send (POSIX file "${tempPath}") to targetChat
+            end tell
+          `;
+          await execAsync(`osascript -e '${groupFileScript.replace(/'/g, "'\"'\"'")}'`);
+          await fsPromises.unlink(tempPath).catch(() => {});
+        }
         logger.debug({ chatId }, 'iMessage sent to group');
       } else {
         throw error;
       }
+    }
+    return null;
+  }
+
+  async function getAttachmentsForMessage(messageId: number): Promise<MessageAttachment[]> {
+    try {
+      const query = `
+        SELECT
+          a.filename as filename,
+          a.mime_type as mime_type,
+          a.total_bytes as total_bytes
+        FROM message_attachment_join maj
+        JOIN attachment a ON a.ROWID = maj.attachment_id
+        WHERE maj.message_id = ${messageId}
+      `;
+      const { stdout } = await execAsync(
+        `sqlite3 -json "${dbPath}" "${query.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+        { maxBuffer: 10 * 1024 * 1024 }
+      );
+      if (!stdout.trim()) return [];
+      const rows = JSON.parse(stdout) as Array<{ filename?: string; mime_type?: string; total_bytes?: number }>;
+
+      return rows.map((row) => ({
+        type: guessAttachmentType(row.mime_type, row.filename),
+        url: row.filename,
+        filename: row.filename ? path.basename(row.filename) : undefined,
+        mimeType: row.mime_type,
+        size: row.total_bytes,
+      }));
+    } catch (error) {
+      logger.warn({ error }, 'Failed to fetch iMessage attachments');
+      return [];
     }
   }
 
@@ -261,8 +375,22 @@ export async function createiMessageChannel(
       logger.info('iMessage channel stopped');
     },
 
-    async sendMessage(message: OutgoingMessage): Promise<void> {
-      await sendMessage(message);
+    async sendMessage(message: OutgoingMessage): Promise<string | null> {
+      return sendMessage(message);
+    },
+
+    async editMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      logger.warn(
+        { chatId: message.chatId, messageId: message.messageId },
+        'iMessage does not support message editing via AppleScript'
+      );
+    },
+
+    async deleteMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      logger.warn(
+        { chatId: message.chatId, messageId: message.messageId },
+        'iMessage does not support message deletion via AppleScript'
+      );
     },
   };
 }

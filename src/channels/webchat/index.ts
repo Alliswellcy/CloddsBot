@@ -8,11 +8,11 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomUUID } from 'crypto';
 import { logger } from '../../utils/logger';
-import type { IncomingMessage, OutgoingMessage } from '../../types';
+import type { IncomingMessage, OutgoingMessage, MessageAttachment } from '../../types';
 
 export interface WebChatConfig {
   enabled: boolean;
-  // Auth handled via gateway token
+  authToken?: string;
 }
 
 export interface WebChatCallbacks {
@@ -22,7 +22,10 @@ export interface WebChatCallbacks {
 export interface WebChatChannel {
   start(wss: WebSocketServer): void;
   stop(): void;
-  sendMessage(msg: OutgoingMessage): Promise<void>;
+  sendMessage(msg: OutgoingMessage): Promise<string | null>;
+  isConnected?: (message?: OutgoingMessage) => boolean;
+  editMessage?: (msg: OutgoingMessage & { messageId: string }) => Promise<void>;
+  deleteMessage?: (msg: OutgoingMessage & { messageId: string }) => Promise<void>;
   getConnectedUsers(): string[];
 }
 
@@ -71,7 +74,7 @@ export function createWebChatChannel(
     ws.send(JSON.stringify({
       type: 'connected',
       sessionId,
-      message: 'Connected to Clodds. Send { "type": "auth", "token": "..." } to authenticate.',
+      message: 'Connected to Clodds. Send { "type": "auth", "token": "..." } to authenticate (token required if configured).',
     }));
 
     ws.on('message', async (data: Buffer) => {
@@ -81,8 +84,15 @@ export function createWebChatChannel(
 
         switch (message.type) {
           case 'auth':
-            // Simple token auth - in production, verify against gateway token
-            if (message.token) {
+            if (config.authToken && message.token !== config.authToken) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Invalid token',
+              }));
+              logger.warn({ sessionId }, 'WebChat: Invalid auth token');
+              return;
+            }
+            if (message.token || !config.authToken) {
               session.authenticated = true;
               session.userId = message.userId || `web-${sessionId.slice(0, 8)}`;
 
@@ -115,7 +125,11 @@ export function createWebChatChannel(
               return;
             }
 
-            if (!message.text || typeof message.text !== 'string') {
+            const attachments: MessageAttachment[] = Array.isArray(message.attachments)
+              ? message.attachments
+              : [];
+
+            if ((!message.text || typeof message.text !== 'string') && attachments.length === 0) {
               ws.send(JSON.stringify({
                 type: 'error',
                 message: 'Missing or invalid text field',
@@ -130,7 +144,8 @@ export function createWebChatChannel(
               userId: session.userId,
               chatId: sessionId, // Use session as chat
               chatType: 'dm',
-              text: message.text.trim(),
+              text: typeof message.text === 'string' ? message.text.trim() : '',
+              attachments: attachments.length > 0 ? attachments : undefined,
               timestamp: new Date(),
             };
 
@@ -142,6 +157,49 @@ export function createWebChatChannel(
 
             // Process through callbacks
             await callbacks.onMessage(incomingMessage);
+            break;
+
+          case 'edit':
+            if (!session.authenticated) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Not authenticated. Send auth first.',
+              }));
+              return;
+            }
+            if (!message.messageId || typeof message.messageId !== 'string') {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Missing messageId for edit',
+              }));
+              return;
+            }
+            ws.send(JSON.stringify({
+              type: 'edit',
+              messageId: message.messageId,
+              text: message.text || '',
+            }));
+            break;
+
+          case 'delete':
+            if (!session.authenticated) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Not authenticated. Send auth first.',
+              }));
+              return;
+            }
+            if (!message.messageId || typeof message.messageId !== 'string') {
+              ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Missing messageId for delete',
+              }));
+              return;
+            }
+            ws.send(JSON.stringify({
+              type: 'delete',
+              messageId: message.messageId,
+            }));
             break;
 
           case 'ping':
@@ -234,25 +292,60 @@ export function createWebChatChannel(
       logger.info('WebChat: Channel stopped');
     },
 
-    async sendMessage(msg: OutgoingMessage): Promise<void> {
+    async sendMessage(msg: OutgoingMessage): Promise<string | null> {
       // Find session by chatId (sessionId)
       const session = sessions.get(msg.chatId);
+      const messageId = (msg as { messageId?: string }).messageId ?? randomUUID();
 
       if (session?.ws.readyState === WebSocket.OPEN) {
         session.ws.send(JSON.stringify({
           type: 'message',
+          messageId,
           text: msg.text,
           parseMode: msg.parseMode,
           buttons: msg.buttons,
+          attachments: msg.attachments || [],
           timestamp: new Date().toISOString(),
         }));
+        return messageId;
       } else {
         logger.warn({ chatId: msg.chatId }, 'WebChat: Session not found or closed');
+        throw new Error('WebChat session not connected');
+      }
+    },
+
+    async editMessage(msg: OutgoingMessage & { messageId: string }): Promise<void> {
+      const session = sessions.get(msg.chatId);
+      if (session?.ws.readyState === WebSocket.OPEN) {
+        session.ws.send(JSON.stringify({
+          type: 'edit',
+          messageId: msg.messageId,
+          text: msg.text,
+          parseMode: msg.parseMode,
+        }));
+      }
+    },
+
+    async deleteMessage(msg: OutgoingMessage & { messageId: string }): Promise<void> {
+      const session = sessions.get(msg.chatId);
+      if (session?.ws.readyState === WebSocket.OPEN) {
+        session.ws.send(JSON.stringify({
+          type: 'delete',
+          messageId: msg.messageId,
+        }));
       }
     },
 
     getConnectedUsers(): string[] {
       return Array.from(userSockets.keys());
+    },
+
+    isConnected(message?: OutgoingMessage): boolean {
+      if (!message) {
+        return sessions.size > 0;
+      }
+      const session = sessions.get(message.chatId);
+      return Boolean(session && session.ws.readyState === WebSocket.OPEN);
     },
   };
 }

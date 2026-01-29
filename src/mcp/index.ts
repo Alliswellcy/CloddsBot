@@ -18,6 +18,11 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger';
 
+const MCP_RESOURCE_CHUNK_BYTES = Math.max(
+  1024,
+  Number(process.env.CLODDS_MCP_RESOURCE_CHUNK_BYTES || 64 * 1024)
+);
+
 // =============================================================================
 // MCP PROTOCOL TYPES
 // =============================================================================
@@ -114,6 +119,9 @@ export interface McpResourceContents {
   mimeType?: string;
   text?: string;
   blob?: string;
+  /** Streaming fields */
+  chunk?: string;
+  complete?: boolean;
 }
 
 /** JSON Schema (simplified) */
@@ -136,23 +144,35 @@ export interface McpServerConfig {
   /** Unique server name */
   name: string;
   /** Command to run the server */
-  command: string;
+  command?: string;
   /** Arguments for the command */
   args?: string[];
   /** Environment variables */
   env?: Record<string, string>;
   /** Working directory */
   cwd?: string;
+  /** Extra headers for SSE requests */
+  headers?: Record<string, string>;
   /** Transport type */
   transport?: 'stdio' | 'sse';
   /** SSE endpoint for sse transport */
   sseEndpoint?: string;
+  /** HTTP endpoint for client->server messages (sse transport) */
+  messageEndpoint?: string;
   /** Auto-start on init */
   autoStart?: boolean;
   /** Retry on failure */
   retryOnFailure?: boolean;
   /** Max retries */
   maxRetries?: number;
+  /** Restart on exit (stdio only) */
+  restartOnExit?: boolean;
+  /** Request timeout in ms */
+  requestTimeoutMs?: number;
+  /** Reconnect backoff base ms */
+  reconnectBaseMs?: number;
+  /** Reconnect backoff max ms */
+  reconnectMaxMs?: number;
 }
 
 // =============================================================================
@@ -181,11 +201,16 @@ export interface McpClient {
   listResourceTemplates(): Promise<McpResourceTemplate[]>;
   /** Read a resource */
   readResource(uri: string): Promise<McpResourceContents>;
+  /** Stream a resource in chunks */
+  streamResource(uri: string): AsyncIterable<McpResourceContents>;
 
   /** List available prompts */
   listPrompts(): Promise<McpPrompt[]>;
   /** Get a prompt */
   getPrompt(name: string, args?: Record<string, string>): Promise<McpContent[]>;
+
+  /** Health check */
+  health(): Promise<boolean>;
 }
 
 // =============================================================================
@@ -209,11 +234,47 @@ export interface McpRegistry {
   getAllTools(): Promise<Array<McpTool & { server: string }>>;
   /** Call a tool by fully qualified name (server:tool) */
   callTool(qualifiedName: string, params: Record<string, unknown>): Promise<McpToolResult>;
+  /** Health check for all servers */
+  checkHealth(): Promise<Record<string, boolean>>;
+  /** Stream resource contents from server */
+  streamResource(qualifiedName: string): AsyncIterable<McpResourceContents>;
+  /** Get a prompt with caching */
+  getPromptCached(qualifiedName: string, args?: Record<string, string>): Promise<McpContent[]>;
+  /** Call a tool with a batch of inputs */
+  callToolBatch(
+    qualifiedName: string,
+    paramsList: Array<Record<string, unknown>>
+  ): Promise<McpToolResult[]>;
 }
 
 // =============================================================================
 // STDIO CLIENT IMPLEMENTATION
 // =============================================================================
+
+function chunkResourceContents(content: McpResourceContents): McpResourceContents[] {
+  if (content.chunk || typeof content.complete === 'boolean') {
+    return [content];
+  }
+
+  const payload = content.text ?? content.blob;
+  if (!payload || payload.length <= MCP_RESOURCE_CHUNK_BYTES) {
+    return [content];
+  }
+
+  const chunks: McpResourceContents[] = [];
+  for (let i = 0; i < payload.length; i += MCP_RESOURCE_CHUNK_BYTES) {
+    const chunk = payload.slice(i, i + MCP_RESOURCE_CHUNK_BYTES);
+    const isLast = i + MCP_RESOURCE_CHUNK_BYTES >= payload.length;
+    chunks.push({
+      uri: content.uri,
+      mimeType: content.mimeType,
+      chunk,
+      complete: isLast,
+    });
+  }
+
+  return chunks;
+}
 
 class StdioMcpClient implements McpClient {
   private config: McpServerConfig;
@@ -225,6 +286,8 @@ class StdioMcpClient implements McpClient {
   private requestId = 0;
   private buffer = '';
   private events = new EventEmitter();
+  private reconnectAttempts = 0;
+  private defaultTimeoutMs = Number(process.env.CLODDS_MCP_REQUEST_TIMEOUT_MS || 15000);
 
   serverInfo?: McpServerInfo;
   connected = false;
@@ -236,32 +299,43 @@ class StdioMcpClient implements McpClient {
   async connect(): Promise<void> {
     if (this.connected) return;
 
+    const command = this.config.command;
+    if (!command) {
+      throw new Error('command is required for stdio MCP transport');
+    }
+
     return new Promise((resolve, reject) => {
       const env = { ...process.env, ...this.config.env };
 
-      this.process = spawn(this.config.command, this.config.args || [], {
+      const proc = spawn(command, this.config.args || [], {
         env,
         cwd: this.config.cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
+      this.process = proc;
 
-      this.process.stdout?.on('data', (data: Buffer) => {
+      proc.stdout?.on('data', (data: Buffer) => {
         this.handleData(data.toString());
       });
 
-      this.process.stderr?.on('data', (data: Buffer) => {
+      proc.stderr?.on('data', (data: Buffer) => {
         logger.debug({ server: this.config.name, stderr: data.toString() }, 'MCP server stderr');
       });
 
-      this.process.on('error', (err) => {
+      proc.on('error', (err) => {
         logger.error({ server: this.config.name, error: err }, 'MCP server error');
         this.connected = false;
         reject(err);
       });
 
-      this.process.on('exit', (code) => {
+      proc.on('exit', (code) => {
         logger.info({ server: this.config.name, code }, 'MCP server exited');
         this.connected = false;
+        if (this.config.restartOnExit) {
+          void this.scheduleReconnect();
+        } else if (this.config.retryOnFailure !== false) {
+          void this.scheduleReconnect();
+        }
       });
 
       // Initialize connection
@@ -269,6 +343,7 @@ class StdioMcpClient implements McpClient {
         .then((info) => {
           this.serverInfo = info;
           this.connected = true;
+          this.reconnectAttempts = 0;
           logger.info({ server: this.config.name, info }, 'MCP server connected');
           resolve();
         })
@@ -283,6 +358,25 @@ class StdioMcpClient implements McpClient {
     }
     this.connected = false;
     this.pendingRequests.clear();
+  }
+
+  private async scheduleReconnect(): Promise<void> {
+    const max = this.config.maxRetries ?? 5;
+    if (this.reconnectAttempts >= max) {
+      logger.warn({ server: this.config.name }, 'MCP reconnect attempts exhausted');
+      return;
+    }
+    const base = this.config.reconnectBaseMs ?? 1000;
+    const maxDelay = this.config.reconnectMaxMs ?? 30000;
+    const delay = Math.min(maxDelay, base * Math.pow(2, this.reconnectAttempts));
+    this.reconnectAttempts += 1;
+    logger.info({ server: this.config.name, attempt: this.reconnectAttempts, delay }, 'Scheduling MCP reconnect');
+    await new Promise((r) => setTimeout(r, delay));
+    try {
+      await this.connect();
+    } catch (error) {
+      logger.warn({ server: this.config.name, error }, 'MCP reconnect failed');
+    }
   }
 
   private handleData(data: string): void {
@@ -338,8 +432,26 @@ class StdioMcpClient implements McpClient {
       params,
     };
 
+    const timeoutMs = this.config.requestTimeoutMs ?? this.defaultTimeoutMs;
     return new Promise<T>((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve: resolve as (r: unknown) => void, reject });
+      const timer = setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          reject(new Error(`MCP request timeout after ${timeoutMs}ms`));
+        }
+      }, timeoutMs);
+
+      this.pendingRequests.set(id, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolve(result as T);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+
       this.process!.stdin!.write(JSON.stringify(request) + '\n');
     });
   }
@@ -394,6 +506,17 @@ class StdioMcpClient implements McpClient {
     return result.contents?.[0] || { uri };
   }
 
+  async *streamResource(uri: string): AsyncIterable<McpResourceContents> {
+    const result = await this.request<{ contents: McpResourceContents[] }>('resources/read', { uri });
+    if (result.contents?.length) {
+      for (const content of result.contents) {
+        for (const chunk of chunkResourceContents(content)) {
+          yield chunk;
+        }
+      }
+    }
+  }
+
   async listPrompts(): Promise<McpPrompt[]> {
     const result = await this.request<{ prompts: McpPrompt[] }>('prompts/list');
     return result.prompts || [];
@@ -406,6 +529,288 @@ class StdioMcpClient implements McpClient {
     });
     return result.messages?.map(m => m.content) || [];
   }
+
+  async health(): Promise<boolean> {
+    try {
+      await this.listTools();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// =============================================================================
+// SSE CLIENT IMPLEMENTATION
+// =============================================================================
+
+class SseMcpClient implements McpClient {
+  private config: McpServerConfig;
+  private pendingRequests: Map<string | number, {
+    resolve: (result: unknown) => void;
+    reject: (error: Error) => void;
+  }> = new Map();
+  private requestId = 0;
+  private buffer = '';
+  private abortController: AbortController | null = null;
+  private reconnectAttempts = 0;
+  private defaultTimeoutMs = Number(process.env.CLODDS_MCP_REQUEST_TIMEOUT_MS || 15000);
+
+  serverInfo?: McpServerInfo;
+  connected = false;
+
+  constructor(config: McpServerConfig) {
+    this.config = config;
+  }
+
+  async connect(): Promise<void> {
+    if (this.connected) return;
+
+    if (!this.config.sseEndpoint) {
+      throw new Error('sseEndpoint is required for SSE transport');
+    }
+
+    this.abortController = new AbortController();
+
+    const response = await fetch(this.config.sseEndpoint, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', ...(this.config.headers || {}) },
+      signal: this.abortController.signal,
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`Failed to connect SSE: ${response.status}`);
+    }
+
+    this.connected = true;
+    this.readStream(response.body).catch((error) => {
+      logger.warn({ server: this.config.name, error }, 'SSE stream ended');
+      this.connected = false;
+      if (this.config.retryOnFailure !== false) {
+        void this.scheduleReconnect();
+      }
+    });
+
+    const info = await this.initialize();
+    this.serverInfo = info;
+    this.reconnectAttempts = 0;
+    logger.info({ server: this.config.name, info }, 'MCP SSE server connected');
+  }
+
+  async disconnect(): Promise<void> {
+    this.abortController?.abort();
+    this.abortController = null;
+    this.connected = false;
+    this.pendingRequests.clear();
+  }
+
+  private async scheduleReconnect(): Promise<void> {
+    const max = this.config.maxRetries ?? 5;
+    if (this.reconnectAttempts >= max) {
+      logger.warn({ server: this.config.name }, 'MCP SSE reconnect attempts exhausted');
+      return;
+    }
+    const base = this.config.reconnectBaseMs ?? 1000;
+    const maxDelay = this.config.reconnectMaxMs ?? 30000;
+    const delay = Math.min(maxDelay, base * Math.pow(2, this.reconnectAttempts));
+    this.reconnectAttempts += 1;
+    logger.info({ server: this.config.name, attempt: this.reconnectAttempts, delay }, 'Scheduling MCP SSE reconnect');
+    await new Promise((r) => setTimeout(r, delay));
+    try {
+      await this.connect();
+    } catch (error) {
+      logger.warn({ server: this.config.name, error }, 'MCP SSE reconnect failed');
+    }
+  }
+
+  private async readStream(stream: ReadableStream<Uint8Array>): Promise<void> {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      this.handleData(decoder.decode(value, { stream: true }));
+    }
+  }
+
+  private handleData(data: string): void {
+    this.buffer += data;
+    const chunks = this.buffer.split('\n\n');
+    this.buffer = chunks.pop() || '';
+
+    for (const chunk of chunks) {
+      const lines = chunk.split('\n');
+      const dataLines: string[] = [];
+
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).trim());
+        }
+      }
+
+      if (dataLines.length === 0) continue;
+      const payload = dataLines.join('\n');
+
+      try {
+        const response: JsonRpcResponse = JSON.parse(payload);
+        this.handleResponse(response);
+      } catch (err) {
+        logger.warn({ payload, error: err }, 'Failed to parse SSE MCP response');
+      }
+    }
+  }
+
+  private handleResponse(response: JsonRpcResponse): void {
+    if (response.id === undefined) {
+      return;
+    }
+
+    const pending = this.pendingRequests.get(response.id);
+    if (!pending) {
+      logger.warn({ id: response.id }, 'Unknown SSE response ID');
+      return;
+    }
+
+    this.pendingRequests.delete(response.id);
+
+    if (response.error) {
+      pending.reject(new Error(`MCP Error ${response.error.code}: ${response.error.message}`));
+    } else {
+      pending.resolve(response.result);
+    }
+  }
+
+  private async request<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+    const id = ++this.requestId;
+    const request: JsonRpcRequest = {
+      jsonrpc: '2.0',
+      id,
+      method,
+      params,
+    };
+
+    const endpoint = this.config.messageEndpoint || this.inferMessageEndpoint();
+    if (!endpoint) {
+      throw new Error('messageEndpoint is required for SSE transport');
+    }
+
+    const timeoutMs = this.config.requestTimeoutMs ?? this.defaultTimeoutMs;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          reject(new Error(`MCP request timeout after ${timeoutMs}ms`));
+        }
+      }, timeoutMs);
+
+      this.pendingRequests.set(id, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolve(result as T);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(this.config.headers || {}) },
+        body: JSON.stringify(request),
+      }).catch((error) => {
+        this.pendingRequests.delete(id);
+        clearTimeout(timer);
+        reject(error as Error);
+      });
+    });
+  }
+
+  private inferMessageEndpoint(): string | null {
+    if (!this.config.sseEndpoint) return null;
+    if (this.config.sseEndpoint.endsWith('/sse')) {
+      return this.config.sseEndpoint.replace(/\/sse$/, '/message');
+    }
+    return null;
+  }
+
+  private async initialize(): Promise<McpServerInfo> {
+    const result = await this.request<{
+      serverInfo: McpServerInfo;
+      capabilities: Record<string, unknown>;
+    }>('initialize', {
+      protocolVersion: '2024-11-05',
+      clientInfo: {
+        name: 'clodds',
+        version: '0.1.0',
+      },
+      capabilities: {},
+    });
+
+    await this.request('notifications/initialized');
+    return result.serverInfo;
+  }
+
+  async listTools(): Promise<McpTool[]> {
+    const result = await this.request<{ tools: McpTool[] }>('tools/list');
+    return result.tools || [];
+  }
+
+  async callTool(name: string, params: Record<string, unknown>): Promise<McpToolResult> {
+    const result = await this.request<McpToolResult>('tools/call', {
+      name,
+      arguments: params,
+    });
+    return result;
+  }
+
+  async listResources(): Promise<McpResource[]> {
+    const result = await this.request<{ resources: McpResource[] }>('resources/list');
+    return result.resources || [];
+  }
+
+  async listResourceTemplates(): Promise<McpResourceTemplate[]> {
+    const result = await this.request<{ resourceTemplates: McpResourceTemplate[] }>('resources/templates/list');
+    return result.resourceTemplates || [];
+  }
+
+  async readResource(uri: string): Promise<McpResourceContents> {
+    const result = await this.request<{ contents: McpResourceContents[] }>('resources/read', { uri });
+    return result.contents?.[0] || { uri };
+  }
+
+  async *streamResource(uri: string): AsyncIterable<McpResourceContents> {
+    const result = await this.request<{ contents: McpResourceContents[] }>('resources/read', { uri });
+    if (result.contents?.length) {
+      for (const content of result.contents) {
+        for (const chunk of chunkResourceContents(content)) {
+          yield chunk;
+        }
+      }
+    }
+  }
+
+  async listPrompts(): Promise<McpPrompt[]> {
+    const result = await this.request<{ prompts: McpPrompt[] }>('prompts/list');
+    return result.prompts || [];
+  }
+
+  async getPrompt(name: string, args?: Record<string, string>): Promise<McpContent[]> {
+    const result = await this.request<{ messages: Array<{ content: McpContent }> }>('prompts/get', {
+      name,
+      arguments: args,
+    });
+    return result.messages?.map(m => m.content) || [];
+  }
+
+  async health(): Promise<boolean> {
+    try {
+      await this.listTools();
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 // =============================================================================
@@ -415,6 +820,8 @@ class StdioMcpClient implements McpClient {
 export function createMcpRegistry(): McpRegistry {
   const servers: Map<string, McpServerConfig> = new Map();
   const clients: Map<string, McpClient> = new Map();
+  const promptCache = new Map<string, { content: McpContent[]; expiresAt: number }>();
+  const promptTtlMs = Number(process.env.CLODDS_MCP_PROMPT_CACHE_TTL_MS || 5 * 60 * 1000);
 
   return {
     register(config) {
@@ -444,7 +851,14 @@ export function createMcpRegistry(): McpRegistry {
 
       for (const [name, config] of servers) {
         if (config.autoStart !== false) {
-          const client = new StdioMcpClient(config);
+          if (config.transport !== 'sse' && !config.command) {
+            logger.warn({ name }, 'Skipping MCP server without command (stdio transport)');
+            continue;
+          }
+
+          const client = config.transport === 'sse'
+            ? new SseMcpClient(config)
+            : new StdioMcpClient(config);
           clients.set(name, client);
 
           const connectPromise = client.connect().catch((err) => {
@@ -511,6 +925,119 @@ export function createMcpRegistry(): McpRegistry {
       }
 
       return client.callTool(toolName, params);
+    },
+
+    async checkHealth() {
+      const results: Record<string, boolean> = {};
+      for (const [name, client] of clients) {
+        if (!client.connected) {
+          results[name] = false;
+          continue;
+        }
+        try {
+          results[name] = await client.health();
+        } catch {
+          results[name] = false;
+        }
+      }
+      return results;
+    },
+
+    async *streamResource(qualifiedName: string): AsyncIterable<McpResourceContents> {
+      const [serverName, uri] = qualifiedName.includes(':')
+        ? qualifiedName.split(':', 2)
+        : [null, qualifiedName];
+
+      if (!serverName) {
+        for (const client of clients.values()) {
+          if (!client.connected) continue;
+          try {
+            for await (const chunk of client.streamResource(uri)) {
+              yield chunk;
+            }
+            return;
+          } catch {}
+        }
+        throw new Error(`Resource not found: ${qualifiedName}`);
+      }
+
+      const client = clients.get(serverName);
+      if (!client?.connected) {
+        throw new Error(`Server not connected: ${serverName}`);
+      }
+
+      for await (const chunk of client.streamResource(uri)) {
+        yield chunk;
+      }
+    },
+
+    async getPromptCached(qualifiedName: string, args?: Record<string, string>) {
+      const [serverName, promptName] = qualifiedName.includes(':')
+        ? qualifiedName.split(':', 2)
+        : [null, qualifiedName];
+
+      const key = `${serverName || 'any'}:${promptName}:${JSON.stringify(args || {})}`;
+      const cached = promptCache.get(key);
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.content;
+      }
+
+      const resolvePrompt = async (client: McpClient): Promise<McpContent[]> => {
+        const content = await client.getPrompt(promptName, args);
+        promptCache.set(key, { content, expiresAt: Date.now() + promptTtlMs });
+        return content;
+      };
+
+      if (!serverName) {
+        for (const client of clients.values()) {
+          if (!client.connected) continue;
+          try {
+            return await resolvePrompt(client);
+          } catch {}
+        }
+        throw new Error(`Prompt not found: ${qualifiedName}`);
+      }
+
+      const client = clients.get(serverName);
+      if (!client?.connected) {
+        throw new Error(`Server not connected: ${serverName}`);
+      }
+
+      return resolvePrompt(client);
+    },
+
+    async callToolBatch(qualifiedName: string, paramsList: Array<Record<string, unknown>>) {
+      const [serverName, toolName] = qualifiedName.includes(':')
+        ? qualifiedName.split(':', 2)
+        : [null, qualifiedName];
+
+      const runOnClient = async (client: McpClient): Promise<McpToolResult[]> => {
+        const results: McpToolResult[] = [];
+        for (const params of paramsList) {
+          results.push(await client.callTool(toolName, params));
+        }
+        return results;
+      };
+
+      if (!serverName) {
+        for (const client of clients.values()) {
+          if (!client.connected) continue;
+          try {
+            const tools = await client.listTools();
+            if (tools.some(t => t.name === toolName)) {
+              return runOnClient(client);
+            }
+          } catch {}
+        }
+        throw new Error(`Tool not found: ${qualifiedName}`);
+      }
+
+      const client = clients.get(serverName);
+      if (!client?.connected) {
+        throw new Error(`Server not connected: ${serverName}`);
+      }
+
+      return runOnClient(client);
     },
   };
 }
@@ -658,9 +1185,21 @@ export function importSkillsFromDirectory(skillsDir: string): ImportedSkill[] {
 
 export interface McpConfigFile {
   mcpServers?: Record<string, {
-    command: string;
+    command?: string;
     args?: string[];
     env?: Record<string, string>;
+    cwd?: string;
+    headers?: Record<string, string>;
+    transport?: 'stdio' | 'sse';
+    sseEndpoint?: string;
+    messageEndpoint?: string;
+    autoStart?: boolean;
+    retryOnFailure?: boolean;
+    maxRetries?: number;
+    restartOnExit?: boolean;
+    requestTimeoutMs?: number;
+    reconnectBaseMs?: number;
+    reconnectMaxMs?: number;
   }>;
 }
 
@@ -705,7 +1244,18 @@ export function initializeFromConfig(registry: McpRegistry, config: McpConfigFil
       command: serverConfig.command,
       args: serverConfig.args,
       env: serverConfig.env,
-      autoStart: true,
+      cwd: serverConfig.cwd,
+      headers: serverConfig.headers,
+      transport: serverConfig.transport,
+      sseEndpoint: serverConfig.sseEndpoint,
+      messageEndpoint: serverConfig.messageEndpoint,
+      autoStart: serverConfig.autoStart ?? true,
+      retryOnFailure: serverConfig.retryOnFailure,
+      maxRetries: serverConfig.maxRetries,
+      restartOnExit: serverConfig.restartOnExit,
+      requestTimeoutMs: serverConfig.requestTimeoutMs,
+      reconnectBaseMs: serverConfig.reconnectBaseMs,
+      reconnectMaxMs: serverConfig.reconnectMaxMs,
     });
   }
 }
@@ -730,6 +1280,11 @@ export function mcpToolToClodds(mcpTool: McpTool & { server: string }): {
     parameters: mcpTool.inputSchema,
     registry: null as unknown as McpRegistry, // Will be set by caller
     async execute(params) {
+      const validation = validateSchema(params, mcpTool.inputSchema);
+      if (!validation.valid) {
+        throw new Error(`MCP tool parameter validation failed: ${validation.errors.join('; ')}`);
+      }
+
       const registry = this.registry;
       const result = await registry.callTool(`${mcpTool.server}:${mcpTool.name}`, params);
 

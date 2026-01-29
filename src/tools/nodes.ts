@@ -12,6 +12,9 @@
 
 import { logger } from '../utils/logger';
 import type { WebSocket } from 'ws';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 
 /** Node types */
 export type NodeType = 'macos' | 'ios' | 'android' | 'web';
@@ -94,9 +97,32 @@ interface NodeRegistration {
   ws: WebSocket;
 }
 
+interface KnownNodeRecord {
+  id: string;
+  name: string;
+  type: NodeType;
+  capabilities: NodeCapability[];
+  osVersion?: string;
+  model?: string;
+  lastSeen: number;
+}
+
+interface NodeProtocolMessage {
+  type?: string;
+  requestId?: string;
+  action?: string;
+  params?: Record<string, unknown>;
+  result?: unknown;
+  error?: string;
+  payload?: Record<string, unknown>;
+}
+
 export interface NodesTool {
   /** List all connected nodes */
   list(): DeviceNode[];
+
+  /** Discover known nodes (connected + remembered) */
+  discover(): DeviceNode[];
 
   /** Get node by ID */
   get(nodeId: string): DeviceNode | undefined;
@@ -164,6 +190,53 @@ export function createNodesTool(): NodesTool {
     reject: (error: Error) => void;
     timeout: ReturnType<typeof setTimeout>;
   }>();
+  const stateDir = join(homedir(), '.clodds');
+  const knownNodesPath = join(stateDir, 'nodes.json');
+  const knownNodes = new Map<string, KnownNodeRecord>();
+
+  function ensureStateDir(): void {
+    if (!existsSync(stateDir)) {
+      mkdirSync(stateDir, { recursive: true });
+    }
+  }
+
+  function loadKnownNodes(): void {
+    try {
+      if (!existsSync(knownNodesPath)) return;
+      const raw = readFileSync(knownNodesPath, 'utf-8');
+      const data = JSON.parse(raw) as { nodes?: KnownNodeRecord[] };
+      for (const record of data.nodes || []) {
+        knownNodes.set(record.id, record);
+      }
+    } catch (error) {
+      logger.warn({ error }, 'Failed to load known nodes');
+    }
+  }
+
+  function saveKnownNodes(): void {
+    try {
+      ensureStateDir();
+      const data = { nodes: Array.from(knownNodes.values()) };
+      writeFileSync(knownNodesPath, JSON.stringify(data, null, 2));
+    } catch (error) {
+      logger.warn({ error }, 'Failed to save known nodes');
+    }
+  }
+
+  function upsertKnownNode(node: DeviceNode): void {
+    knownNodes.set(node.id, {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      capabilities: node.capabilities,
+      osVersion: node.osVersion,
+      model: node.model,
+      lastSeen: node.lastSeen.getTime(),
+    });
+    saveKnownNodes();
+  }
+
+  loadKnownNodes();
 
   /** Generate request ID */
   function generateRequestId(): string {
@@ -198,6 +271,7 @@ export function createNodesTool(): NodesTool {
 
       node.ws.send(JSON.stringify({
         type: 'node.invoke',
+        version: 1,
         requestId,
         action,
         params,
@@ -220,9 +294,90 @@ export function createNodesTool(): NodesTool {
     }
   }
 
+  function handleProtocolMessage(nodeId: string, msg: NodeProtocolMessage): void {
+    const node = nodes.get(nodeId);
+    if (!node) return;
+
+    switch (msg.type) {
+      case 'node.response':
+        if (msg.requestId) {
+          handleResponse({
+            requestId: msg.requestId,
+            result: msg.result,
+            error: msg.error,
+          });
+        }
+        break;
+
+      case 'node.heartbeat':
+        node.lastSeen = new Date();
+        node.connected = true;
+        upsertKnownNode(node);
+        break;
+
+      case 'node.register':
+        if (msg.payload) {
+          const payload = msg.payload;
+          node.name = (payload.name as string) || node.name;
+          node.type = (payload.type as NodeType) || node.type;
+          node.capabilities = (payload.capabilities as NodeCapability[]) || node.capabilities;
+          node.osVersion = payload.osVersion as string | undefined;
+          node.model = payload.model as string | undefined;
+          node.lastSeen = new Date();
+          upsertKnownNode(node);
+        }
+        break;
+
+      case 'node.event':
+        node.lastSeen = new Date();
+        upsertKnownNode(node);
+        logger.info({ nodeId, event: msg.payload }, 'Node event received');
+        break;
+
+      default:
+        // Backwards compatibility: treat requestId-only messages as responses.
+        if (msg.requestId) {
+          handleResponse({
+            requestId: msg.requestId,
+            result: msg.result,
+            error: msg.error,
+          });
+        }
+        node.lastSeen = new Date();
+        upsertKnownNode(node);
+    }
+  }
+
   const tool: NodesTool = {
     list() {
       return Array.from(nodes.values()).map(({ ws, ...node }) => node);
+    },
+
+    discover() {
+      const discovered = new Map<string, DeviceNode>();
+
+      for (const record of knownNodes.values()) {
+        discovered.set(record.id, {
+          id: record.id,
+          name: record.name,
+          type: record.type,
+          capabilities: record.capabilities,
+          osVersion: record.osVersion,
+          model: record.model,
+          connected: false,
+          connectedAt: new Date(record.lastSeen),
+          lastSeen: new Date(record.lastSeen),
+        });
+      }
+
+      for (const node of nodes.values()) {
+        const { ws, ...rest } = node;
+        discovered.set(rest.id, { ...rest });
+      }
+
+      return Array.from(discovered.values()).sort(
+        (a, b) => b.lastSeen.getTime() - a.lastSeen.getTime()
+      );
     },
 
     get(nodeId) {
@@ -394,15 +549,13 @@ export function createNodesTool(): NodesTool {
       };
 
       nodes.set(info.id, node);
+      upsertKnownNode(node);
 
       // Handle messages from node
       ws.on('message', (data: Buffer) => {
         try {
-          const msg = JSON.parse(data.toString());
-          if (msg.requestId) {
-            handleResponse(msg);
-          }
-          node.lastSeen = new Date();
+          const msg = JSON.parse(data.toString()) as NodeProtocolMessage;
+          handleProtocolMessage(info.id, msg);
         } catch {
           // Ignore parse errors
         }
@@ -412,6 +565,8 @@ export function createNodesTool(): NodesTool {
         const n = nodes.get(info.id);
         if (n) {
           n.connected = false;
+          n.lastSeen = new Date();
+          upsertKnownNode(n);
         }
         logger.info({ nodeId: info.id }, 'Device node disconnected');
       });
@@ -424,12 +579,27 @@ export function createNodesTool(): NodesTool {
         { nodeId: info.id, type: info.type, capabilities: info.capabilities },
         'Device node registered'
       );
+
+      // Acknowledge registration using protocol message.
+      try {
+        ws.send(
+          JSON.stringify({
+            type: 'node.registered',
+            version: 1,
+            payload: { id: info.id, at: new Date().toISOString() },
+          })
+        );
+      } catch (error) {
+        logger.warn({ error, nodeId: info.id }, 'Failed to send node.registered ack');
+      }
     },
 
     unregisterNode(nodeId) {
       const node = nodes.get(nodeId);
       if (node) {
         node.connected = false;
+        node.lastSeen = new Date();
+        upsertKnownNode(node);
         nodes.delete(nodeId);
         logger.info({ nodeId }, 'Device node unregistered');
       }

@@ -4,20 +4,68 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { spawn, ChildProcess, execSync } from 'child_process';
-import { existsSync, writeFileSync, mkdirSync, readFileSync } from 'fs';
+import { spawn, spawnSync, ChildProcess, execSync } from 'child_process';
+import { randomUUID } from 'crypto';
+import { writeFileSync } from 'fs';
 import { join } from 'path';
-import { Session, IncomingMessage, OutgoingMessage, Config, Alert, Platform, TradingContext, PolymarketCredentials, KalshiCredentials, ManifoldCredentials } from '../types';
+import { homedir } from 'os';
+import {
+  Session,
+  IncomingMessage,
+  OutgoingMessage,
+  ReactionMessage,
+  PollMessage,
+  Config,
+  Alert,
+  Platform,
+  TradingContext,
+  PolymarketCredentials,
+  KalshiCredentials,
+  ManifoldCredentials,
+  Market,
+} from '../types';
 import { logger } from '../utils/logger';
 import { createSkillManager, SkillManager } from '../skills/loader';
 import { FeedManager } from '../feeds';
 import { Database } from '../db';
 import { CredentialsManager, createCredentialsManager } from '../credentials';
 import { SessionManager } from '../sessions';
-import { MemoryService } from '../memory';
-import { RateLimiter, RateLimitConfig, access, AccessControl } from '../security/index';
+import { MemoryService, createClaudeSummarizer } from '../memory';
+import { RateLimiter, RateLimitConfig, access, AccessControl, sanitize, detectInjection } from '../security/index';
+import { execApprovals } from '../permissions';
 import { hooks, HooksService, AgentHookContext, ToolHookContext, ToolCallResult, AgentStartResult, CompactionContext } from '../hooks/index';
 import { createContextManager, ContextManager, estimateTokens, ContextConfig } from '../memory/context';
+import { TranscriptionOptions } from '../media';
+import { createSqlTool, SqlTool } from '../tools/sql';
+import { WebhookTool } from '../tools/webhooks';
+import { createDockerTool, DockerTool } from '../tools/docker';
+import { createEmbeddingsService, EmbeddingsService } from '../embeddings';
+import { selectAdaptiveModel, getModelStrategy } from '../models';
+import { createSubagentManager, SubagentManager, ToolExecutor } from './subagents';
+import { createFileTool, FileTool } from '../tools/files';
+import { createShellHistoryTool, ShellHistoryTool } from '../tools/shell-history';
+import { createGitTool, GitTool } from '../tools/git';
+import { createEmailTool, EmailTool } from '../tools/email';
+import { createSmsTool, SmsTool } from '../tools/sms';
+import { createTranscriptionTool, TranscriptionTool } from '../tools/transcription';
+import { buildKalshiHeadersForUrl, KalshiApiKeyAuth, normalizeKalshiPrivateKey } from '../utils/kalshi-auth';
+import { buildPolymarketHeadersForUrl, PolymarketApiKeyAuth } from '../utils/polymarket-auth';
+import { executePumpFunTrade } from '../solana/pumpapi';
+import { executeJupiterSwap } from '../solana/jupiter';
+import { getSolanaConnection, loadSolanaKeypair } from '../solana/wallet';
+import { executeMeteoraDlmmSwap } from '../solana/meteora';
+import { executeRaydiumSwap, getRaydiumQuote } from '../solana/raydium';
+import { executeOrcaWhirlpoolSwap, getOrcaWhirlpoolQuote } from '../solana/orca';
+import { executeDriftDirectOrder } from '../solana/drift';
+import { listMeteoraDlmmPools } from '../solana/meteora';
+import { listRaydiumPools } from '../solana/raydium';
+import { listOrcaWhirlpoolPools } from '../solana/orca';
+import { selectBestPool, selectBestPoolWithResolvedMints } from '../solana/pools';
+import { getMeteoraDlmmQuote } from '../solana/meteora';
+import { wormholeQuote, wormholeBridge, wormholeRedeem, usdcBridgeAuto, usdcQuoteAuto } from '../bridge/wormhole';
+import { isRetryableError, withRetry, RETRY_POLICIES } from '../infra/retry';
+import { createMarketIndexService, MarketIndexService } from '../market-index';
+import { enforceExposureLimits, enforceMaxOrderSize } from '../trading/risk';
 
 // Background process tracking
 const backgroundProcesses: Map<string, {
@@ -32,10 +80,27 @@ export interface AgentContext {
   session: Session;
   feeds: FeedManager;
   db: Database;
+  sessionManager: SessionManager;
   skills: SkillManager;
   credentials: CredentialsManager;
+  transcription: TranscriptionTool;
+  files: FileTool;
+  shellHistory: ShellHistoryTool;
+  git: GitTool;
+  email: EmailTool;
+  sms: SmsTool;
+  sql: SqlTool;
+  webhooks?: WebhookTool;
+  docker: DockerTool;
+  subagents: SubagentManager;
+  marketIndex: MarketIndexService;
+  marketIndexConfig?: Config['marketIndex'];
   tradingContext: TradingContext | null;  // null if user hasn't set up credentials
-  sendMessage: (msg: OutgoingMessage) => Promise<void>;
+  sendMessage: (msg: OutgoingMessage) => Promise<string | null>;
+  editMessage?: (msg: OutgoingMessage & { messageId: string }) => Promise<void>;
+  deleteMessage?: (msg: OutgoingMessage & { messageId: string }) => Promise<void>;
+  reactMessage?: (msg: ReactionMessage) => Promise<void>;
+  createPoll?: (msg: PollMessage) => Promise<string | null>;
   /** Add message to conversation history */
   addToHistory: (role: 'user' | 'assistant', content: string) => void;
   /** Clear conversation history */
@@ -43,8 +108,12 @@ export interface AgentContext {
 }
 
 export interface AgentManager {
-  handleMessage: (message: IncomingMessage, session: Session) => Promise<string>;
+  handleMessage: (message: IncomingMessage, session: Session) => Promise<string | null>;
   dispose: () => void;
+  /** Reload skills from disk */
+  reloadSkills: () => void;
+  /** Notify the agent that config changed */
+  reloadConfig: (config: Config) => void;
 }
 
 const SYSTEM_PROMPT = `You are Clodds, an AI assistant for prediction markets. Claude + Odds.
@@ -77,6 +146,7 @@ type JsonSchemaProperty = {
   properties?: Record<string, JsonSchemaProperty>;
   required?: string[];
   default?: unknown;
+  additionalProperties?: boolean | JsonSchemaProperty;
 };
 
 interface ToolDefinition {
@@ -96,7 +166,10 @@ function isPolymarketCredentials(creds: PolymarketCredentials | KalshiCredential
 
 // Type guard for Kalshi credentials
 function isKalshiCredentials(creds: PolymarketCredentials | KalshiCredentials | ManifoldCredentials): creds is KalshiCredentials {
-  return 'email' in creds && 'password' in creds;
+  return (
+    ('apiKeyId' in creds && 'privateKeyPem' in creds) ||
+    ('email' in creds && 'password' in creds)
+  );
 }
 
 // Type guard for Manifold credentials
@@ -107,6 +180,220 @@ function isManifoldCredentials(creds: PolymarketCredentials | KalshiCredentials 
 // Generic API response type - uses any for dynamic API data
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ApiResponse = any;
+
+const STREAM_TOOL_CALLS_ENABLED = process.env.CLODDS_STREAM_TOOL_CALLS !== '0';
+const TOOL_STREAM_DELAY_MS = Math.max(0, Number(process.env.CLODDS_STREAM_TOOL_DELAY_MS || 750));
+const STREAM_RESPONSES_ENABLED = process.env.CLODDS_STREAM_RESPONSES !== '0';
+const STREAM_RESPONSE_INTERVAL_MS = Math.max(150, Number(process.env.CLODDS_STREAM_RESPONSE_INTERVAL_MS || 500));
+const STREAM_RESPONSE_PLATFORMS = new Set([
+  'telegram',
+  'discord',
+  'slack',
+  'whatsapp',
+  'matrix',
+  'teams',
+  'webchat',
+]);
+const MEMORY_EXTRACT_MODEL = process.env.CLODDS_MEMORY_EXTRACT_MODEL || process.env.CLODDS_SUMMARY_MODEL || 'claude-3-5-haiku-20241022';
+const KALSHI_API_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
+const DRIFT_GATEWAY_URL = process.env.DRIFT_GATEWAY_URL || 'http://localhost:8080';
+
+function getKalshiApiKeyAuth(creds: KalshiCredentials): KalshiApiKeyAuth | null {
+  if (creds.apiKeyId && creds.privateKeyPem) {
+    return { apiKeyId: creds.apiKeyId, privateKeyPem: creds.privateKeyPem };
+  }
+  return null;
+}
+
+function getPolymarketApiKeyAuth(creds: PolymarketCredentials): PolymarketApiKeyAuth | null {
+  if (creds.funderAddress && creds.apiKey && creds.apiSecret && creds.apiPassphrase) {
+    return {
+      address: creds.funderAddress,
+      apiKey: creds.apiKey,
+      apiSecret: creds.apiSecret,
+      apiPassphrase: creds.apiPassphrase,
+    };
+  }
+  return null;
+}
+
+function buildPolymarketAuthHeadersForContext(
+  context: AgentContext,
+  method: string,
+  url: string,
+  body?: unknown
+): Record<string, string> {
+  const polyCreds = context.tradingContext?.credentials.get('polymarket');
+  if (!polyCreds || polyCreds.platform !== 'polymarket') {
+    return {};
+  }
+
+  const auth = getPolymarketApiKeyAuth(polyCreds.data as PolymarketCredentials);
+  if (!auth) {
+    return {};
+  }
+
+  return buildPolymarketHeadersForUrl(auth, method, url, body);
+}
+
+type MemoryExtractionResult = {
+  profile_summary?: string | null;
+  summary?: string | null;
+  facts?: Array<{ key: string; value: string }>;
+  preferences?: Array<{ key: string; value: string }>;
+  notes?: Array<{ key: string; value: string }>;
+  topics?: string[];
+};
+
+function sanitizeMemoryText(text: string): string {
+  return text.replace(/<private>[\s\S]*?<\/private>/gi, '').trim();
+}
+
+function containsSensitiveMemory(text: string): boolean {
+  const lowered = text.toLowerCase();
+  const patterns = [
+    'api key',
+    'secret',
+    'private key',
+    'seed phrase',
+    'mnemonic',
+    'password',
+    'ssn',
+    'social security',
+    'credit card',
+  ];
+  if (patterns.some((p) => lowered.includes(p))) return true;
+
+  const regexPatterns = [
+    /sk-[a-z0-9]{10,}/i,
+    /xox[abprs]-\d{6,}-\d{6,}-[a-z0-9-]{10,}/i,
+    /-----BEGIN[^\n]*PRIVATE KEY-----/i,
+    /eyJ[a-z0-9-_]+\.[a-z0-9-_]+\.[a-z0-9-_]+/i,
+  ];
+  return regexPatterns.some((re) => re.test(text));
+}
+
+function safeParseJsonObject<T>(text: string): T | null {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  const slice = text.slice(start, end + 1);
+  try {
+    return JSON.parse(slice) as T;
+  } catch {
+    return null;
+  }
+}
+
+function limitItems<T extends { key?: string; value?: string }>(items: T[] | undefined, max: number): T[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter((item) => item && item.key && item.value)
+    .slice(0, max)
+    .map((item) => ({
+      ...item,
+      key: String(item.key).slice(0, 120),
+      value: String(item.value).slice(0, 500),
+    })) as T[];
+}
+
+async function extractMemoryWithClaude(
+  client: Anthropic,
+  text: string,
+  maxItems: number
+): Promise<MemoryExtractionResult | null> {
+  const response = await client.messages.create({
+    model: MEMORY_EXTRACT_MODEL,
+    max_tokens: 700,
+    system:
+      'You extract durable user memory from conversations. '
+      + 'Return ONLY valid JSON with keys: profile_summary, summary, facts, preferences, notes, topics. '
+      + 'facts/preferences/notes are arrays of {key, value}. Keep items concise.',
+    messages: [
+      {
+        role: 'user',
+        content:
+          'Extract durable user memory from the following turn. '
+          + `Limit each list to ${maxItems} items. `
+          + 'If no items, use empty arrays. Use null for missing summaries.\n\n'
+          + text,
+      },
+    ],
+  });
+
+  const raw = response.content
+    .filter((b) => b.type === 'text')
+    .map((b) => (b as Anthropic.TextBlock).text)
+    .join('\n')
+    .trim();
+
+  return safeParseJsonObject<MemoryExtractionResult>(raw);
+}
+
+async function fetchPolymarketClob(
+  context: AgentContext,
+  url: string,
+  init?: RequestInit
+): Promise<Response> {
+  const method = init?.method ?? 'GET';
+  const authHeaders = buildPolymarketAuthHeadersForContext(context, method, url, init?.body);
+  const headers = {
+    ...(init?.headers ?? {}),
+    ...authHeaders,
+  } as Record<string, string>;
+
+  return fetch(url, {
+    ...init,
+    headers,
+  });
+}
+
+async function driftGatewayRequest(
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  body?: Record<string, unknown>
+): Promise<ApiResponse> {
+  let url = `${DRIFT_GATEWAY_URL}${path}`;
+  const init: RequestInit = { method };
+
+  if (body && Object.keys(body).length > 0) {
+    if (method === 'GET') {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(body)) {
+        if (value === undefined || value === null) continue;
+        params.set(key, String(value));
+      }
+      const suffix = params.toString();
+      if (suffix) {
+        url = `${url}?${suffix}`;
+      }
+    } else {
+      init.headers = { 'content-type': 'application/json' };
+      init.body = JSON.stringify(body);
+    }
+  }
+
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    throw new Error(`Gateway error: ${response.status}`);
+  }
+
+  return await response.json();
+}
+
+function buildKalshiEnv(creds: KalshiCredentials): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (creds.apiKeyId && creds.privateKeyPem) {
+    env.KALSHI_API_KEY_ID = creds.apiKeyId;
+    env.KALSHI_PRIVATE_KEY = creds.privateKeyPem;
+  }
+  if (creds.email && creds.password) {
+    env.KALSHI_EMAIL = creds.email;
+    env.KALSHI_PASSWORD = creds.password;
+  }
+  return env;
+}
+
 
 function buildTools(): ToolDefinition[] {
   return [
@@ -143,6 +430,117 @@ function buildTools(): ToolDefinition[] {
         required: ['market_id', 'platform'],
       },
     },
+    {
+      name: 'market_index_sync',
+      description: 'Sync market index for semantic search (Polymarket, Kalshi, Manifold, Metaculus).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          platforms: {
+            type: 'array',
+            description: 'Optional list of platforms to sync',
+            items: { type: 'string', enum: ['polymarket', 'kalshi', 'manifold', 'metaculus'] },
+          },
+          limit_per_platform: {
+            type: 'number',
+            description: 'Max markets to index per platform (default 500)',
+          },
+          status: {
+            type: 'string',
+            description: 'Market status filter',
+            enum: ['open', 'closed', 'settled', 'all'],
+          },
+          exclude_sports: {
+            type: 'boolean',
+            description: 'Exclude sports-related markets (default true)',
+          },
+          min_volume_24h: {
+            type: 'number',
+            description: 'Minimum 24h volume threshold (best-effort per platform)',
+          },
+          min_liquidity: {
+            type: 'number',
+            description: 'Minimum liquidity threshold (best-effort per platform)',
+          },
+          min_open_interest: {
+            type: 'number',
+            description: 'Minimum open interest threshold (Kalshi only)',
+          },
+          min_predictions: {
+            type: 'number',
+            description: 'Minimum number of predictions (Metaculus only)',
+          },
+          exclude_resolved: {
+            type: 'boolean',
+            description: 'Exclude resolved markets regardless of status filter',
+          },
+        },
+      },
+    },
+    {
+      name: 'market_index_search',
+      description: 'Semantic search over indexed markets.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+          platform: {
+            type: 'string',
+            description: 'Optional platform filter',
+            enum: ['polymarket', 'kalshi', 'manifold', 'metaculus'],
+          },
+          limit: { type: 'number', description: 'Max results (default 10)' },
+          max_candidates: { type: 'number', description: 'Max candidates to consider (default 1500)' },
+          min_score: { type: 'number', description: 'Minimum similarity score to include' },
+          platform_weights: {
+            type: 'object',
+            description: 'Optional per-platform weights (overrides config)',
+            additionalProperties: { type: 'number' },
+          },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'market_index_stats',
+      description: 'Get indexed market counts by platform.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          platforms: {
+            type: 'array',
+            description: 'Optional list of platforms to report',
+            items: { type: 'string', enum: ['polymarket', 'kalshi', 'manifold', 'metaculus'] },
+          },
+        },
+      },
+    },
+    {
+      name: 'market_index_last_sync',
+      description: 'Get the last market index sync summary.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'market_index_prune',
+      description: 'Prune stale indexed markets.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          platform: {
+            type: 'string',
+            description: 'Optional platform to prune',
+            enum: ['polymarket', 'kalshi', 'manifold', 'metaculus'],
+          },
+          stale_after_ms: {
+            type: 'number',
+            description: 'Age in ms beyond which entries are removed',
+          },
+        },
+      },
+    },
 
     // Portfolio tools
     {
@@ -151,6 +549,18 @@ function buildTools(): ToolDefinition[] {
       input_schema: {
         type: 'object',
         properties: {},
+      },
+    },
+    {
+      name: 'get_portfolio_history',
+      description: 'Get portfolio P&L history snapshots for the user',
+      input_schema: {
+        type: 'object',
+        properties: {
+          since_ms: { type: 'number', description: 'Only return snapshots after this timestamp (ms)' },
+          limit: { type: 'number', description: 'Max snapshots to return (default 200)' },
+          order: { type: 'string', enum: ['asc', 'desc'], description: 'Sort order (default desc)' },
+        },
       },
     },
     {
@@ -421,7 +831,15 @@ function buildTools(): ToolDefinition[] {
       input_schema: {
         type: 'object',
         properties: {
+          query: { type: 'string', description: 'Optional search query to narrow markets' },
           min_edge: { type: 'number', description: 'Minimum edge % to report (default 1%)', default: 1 },
+          limit: { type: 'number', description: 'Max opportunities to return (default 10)' },
+          mode: {
+            type: 'string',
+            description: 'internal (YES+NO) | cross (price gaps) | both',
+            enum: ['internal', 'cross', 'both'],
+          },
+          min_volume: { type: 'number', description: 'Minimum 24h volume filter (default 0)' },
           platforms: {
             type: 'array',
             description: 'Platforms to scan',
@@ -3737,8 +4155,397 @@ function buildTools(): ToolDefinition[] {
       input_schema: {
         type: 'object',
         properties: {
+          signature: { type: 'string', description: 'Optional: transaction signature to fetch details' },
           limit: { type: 'number', description: 'Max results (default 50)' },
         },
+      },
+    },
+
+    // ============================================
+    // SOLANA WALLET + AGGREGATORS (Jupiter + Pump.fun)
+    // ============================================
+    {
+      name: 'solana_address',
+      description: 'Get your Solana wallet public address.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'solana_jupiter_swap',
+      description: 'Swap tokens on Solana using Jupiter (aggregates major DEXes).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          input_mint: { type: 'string', description: 'Input mint address' },
+          output_mint: { type: 'string', description: 'Output mint address' },
+          amount: { type: 'string', description: 'Amount in smallest units (string integer)' },
+          slippage_bps: { type: 'number', description: 'Slippage in basis points (default 50)' },
+          swap_mode: { type: 'string', description: 'ExactIn or ExactOut', enum: ['ExactIn', 'ExactOut'] },
+          priority_fee_lamports: { type: 'number', description: 'Optional priority fee in lamports' },
+          only_direct_routes: { type: 'boolean', description: 'Restrict to direct routes only' },
+        },
+        required: ['input_mint', 'output_mint', 'amount'],
+      },
+    },
+    {
+      name: 'pumpfun_trade',
+      description: 'Trade tokens on pump.fun using local transaction signing.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', description: 'buy or sell', enum: ['buy', 'sell'] },
+          mint: { type: 'string', description: 'Token mint address' },
+          amount: { type: 'string', description: 'Amount to trade (number or percent string like "50%")' },
+          denominated_in_sol: { type: 'boolean', description: 'If true, amount is in SOL; otherwise token units' },
+          slippage_bps: { type: 'number', description: 'Slippage in bps (default 100 = 1%)' },
+          priority_fee_lamports: { type: 'number', description: 'Optional priority fee in lamports' },
+          pool: { type: 'string', description: 'Optional pool override (e.g., pump)' },
+        },
+        required: ['action', 'mint', 'amount', 'denominated_in_sol'],
+      },
+    },
+    {
+      name: 'meteora_dlmm_swap',
+      description: 'Swap tokens on Meteora DLMM using direct on-chain transaction.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_address: { type: 'string', description: 'DLMM pool address' },
+          input_mint: { type: 'string', description: 'Input token mint' },
+          output_mint: { type: 'string', description: 'Output token mint' },
+          in_amount: { type: 'string', description: 'Input amount in base units (string integer)' },
+          slippage_bps: { type: 'number', description: 'Slippage in bps (default 50)' },
+          allow_partial_fill: { type: 'boolean', description: 'Allow partial fills' },
+          max_extra_bin_arrays: { type: 'number', description: 'Max extra bin arrays (default 3)' },
+        },
+        required: ['pool_address', 'input_mint', 'output_mint', 'in_amount'],
+      },
+    },
+    {
+      name: 'raydium_swap',
+      description: 'Swap tokens on Raydium using Raydium transaction API.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          input_mint: { type: 'string', description: 'Input token mint' },
+          output_mint: { type: 'string', description: 'Output token mint' },
+          amount: { type: 'string', description: 'Amount in base units (string integer)' },
+          slippage_bps: { type: 'number', description: 'Slippage in bps (default 50)' },
+          swap_mode: { type: 'string', description: 'BaseIn or BaseOut', enum: ['BaseIn', 'BaseOut'] },
+          tx_version: { type: 'string', description: 'V0 or LEGACY', enum: ['V0', 'LEGACY'] },
+          compute_unit_price_micro_lamports: { type: 'number', description: 'Optional compute unit price' },
+        },
+        required: ['input_mint', 'output_mint', 'amount'],
+      },
+    },
+    {
+      name: 'orca_whirlpool_swap',
+      description: 'Swap tokens on Orca Whirlpools directly.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_address: { type: 'string', description: 'Whirlpool pool address' },
+          input_mint: { type: 'string', description: 'Input token mint' },
+          amount: { type: 'string', description: 'Input amount in base units (string integer)' },
+          slippage_bps: { type: 'number', description: 'Slippage in bps (default 50)' },
+        },
+        required: ['pool_address', 'input_mint', 'amount'],
+      },
+    },
+    {
+      name: 'drift_direct_place_order',
+      description: 'Place a Drift order directly via Drift SDK (spot or perp).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          market_type: { type: 'string', description: 'perp or spot', enum: ['perp', 'spot'] },
+          market_index: { type: 'number', description: 'Market index' },
+          side: { type: 'string', description: 'buy or sell', enum: ['buy', 'sell'] },
+          order_type: { type: 'string', description: 'limit or market', enum: ['limit', 'market'] },
+          base_amount: { type: 'string', description: 'Base asset amount (string integer)' },
+          price: { type: 'string', description: 'Price in native units (string integer)' },
+        },
+        required: ['market_type', 'market_index', 'side', 'order_type', 'base_amount'],
+      },
+    },
+    {
+      name: 'meteora_dlmm_pools',
+      description: 'List Meteora DLMM pools (optionally filtered by token mints).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          token_symbols: { type: 'array', items: { type: 'string' }, description: 'Token symbols (e.g., SOL, USDC)' },
+          token_mints: { type: 'array', items: { type: 'string' }, description: 'Token mint addresses to match' },
+          limit: { type: 'number', description: 'Max results (default 50)' },
+        },
+      },
+    },
+    {
+      name: 'raydium_pools',
+      description: 'List Raydium pools from the public pool list API.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          token_symbols: { type: 'array', items: { type: 'string' }, description: 'Token symbols (e.g., SOL, USDC)' },
+          token_mints: { type: 'array', items: { type: 'string' }, description: 'Token mint addresses to match' },
+          limit: { type: 'number', description: 'Max results (default 50)' },
+        },
+      },
+    },
+    {
+      name: 'orca_whirlpool_pools',
+      description: 'List Orca Whirlpool pools from offchain metadata.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          token_symbols: { type: 'array', items: { type: 'string' }, description: 'Token symbols (e.g., SOL, USDC)' },
+          token_mints: { type: 'array', items: { type: 'string' }, description: 'Token mint addresses to match' },
+          limit: { type: 'number', description: 'Max results (default 50)' },
+        },
+      },
+    },
+    {
+      name: 'solana_best_pool',
+      description: 'Select the best liquidity pool across Meteora, Raydium, and Orca.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          token_symbols: { type: 'array', items: { type: 'string' }, description: 'Token symbols (e.g., SOL, USDC)' },
+          token_mints: { type: 'array', items: { type: 'string' }, description: 'Token mint addresses to match' },
+          sort_by: { type: 'string', description: 'Sort by liquidity or volume24h', enum: ['liquidity', 'volume24h'] },
+          preferred_dexes: {
+            type: 'array',
+            description: 'Optional DEX preference order',
+            items: { type: 'string', enum: ['meteora', 'raydium', 'orca'] },
+          },
+          limit: { type: 'number', description: 'Max pools to consider (default 50)' },
+        },
+      },
+    },
+    {
+      name: 'solana_auto_swap',
+      description: 'Auto-select the best pool and execute a swap (Meteora, Raydium, or Orca).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          input_mint: { type: 'string', description: 'Input token mint (optional if using symbols)' },
+          output_mint: { type: 'string', description: 'Output token mint (optional if using symbols)' },
+          token_symbols: { type: 'array', items: { type: 'string' }, description: 'Token symbols (e.g., SOL, USDC)' },
+          amount: { type: 'string', description: 'Input amount in base units (string integer)' },
+          slippage_bps: { type: 'number', description: 'Slippage in bps (default 50)' },
+          sort_by: { type: 'string', description: 'Sort by liquidity or volume24h', enum: ['liquidity', 'volume24h'] },
+          preferred_dexes: {
+            type: 'array',
+            description: 'Optional DEX preference order',
+            items: { type: 'string', enum: ['meteora', 'raydium', 'orca'] },
+          },
+        },
+        required: ['amount'],
+      },
+    },
+    {
+      name: 'solana_auto_route',
+      description: 'Compare pool liquidity/volume across DEXes without executing a swap.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          token_symbols: { type: 'array', items: { type: 'string' }, description: 'Token symbols (e.g., SOL, USDC)' },
+          token_mints: { type: 'array', items: { type: 'string' }, description: 'Token mint addresses to match' },
+          sort_by: { type: 'string', description: 'Sort by liquidity or volume24h', enum: ['liquidity', 'volume24h'] },
+          preferred_dexes: {
+            type: 'array',
+            description: 'Optional DEX preference order',
+            items: { type: 'string', enum: ['meteora', 'raydium', 'orca'] },
+          },
+          limit: { type: 'number', description: 'Max pools to return (default 20)' },
+        },
+      },
+    },
+    {
+      name: 'solana_auto_quote',
+      description: 'Compare best-DEX quotes (Meteora, Raydium, Orca) without executing.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          token_symbols: { type: 'array', items: { type: 'string' }, description: 'Token symbols (e.g., SOL, USDC)' },
+          token_mints: { type: 'array', items: { type: 'string' }, description: 'Token mint addresses to match' },
+          amount: { type: 'string', description: 'Input amount in base units (string integer)' },
+          slippage_bps: { type: 'number', description: 'Slippage in bps (default 50)' },
+          sort_by: { type: 'string', description: 'Sort by liquidity or volume24h', enum: ['liquidity', 'volume24h'] },
+          preferred_dexes: {
+            type: 'array',
+            description: 'Optional DEX preference order',
+            items: { type: 'string', enum: ['meteora', 'raydium', 'orca'] },
+          },
+        },
+        required: ['amount'],
+      },
+    },
+    {
+      name: 'wormhole_quote',
+      description: 'Quote a Wormhole transfer (Token Bridge or CCTP).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          network: { type: 'string', description: 'Mainnet, Testnet, or Devnet (default Mainnet)' },
+          protocol: { type: 'string', enum: ['token_bridge', 'cctp'], description: 'Bridge protocol' },
+          source_chain: { type: 'string', description: 'Source chain name (e.g., Solana, Ethereum, Base)' },
+          destination_chain: { type: 'string', description: 'Destination chain name' },
+          source_address: { type: 'string', description: 'Optional source address (defaults to wallet signer if available)' },
+          destination_address: { type: 'string', description: 'Destination address on target chain' },
+          token_address: { type: 'string', description: 'Token address or "native" (Token Bridge only)' },
+          amount: { type: 'string', description: 'Amount to transfer' },
+          amount_units: { type: 'string', enum: ['human', 'atomic'], description: 'Amount units (default human)' },
+          automatic: { type: 'boolean', description: 'Use relayer/automatic delivery if supported' },
+          payload_base64: { type: 'string', description: 'Optional payload (base64)' },
+          destination_native_gas: { type: 'string', description: 'Optional native gas dropoff amount' },
+          destination_native_gas_units: { type: 'string', enum: ['human', 'atomic'], description: 'Native gas units (default human)' },
+          source_rpc_url: { type: 'string', description: 'Optional override for source RPC URL' },
+          destination_rpc_url: { type: 'string', description: 'Optional override for destination RPC URL' },
+        },
+        required: ['source_chain', 'destination_chain', 'destination_address', 'amount'],
+      },
+    },
+    {
+      name: 'wormhole_bridge',
+      description: 'Execute a Wormhole transfer (Token Bridge or CCTP).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          network: { type: 'string', description: 'Mainnet, Testnet, or Devnet (default Mainnet)' },
+          protocol: { type: 'string', enum: ['token_bridge', 'cctp'], description: 'Bridge protocol' },
+          source_chain: { type: 'string', description: 'Source chain name (e.g., Solana, Ethereum, Base)' },
+          destination_chain: { type: 'string', description: 'Destination chain name' },
+          destination_address: { type: 'string', description: 'Destination address on target chain' },
+          token_address: { type: 'string', description: 'Token address or "native" (Token Bridge only)' },
+          amount: { type: 'string', description: 'Amount to transfer' },
+          amount_units: { type: 'string', enum: ['human', 'atomic'], description: 'Amount units (default human)' },
+          automatic: { type: 'boolean', description: 'Use relayer/automatic delivery if supported' },
+          payload_base64: { type: 'string', description: 'Optional payload (base64)' },
+          destination_native_gas: { type: 'string', description: 'Optional native gas dropoff amount' },
+          destination_native_gas_units: { type: 'string', enum: ['human', 'atomic'], description: 'Native gas units (default human)' },
+          attest_timeout_ms: { type: 'number', description: 'Timeout for attestation (ms, default 60000)' },
+          skip_redeem: { type: 'boolean', description: 'Skip manual redeem even if automatic=false' },
+          source_rpc_url: { type: 'string', description: 'Optional override for source RPC URL' },
+          destination_rpc_url: { type: 'string', description: 'Optional override for destination RPC URL' },
+        },
+        required: ['source_chain', 'destination_chain', 'destination_address', 'amount'],
+      },
+    },
+    {
+      name: 'wormhole_redeem',
+      description: 'Redeem a previously initiated Wormhole transfer.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          network: { type: 'string', description: 'Mainnet, Testnet, or Devnet (default Mainnet)' },
+          protocol: { type: 'string', enum: ['token_bridge', 'cctp'], description: 'Bridge protocol' },
+          source_chain: { type: 'string', description: 'Source chain name' },
+          destination_chain: { type: 'string', description: 'Destination chain name' },
+          source_txid: { type: 'string', description: 'Source chain transaction id' },
+          attest_timeout_ms: { type: 'number', description: 'Timeout for attestation (ms, default 60000)' },
+          source_rpc_url: { type: 'string', description: 'Optional override for source RPC URL' },
+          destination_rpc_url: { type: 'string', description: 'Optional override for destination RPC URL' },
+        },
+        required: ['source_chain', 'destination_chain', 'source_txid'],
+      },
+    },
+    {
+      name: 'usdc_quote',
+      description: 'Quote a USDC transfer via Wormhole CCTP (Ethereum, Polygon, etc.).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          network: { type: 'string', description: 'Mainnet, Testnet, or Devnet (default Mainnet)' },
+          source_chain: { type: 'string', description: 'Source chain name (e.g., Ethereum, Polygon)' },
+          destination_chain: { type: 'string', description: 'Destination chain name' },
+          source_address: { type: 'string', description: 'Optional source address (defaults to wallet signer if available)' },
+          destination_address: { type: 'string', description: 'Destination address on target chain' },
+          amount: { type: 'string', description: 'Amount to transfer' },
+          amount_units: { type: 'string', enum: ['human', 'atomic'], description: 'Amount units (default human)' },
+          automatic: { type: 'boolean', description: 'Use relayer/automatic delivery if supported' },
+          payload_base64: { type: 'string', description: 'Optional payload (base64)' },
+          destination_native_gas: { type: 'string', description: 'Optional native gas dropoff amount' },
+          destination_native_gas_units: { type: 'string', enum: ['human', 'atomic'], description: 'Native gas units (default human)' },
+          source_rpc_url: { type: 'string', description: 'Optional override for source RPC URL' },
+          destination_rpc_url: { type: 'string', description: 'Optional override for destination RPC URL' },
+        },
+        required: ['source_chain', 'destination_chain', 'destination_address', 'amount'],
+      },
+    },
+    {
+      name: 'usdc_quote_auto',
+      description: 'Quote USDC via CCTP when supported, otherwise fall back to Token Bridge.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          network: { type: 'string', description: 'Mainnet, Testnet, or Devnet (default Mainnet)' },
+          source_chain: { type: 'string', description: 'Source chain name (e.g., Ethereum, Polygon)' },
+          destination_chain: { type: 'string', description: 'Destination chain name' },
+          source_address: { type: 'string', description: 'Optional source address (defaults to wallet signer if available)' },
+          destination_address: { type: 'string', description: 'Destination address on target chain' },
+          token_address: { type: 'string', description: 'Token address for Token Bridge fallback' },
+          amount: { type: 'string', description: 'Amount to transfer' },
+          amount_units: { type: 'string', enum: ['human', 'atomic'], description: 'Amount units (default human)' },
+          automatic: { type: 'boolean', description: 'Use relayer/automatic delivery if supported' },
+          payload_base64: { type: 'string', description: 'Optional payload (base64)' },
+          destination_native_gas: { type: 'string', description: 'Optional native gas dropoff amount' },
+          destination_native_gas_units: { type: 'string', enum: ['human', 'atomic'], description: 'Native gas units (default human)' },
+          source_rpc_url: { type: 'string', description: 'Optional override for source RPC URL' },
+          destination_rpc_url: { type: 'string', description: 'Optional override for destination RPC URL' },
+        },
+        required: ['source_chain', 'destination_chain', 'destination_address', 'amount'],
+      },
+    },
+    {
+      name: 'usdc_bridge',
+      description: 'Bridge USDC via Wormhole CCTP (Ethereum, Polygon, etc.).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          network: { type: 'string', description: 'Mainnet, Testnet, or Devnet (default Mainnet)' },
+          source_chain: { type: 'string', description: 'Source chain name (e.g., Ethereum, Polygon)' },
+          destination_chain: { type: 'string', description: 'Destination chain name' },
+          destination_address: { type: 'string', description: 'Destination address on target chain' },
+          amount: { type: 'string', description: 'Amount to transfer' },
+          amount_units: { type: 'string', enum: ['human', 'atomic'], description: 'Amount units (default human)' },
+          automatic: { type: 'boolean', description: 'Use relayer/automatic delivery if supported' },
+          payload_base64: { type: 'string', description: 'Optional payload (base64)' },
+          destination_native_gas: { type: 'string', description: 'Optional native gas dropoff amount' },
+          destination_native_gas_units: { type: 'string', enum: ['human', 'atomic'], description: 'Native gas units (default human)' },
+          attest_timeout_ms: { type: 'number', description: 'Timeout for attestation (ms, default 60000)' },
+          skip_redeem: { type: 'boolean', description: 'Skip manual redeem even if automatic=false' },
+          source_rpc_url: { type: 'string', description: 'Optional override for source RPC URL' },
+          destination_rpc_url: { type: 'string', description: 'Optional override for destination RPC URL' },
+        },
+        required: ['source_chain', 'destination_chain', 'destination_address', 'amount'],
+      },
+    },
+    {
+      name: 'usdc_bridge_auto',
+      description: 'Bridge USDC via CCTP when supported, otherwise fall back to Token Bridge.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          network: { type: 'string', description: 'Mainnet, Testnet, or Devnet (default Mainnet)' },
+          source_chain: { type: 'string', description: 'Source chain name (e.g., Ethereum, Polygon)' },
+          destination_chain: { type: 'string', description: 'Destination chain name' },
+          destination_address: { type: 'string', description: 'Destination address on target chain' },
+          token_address: { type: 'string', description: 'Token address for Token Bridge fallback' },
+          amount: { type: 'string', description: 'Amount to transfer' },
+          amount_units: { type: 'string', enum: ['human', 'atomic'], description: 'Amount units (default human)' },
+          automatic: { type: 'boolean', description: 'Use relayer/automatic delivery if supported' },
+          payload_base64: { type: 'string', description: 'Optional payload (base64)' },
+          destination_native_gas: { type: 'string', description: 'Optional native gas dropoff amount' },
+          destination_native_gas_units: { type: 'string', enum: ['human', 'atomic'], description: 'Native gas units (default human)' },
+          attest_timeout_ms: { type: 'number', description: 'Timeout for attestation (ms, default 60000)' },
+          skip_redeem: { type: 'boolean', description: 'Skip manual redeem even if automatic=false' },
+          source_rpc_url: { type: 'string', description: 'Optional override for source RPC URL' },
+          destination_rpc_url: { type: 'string', description: 'Optional override for destination RPC URL' },
+        },
+        required: ['source_chain', 'destination_chain', 'destination_address', 'amount'],
       },
     },
 
@@ -3997,6 +4804,117 @@ function buildTools(): ToolDefinition[] {
     },
 
     // ============================================
+    // QMD (MARKDOWN SEARCH) TOOLS
+    // ============================================
+
+    {
+      name: 'qmd_search',
+      description: 'Search local markdown collections via qmd (BM25 by default).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+          mode: { type: 'string', description: 'Search mode', enum: ['search', 'vsearch', 'query'] },
+          collection: { type: 'string', description: 'Optional collection name' },
+          limit: { type: 'number', description: 'Max results' },
+          json: { type: 'boolean', description: 'Return JSON output' },
+          files: { type: 'boolean', description: 'Return file-only output (JSON)' },
+          all: { type: 'boolean', description: 'Return all matches above threshold' },
+          full: { type: 'boolean', description: 'Include full document content' },
+          min_score: { type: 'number', description: 'Minimum score threshold' },
+          timeout_ms: { type: 'number', description: 'Override timeout in ms' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'qmd_get',
+      description: 'Retrieve a markdown document via qmd by path or #docid.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'Path or #docid' },
+          json: { type: 'boolean', description: 'Return JSON output' },
+          full: { type: 'boolean', description: 'Include full document content' },
+          timeout_ms: { type: 'number', description: 'Override timeout in ms' },
+        },
+        required: ['target'],
+      },
+    },
+    {
+      name: 'qmd_multi_get',
+      description: 'Retrieve multiple markdown documents via qmd.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          targets: {
+            type: 'array',
+            description: 'List of paths or #docids',
+            items: { type: 'string' },
+          },
+          json: { type: 'boolean', description: 'Return JSON output' },
+          timeout_ms: { type: 'number', description: 'Override timeout in ms' },
+        },
+        required: ['targets'],
+      },
+    },
+    {
+      name: 'qmd_status',
+      description: 'Show qmd index status.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'qmd_update',
+      description: 'Incrementally update the qmd index.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          timeout_ms: { type: 'number', description: 'Override timeout in ms' },
+        },
+      },
+    },
+    {
+      name: 'qmd_embed',
+      description: 'Update qmd embeddings (slow).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          timeout_ms: { type: 'number', description: 'Override timeout in ms' },
+        },
+      },
+    },
+    {
+      name: 'qmd_collection_add',
+      description: 'Add a markdown collection to qmd.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Collection path' },
+          name: { type: 'string', description: 'Collection name' },
+          mask: { type: 'string', description: 'Glob mask (e.g., "**/*.md")' },
+          timeout_ms: { type: 'number', description: 'Override timeout in ms' },
+        },
+        required: ['path', 'name'],
+      },
+    },
+    {
+      name: 'qmd_context_add',
+      description: 'Attach a description to a qmd collection.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          collection: { type: 'string', description: 'Collection URI (e.g., qmd://notes)' },
+          description: { type: 'string', description: 'Context description' },
+          timeout_ms: { type: 'number', description: 'Override timeout in ms' },
+        },
+        required: ['collection', 'description'],
+      },
+    },
+
+    // ============================================
     // EXECUTION & BOT TOOLS (like Clawdbot's exec)
     // ============================================
 
@@ -4081,6 +4999,8 @@ function buildTools(): ToolDefinition[] {
         properties: {
           path: { type: 'string', description: 'File path relative to workspace' },
           content: { type: 'string', description: 'File content' },
+          append: { type: 'boolean', description: 'Append instead of overwrite' },
+          create_dirs: { type: 'boolean', description: 'Create parent directories if missing' },
         },
         required: ['path', 'content'],
       },
@@ -4092,8 +5012,401 @@ function buildTools(): ToolDefinition[] {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'File path relative to workspace' },
+          max_bytes: { type: 'number', description: 'Maximum bytes to read (default 512KB)' },
         },
         required: ['path'],
+      },
+    },
+    {
+      name: 'edit_file',
+      description: 'Apply search/replace edits to a file in the workspace',
+      input_schema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path relative to workspace' },
+          edits: {
+            type: 'array',
+            description: 'List of edits to apply',
+            items: {
+              type: 'object',
+              properties: {
+                find: { type: 'string', description: 'Search string or regex source' },
+                replace: { type: 'string', description: 'Replacement text' },
+                all: { type: 'boolean', description: 'Replace all occurrences' },
+              },
+              required: ['find', 'replace'],
+            },
+          },
+          create_if_missing: { type: 'boolean', description: 'Create file if missing' },
+        },
+        required: ['path', 'edits'],
+      },
+    },
+    {
+      name: 'list_files',
+      description: 'List files in a workspace directory',
+      input_schema: {
+        type: 'object',
+        properties: {
+          dir: { type: 'string', description: 'Directory path (default workspace root)' },
+          recursive: { type: 'boolean', description: 'Recurse into subdirectories' },
+          limit: { type: 'number', description: 'Max entries to return' },
+          include_dirs: { type: 'boolean', description: 'Include directories in results' },
+        },
+      },
+    },
+    {
+      name: 'search_files',
+      description: 'Search files in workspace for a query string',
+      input_schema: {
+        type: 'object',
+        properties: {
+          dir: { type: 'string', description: 'Directory path (default workspace root)' },
+          query: { type: 'string', description: 'Search string (plain text)' },
+          recursive: { type: 'boolean', description: 'Recurse into subdirectories' },
+          limit: { type: 'number', description: 'Max results' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'shell_history_list',
+      description: 'List recent shell history entries',
+      input_schema: {
+        type: 'object',
+        properties: {
+          shell: { type: 'string', description: 'Shell type', enum: ['auto', 'zsh', 'bash', 'fish'] },
+          limit: { type: 'number', description: 'Max entries to return' },
+          query: { type: 'string', description: 'Optional substring filter' },
+        },
+      },
+    },
+    {
+      name: 'shell_history_search',
+      description: 'Search shell history for a query string',
+      input_schema: {
+        type: 'object',
+        properties: {
+          shell: { type: 'string', description: 'Shell type', enum: ['auto', 'zsh', 'bash', 'fish'] },
+          limit: { type: 'number', description: 'Max entries to return' },
+          query: { type: 'string', description: 'Search string' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'git_status',
+      description: 'Get git status for a repo in the workspace',
+      input_schema: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string', description: 'Repo path relative to workspace' },
+        },
+      },
+    },
+    {
+      name: 'git_diff',
+      description: 'Get git diff output',
+      input_schema: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string', description: 'Repo path relative to workspace' },
+          args: { type: 'array', description: 'Additional git diff args', items: { type: 'string' } },
+        },
+      },
+    },
+    {
+      name: 'git_log',
+      description: 'Get git log entries',
+      input_schema: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string', description: 'Repo path relative to workspace' },
+          limit: { type: 'number', description: 'Max commits to return' },
+        },
+      },
+    },
+    {
+      name: 'git_show',
+      description: 'Show git commit details',
+      input_schema: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string', description: 'Git ref (default HEAD)' },
+          cwd: { type: 'string', description: 'Repo path relative to workspace' },
+        },
+      },
+    },
+    {
+      name: 'git_rev_parse',
+      description: 'Resolve a git ref',
+      input_schema: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string', description: 'Git ref (default HEAD)' },
+          cwd: { type: 'string', description: 'Repo path relative to workspace' },
+        },
+      },
+    },
+    {
+      name: 'git_branch',
+      description: 'List git branches',
+      input_schema: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string', description: 'Repo path relative to workspace' },
+        },
+      },
+    },
+    {
+      name: 'git_add',
+      description: 'Stage files for commit',
+      input_schema: {
+        type: 'object',
+        properties: {
+          paths: { type: 'array', description: 'Paths to add', items: { type: 'string' } },
+          cwd: { type: 'string', description: 'Repo path relative to workspace' },
+        },
+        required: ['paths'],
+      },
+    },
+    {
+      name: 'git_commit',
+      description: 'Create a git commit',
+      input_schema: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'Commit message' },
+          cwd: { type: 'string', description: 'Repo path relative to workspace' },
+        },
+        required: ['message'],
+      },
+    },
+    {
+      name: 'email_send',
+      description: 'Send an email via SMTP/sendmail',
+      input_schema: {
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: 'From address (email or Name <email>)' },
+          to: { type: 'array', description: 'Recipients', items: { type: 'string' } },
+          cc: { type: 'array', description: 'CC recipients', items: { type: 'string' } },
+          bcc: { type: 'array', description: 'BCC recipients', items: { type: 'string' } },
+          subject: { type: 'string', description: 'Email subject' },
+          text: { type: 'string', description: 'Email body text' },
+          reply_to: { type: 'string', description: 'Reply-to address' },
+          dry_run: { type: 'boolean', description: 'Dry run without sending' },
+        },
+        required: ['from', 'to', 'subject', 'text'],
+      },
+    },
+    {
+      name: 'sms_send',
+      description: 'Send an SMS via Twilio',
+      input_schema: {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: 'Destination phone number' },
+          body: { type: 'string', description: 'Message body' },
+          from: { type: 'string', description: 'Override sender number' },
+          dry_run: { type: 'boolean', description: 'Dry run without sending' },
+        },
+        required: ['to', 'body'],
+      },
+    },
+    {
+      name: 'transcribe_audio',
+      description: 'Transcribe speech from an audio file in the workspace using OpenAI or local CLI engines (whisper/vosk)',
+      input_schema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Audio file path relative to workspace' },
+          engine: {
+            type: 'string',
+            description: 'Optional engine override',
+            enum: ['openai', 'whisper', 'vosk'],
+          },
+          language: { type: 'string', description: 'Optional language hint (e.g., en, en-US, es)' },
+          prompt: { type: 'string', description: 'Optional prompt to guide transcription' },
+          model: { type: 'string', description: 'Optional model override (OpenAI only)' },
+          temperature: { type: 'number', description: 'Optional sampling temperature (OpenAI only)' },
+          timestamps: { type: 'boolean', description: 'Include segment timestamps when supported' },
+          timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default 60000)' },
+        },
+        required: ['path'],
+      },
+    },
+    {
+      name: 'sql_query',
+      description: 'Run a safe, read-only SQL query against the local Clodds database (SELECT/WITH/PRAGMA/EXPLAIN/VALUES only)',
+      input_schema: {
+        type: 'object',
+        properties: {
+          sql: { type: 'string', description: 'SQL query to execute (read-only)' },
+          params: { type: 'array', description: 'Optional parameter values in order', items: { type: 'string' } },
+          max_rows: { type: 'number', description: 'Maximum rows to return (default 200, hard max 2000)' },
+        },
+        required: ['sql'],
+      },
+    },
+    {
+      name: 'register_webhook',
+      description: 'Register an inbound HTTP webhook that triggers the agent or slash commands',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Optional webhook id (auto-generated if omitted)' },
+          path: { type: 'string', description: 'Webhook path, e.g. /webhook/alerts' },
+          description: { type: 'string', description: 'Optional description' },
+          rate_limit: { type: 'number', description: 'Optional requests-per-minute limit' },
+          enabled: { type: 'boolean', description: 'Whether the webhook starts enabled' },
+          secret: { type: 'string', description: 'Optional pre-shared secret (auto-generated if omitted)' },
+          target_platform: { type: 'string', description: 'Where to send the response (e.g., telegram, slack)' },
+          target_chat_id: { type: 'string', description: 'Destination chat/channel id' },
+          target_user_id: { type: 'string', description: 'User id for session scoping' },
+          target_username: { type: 'string', description: 'Optional username for context' },
+          template: { type: 'string', description: 'Optional template; use {{payload}} to inject JSON payload' },
+        },
+        required: ['path', 'target_platform', 'target_chat_id', 'target_user_id'],
+      },
+    },
+    {
+      name: 'list_webhooks',
+      description: 'List registered webhooks',
+      input_schema: {
+        type: 'object',
+        properties: {
+          include_secrets: { type: 'boolean', description: 'Include webhook secrets in the response' },
+        },
+      },
+    },
+    {
+      name: 'delete_webhook',
+      description: 'Delete (unregister) a webhook',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Webhook id' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'enable_webhook',
+      description: 'Enable or disable a webhook',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Webhook id' },
+          enabled: { type: 'boolean', description: 'Whether the webhook is enabled' },
+        },
+        required: ['id', 'enabled'],
+      },
+    },
+    {
+      name: 'rotate_webhook_secret',
+      description: 'Rotate a webhook secret (invalidates old signatures)',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Webhook id' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'sign_webhook_payload',
+      description: 'Create a valid HMAC signature for a webhook payload (for testing)',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Webhook id' },
+          payload: { type: 'string', description: 'Payload JSON string or raw string' },
+        },
+        required: ['id', 'payload'],
+      },
+    },
+    {
+      name: 'trigger_webhook',
+      description: 'Trigger a webhook locally (for testing)',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Webhook id' },
+          payload: { type: 'string', description: 'Payload JSON string or raw string' },
+          signature: { type: 'string', description: 'Optional signature override' },
+        },
+        required: ['id', 'payload'],
+      },
+    },
+    {
+      name: 'docker_list_containers',
+      description: 'List Docker containers on this machine',
+      input_schema: {
+        type: 'object',
+        properties: {
+          all: { type: 'boolean', description: 'Include stopped containers (default true)' },
+        },
+      },
+    },
+    {
+      name: 'docker_list_images',
+      description: 'List Docker images on this machine',
+      input_schema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'docker_run',
+      description: 'Run a Docker container with workspace mounted at /workspace',
+      input_schema: {
+        type: 'object',
+        properties: {
+          image: { type: 'string', description: 'Image to run (e.g., node:20, python:3.11)' },
+          name: { type: 'string', description: 'Optional container name' },
+          command: { type: 'array', description: 'Optional command/args', items: { type: 'string' } },
+          detach: { type: 'boolean', description: 'Run detached (default true)' },
+          workdir: { type: 'string', description: 'Working directory inside container' },
+          network: { type: 'string', description: 'Docker network name (optional)' },
+        },
+        required: ['image'],
+      },
+    },
+    {
+      name: 'docker_stop',
+      description: 'Stop a running Docker container',
+      input_schema: {
+        type: 'object',
+        properties: {
+          container: { type: 'string', description: 'Container name or id' },
+          timeout_seconds: { type: 'number', description: 'Graceful stop timeout seconds (default 10)' },
+        },
+        required: ['container'],
+      },
+    },
+    {
+      name: 'docker_remove',
+      description: 'Remove a Docker container',
+      input_schema: {
+        type: 'object',
+        properties: {
+          container: { type: 'string', description: 'Container name or id' },
+          force: { type: 'boolean', description: 'Force removal (default false)' },
+        },
+        required: ['container'],
+      },
+    },
+    {
+      name: 'docker_logs',
+      description: 'Fetch recent logs from a Docker container',
+      input_schema: {
+        type: 'object',
+        properties: {
+          container: { type: 'string', description: 'Container name or id' },
+          tail: { type: 'number', description: 'Number of lines to tail (default 200)' },
+        },
+        required: ['container'],
       },
     },
 
@@ -4122,10 +5435,10 @@ function buildTools(): ToolDefinition[] {
       input_schema: {
         type: 'object',
         properties: {
-          email: { type: 'string', description: 'Kalshi account email' },
-          password: { type: 'string', description: 'Kalshi account password' },
+          api_key_id: { type: 'string', description: 'Kalshi API key ID' },
+          private_key_pem: { type: 'string', description: 'Kalshi API private key (PEM or base64-encoded PEM)' },
         },
-        required: ['email', 'password'],
+        required: ['api_key_id', 'private_key_pem'],
       },
     },
     {
@@ -4175,7 +5488,243 @@ function buildTools(): ToolDefinition[] {
         properties: {},
       },
     },
+    {
+      name: 'save_session_checkpoint',
+      description: 'Save a checkpoint of the current session history for later resumption.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'Optional checkpoint summary' },
+        },
+      },
+    },
+    {
+      name: 'restore_session_checkpoint',
+      description: 'Restore the most recent session checkpoint.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    // ============================================
+    // MESSAGE TOOLS
+    // ============================================
+    {
+      name: 'edit_message',
+      description: 'Edit a previously sent message (platform must support edits).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          platform: { type: 'string', description: 'Platform (e.g., telegram, slack, discord, webchat)' },
+          chat_id: { type: 'string', description: 'Chat/channel ID' },
+          message_id: { type: 'string', description: 'Message ID to edit' },
+          text: { type: 'string', description: 'New message text' },
+          account_id: { type: 'string', description: 'Account ID (for multi-account channels)' },
+        },
+        required: ['platform', 'chat_id', 'message_id', 'text'],
+      },
+    },
+    {
+      name: 'delete_message',
+      description: 'Delete a previously sent message (platform must support deletes).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          platform: { type: 'string', description: 'Platform (e.g., telegram, slack, discord, webchat)' },
+          chat_id: { type: 'string', description: 'Chat/channel ID' },
+          message_id: { type: 'string', description: 'Message ID to delete' },
+          account_id: { type: 'string', description: 'Account ID (for multi-account channels)' },
+        },
+        required: ['platform', 'chat_id', 'message_id'],
+      },
+    },
+    {
+      name: 'react_message',
+      description: 'Add or remove a reaction to a message (platform must support reactions).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          platform: { type: 'string', description: 'Platform (e.g., whatsapp, telegram, discord)' },
+          chat_id: { type: 'string', description: 'Chat/channel ID' },
+          message_id: { type: 'string', description: 'Message ID to react to' },
+          emoji: { type: 'string', description: 'Emoji reaction (e.g., 👍, ✅)' },
+          remove: { type: 'boolean', description: 'Remove the reaction instead of adding' },
+          participant: { type: 'string', description: 'Sender JID (WhatsApp group messages)' },
+          from_me: { type: 'boolean', description: 'Whether the target message was sent by this bot' },
+          account_id: { type: 'string', description: 'Account ID (for multi-account channels)' },
+        },
+        required: ['platform', 'chat_id', 'message_id', 'emoji'],
+      },
+    },
+    {
+      name: 'create_poll',
+      description: 'Create a poll in a chat (platform must support polls).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          platform: { type: 'string', description: 'Platform (e.g., whatsapp, telegram)' },
+          chat_id: { type: 'string', description: 'Chat/channel ID' },
+          question: { type: 'string', description: 'Poll question' },
+          options: { type: 'array', items: { type: 'string' }, description: 'Poll options' },
+          multi_select: { type: 'boolean', description: 'Allow multiple selections' },
+          account_id: { type: 'string', description: 'Account ID (for multi-account channels)' },
+        },
+        required: ['platform', 'chat_id', 'question', 'options'],
+      },
+    },
+    // ============================================
+    // SUBAGENT TOOLS
+    // ============================================
+    {
+      name: 'subagent_start',
+      description: 'Start a background subagent task. Returns the subagent run ID.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          task: { type: 'string', description: 'Task description for the subagent' },
+          id: { type: 'string', description: 'Optional run ID (auto-generated if omitted)' },
+          model: { type: 'string', description: 'Optional model override' },
+          thinking_mode: {
+            type: 'string',
+            description: 'Optional thinking mode',
+            enum: ['none', 'basic', 'extended', 'chain-of-thought'],
+          },
+          max_turns: { type: 'number', description: 'Max turns before stopping' },
+          timeout_ms: { type: 'number', description: 'Timeout in ms' },
+          tools: {
+            type: 'array',
+            description: 'Optional allowlist of tool names for subagent',
+            items: { type: 'string' },
+          },
+          background: {
+            type: 'boolean',
+            description: 'Run in background (default true)',
+          },
+        },
+        required: ['task'],
+      },
+    },
+    {
+      name: 'subagent_pause',
+      description: 'Pause a running subagent by ID.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Subagent run ID' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'subagent_resume',
+      description: 'Resume a paused subagent by ID.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Subagent run ID' },
+          background: { type: 'boolean', description: 'Run in background (default true)' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'subagent_status',
+      description: 'Get subagent status by ID.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Subagent run ID' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'subagent_progress',
+      description: 'Update subagent progress message/percent.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Subagent run ID' },
+          message: { type: 'string', description: 'Progress message' },
+          percent: { type: 'number', description: 'Progress percent (0-100)' },
+        },
+        required: ['id'],
+      },
+    },
   ];
+}
+
+type QmdCommandResult = {
+  stdout: string;
+  stderr: string;
+  status: number | null;
+  error?: NodeJS.ErrnoException;
+};
+
+function buildQmdEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  const bunBin = join(homedir(), '.bun', 'bin');
+  env.PATH = [bunBin, env.PATH || ''].filter(Boolean).join(':');
+  return env;
+}
+
+function runQmdCommand(args: string[], timeoutMs: number): QmdCommandResult {
+  const result = spawnSync('qmd', args, {
+    encoding: 'utf-8',
+    env: buildQmdEnv(),
+    timeout: timeoutMs,
+  });
+  return {
+    stdout: (result.stdout || '').toString(),
+    stderr: (result.stderr || '').toString(),
+    status: result.status,
+    error: result.error as NodeJS.ErrnoException | undefined,
+  };
+}
+
+function formatQmdResult(result: QmdCommandResult, expectJson: boolean): string {
+  if (result.error) {
+    if (result.error.code === 'ENOENT') {
+      return JSON.stringify({
+        error: 'qmd not found',
+        hint: 'Install with: bun install -g https://github.com/tobi/qmd',
+      });
+    }
+    return JSON.stringify({
+      error: 'Failed to run qmd',
+      message: result.error.message,
+    });
+  }
+
+  if (typeof result.status === 'number' && result.status !== 0) {
+    return JSON.stringify({
+      error: 'qmd command failed',
+      status: result.status,
+      stderr: result.stderr.trim() || undefined,
+      stdout: result.stdout.trim() || undefined,
+    });
+  }
+
+  const stdout = result.stdout.trim();
+  const stderr = result.stderr.trim();
+
+  if (expectJson && stdout) {
+    try {
+      const parsed = JSON.parse(stdout);
+      return JSON.stringify({ result: parsed, stderr: stderr || undefined });
+    } catch {
+      return JSON.stringify({
+        result: stdout,
+        warning: 'Failed to parse qmd JSON output',
+        stderr: stderr || undefined,
+      });
+    }
+  }
+
+  return JSON.stringify({
+    result: stdout,
+    stderr: stderr || undefined,
+  });
 }
 
 async function executeTool(
@@ -4183,7 +5732,7 @@ async function executeTool(
   toolInput: Record<string, unknown>,
   context: AgentContext
 ): Promise<string> {
-  const { feeds, db, session } = context;
+  const { feeds, db, session, subagents: subagentManager } = context;
   const userId = session.userId;
 
   try {
@@ -4234,6 +5783,110 @@ async function executeTool(
         });
       }
 
+      case 'market_index_sync': {
+        const platforms = toolInput.platforms as Platform[] | undefined;
+        const limitPerPlatform = toolInput.limit_per_platform as number | undefined;
+        const status = toolInput.status as 'open' | 'closed' | 'settled' | 'all' | undefined;
+        const excludeSports = toolInput.exclude_sports as boolean | undefined;
+        const minVolume24h = toolInput.min_volume_24h as number | undefined;
+        const minLiquidity = toolInput.min_liquidity as number | undefined;
+        const minOpenInterest = toolInput.min_open_interest as number | undefined;
+        const minPredictions = toolInput.min_predictions as number | undefined;
+        const excludeResolved = toolInput.exclude_resolved as boolean | undefined;
+
+        const result = await context.marketIndex.sync({
+          platforms,
+          limitPerPlatform,
+          status,
+          excludeSports,
+          minVolume24h,
+          minLiquidity,
+          minOpenInterest,
+          minPredictions,
+          excludeResolved,
+        });
+
+        return JSON.stringify({
+          result: {
+            indexed: result.indexed,
+            byPlatform: result.byPlatform,
+          },
+        });
+      }
+
+      case 'market_index_search': {
+        const query = toolInput.query as string;
+        const platform = toolInput.platform as Platform | undefined;
+        const limit = toolInput.limit as number | undefined;
+        const maxCandidates = toolInput.max_candidates as number | undefined;
+        const minScore = toolInput.min_score as number | undefined;
+        const platformWeights = toolInput.platform_weights as Record<string, number> | undefined;
+
+        const results = await context.marketIndex.search({
+          query,
+          platform,
+          limit,
+          maxCandidates,
+          minScore,
+          platformWeights: (platformWeights as Record<Platform, number> | undefined)
+            ?? context.marketIndexConfig?.platformWeights,
+        });
+
+        return JSON.stringify({
+          result: results.map((r) => ({
+            score: Number(r.score.toFixed(4)),
+            market: {
+              platform: r.item.platform,
+              id: r.item.marketId,
+              slug: r.item.slug,
+              question: r.item.question,
+              description: r.item.description,
+              url: r.item.url,
+              status: r.item.status,
+              endDate: r.item.endDate,
+              resolved: r.item.resolved,
+              volume24h: r.item.volume24h,
+              liquidity: r.item.liquidity,
+              openInterest: r.item.openInterest,
+              predictions: r.item.predictions,
+            },
+          })),
+        });
+      }
+
+      case 'market_index_stats': {
+        const platforms = toolInput.platforms as Platform[] | undefined;
+        const stats = context.marketIndex.stats(platforms);
+        return JSON.stringify({ result: stats });
+      }
+
+      case 'market_index_last_sync': {
+        const stats = context.marketIndex.stats();
+        return JSON.stringify({
+          result: {
+            lastSyncAt: stats.lastSyncAt,
+            lastSyncIndexed: stats.lastSyncIndexed,
+            lastSyncByPlatform: stats.lastSyncByPlatform,
+            lastSyncDurationMs: stats.lastSyncDurationMs,
+            lastPruned: stats.lastPruned,
+          },
+        });
+      }
+
+      case 'market_index_prune': {
+        const platform = toolInput.platform as Platform | undefined;
+        const staleAfterMs = toolInput.stale_after_ms as number | undefined;
+        const cutoff = Date.now() - (staleAfterMs ?? 7 * 24 * 60 * 60 * 1000);
+        const removed = db.pruneMarketIndex(cutoff, platform);
+        return JSON.stringify({
+          result: {
+            removed,
+            cutoffMs: cutoff,
+            platform: platform ?? 'all',
+          },
+        });
+      }
+
       // Portfolio tools
       case 'get_portfolio': {
         const positions = db.getPositions(userId);
@@ -4257,6 +5910,28 @@ async function executeTool(
               totalPnl: `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`,
               totalPnlPct: totalCost > 0 ? `${((totalPnl / totalCost) * 100).toFixed(1)}%` : '0%',
             },
+          },
+        });
+      }
+
+      case 'get_portfolio_history': {
+        const sinceMs = typeof toolInput.since_ms === 'number' ? (toolInput.since_ms as number) : undefined;
+        const limit = typeof toolInput.limit === 'number' ? (toolInput.limit as number) : undefined;
+        const order = toolInput.order === 'asc' ? 'asc' : toolInput.order === 'desc' ? 'desc' : undefined;
+
+        const snapshots = db.getPortfolioSnapshots(userId, {
+          sinceMs,
+          limit,
+          order,
+        });
+
+        return JSON.stringify({
+          result: {
+            count: snapshots.length,
+            snapshots: snapshots.map((snap) => ({
+              ...snap,
+              createdAt: snap.createdAt.toISOString(),
+            })),
           },
         });
       }
@@ -4292,6 +5967,8 @@ async function executeTool(
           name: toolInput.market_name as string,
           marketId: toolInput.market_id as string,
           platform: toolInput.platform as Platform,
+          channel: session.channel,
+          chatId: session.chatId,
           condition: {
             type: toolInput.condition_type as 'price_above' | 'price_below' | 'price_change_pct',
             threshold: toolInput.threshold as number,
@@ -4496,7 +6173,7 @@ async function executeTool(
         let trades: any[] = [];
 
         if (platform === 'polymarket') {
-          const response = await fetch(`https://clob.polymarket.com/trades?maker=${address}&limit=${limit}`);
+          const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/trades?maker=${address}&limit=${limit}`);
           const data = await response.json() as ApiResponse;
           trades = (data || []).slice(0, limit).map((t: any) => ({
             market: t.market || 'Unknown',
@@ -4510,18 +6187,16 @@ async function executeTool(
           const kalshiCreds = context.tradingContext?.credentials.get('kalshi');
           if (kalshiCreds && kalshiCreds.platform === 'kalshi') {
             try {
-              // Authenticate and get fills
               const creds = kalshiCreds.data as KalshiCredentials;
-              const loginRes = await fetch('https://api.elections.kalshi.com/trade-api/v2/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: creds.email, password: creds.password }),
-              });
-              if (loginRes.ok) {
-                const loginData = await loginRes.json() as { token: string };
-                const fillsRes = await fetch(`https://api.elections.kalshi.com/trade-api/v2/fills?limit=${limit}`, {
-                  headers: { Authorization: `Bearer ${loginData.token}` },
-                });
+              const fillsUrl = `${KALSHI_API_BASE}/fills?limit=${limit}`;
+
+              const apiKeyAuth = getKalshiApiKeyAuth(creds);
+              if (apiKeyAuth) {
+                const headers = buildKalshiHeadersForUrl(apiKeyAuth, 'GET', fillsUrl);
+                const fillsRes = await fetch(fillsUrl, { headers });
+                if (!fillsRes.ok) {
+                  throw new Error(`Kalshi API error: ${fillsRes.status}`);
+                }
                 const fillsData = await fillsRes.json() as { fills?: any[] };
                 trades = (fillsData.fills || []).map((f: any) => ({
                   ticker: f.ticker,
@@ -4531,6 +6206,30 @@ async function executeTool(
                   timestamp: f.created_time,
                 }));
                 await context.credentials.markSuccess(userId, 'kalshi');
+              } else if (creds.email && creds.password) {
+                // Legacy email/password login fallback
+                const loginRes = await fetch(`${KALSHI_API_BASE}/login`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ email: creds.email, password: creds.password }),
+                });
+                if (loginRes.ok) {
+                  const loginData = await loginRes.json() as { token: string };
+                  const fillsRes = await fetch(fillsUrl, {
+                    headers: { Authorization: `Bearer ${loginData.token}` },
+                  });
+                  const fillsData = await fillsRes.json() as { fills?: any[] };
+                  trades = (fillsData.fills || []).map((f: any) => ({
+                    ticker: f.ticker,
+                    side: f.side,
+                    count: f.count,
+                    price: `${f.price}¢`,
+                    timestamp: f.created_time,
+                  }));
+                  await context.credentials.markSuccess(userId, 'kalshi');
+                }
+              } else {
+                trades = [{ error: 'Kalshi credentials missing. Use setup_kalshi_credentials.' }];
               }
             } catch (err) {
               await context.credentials.markFailure(userId, 'kalshi');
@@ -4607,16 +6306,15 @@ async function executeTool(
           if (kalshiCreds && kalshiCreds.platform === 'kalshi') {
             try {
               const creds = kalshiCreds.data as KalshiCredentials;
-              const loginRes = await fetch('https://api.elections.kalshi.com/trade-api/v2/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: creds.email, password: creds.password }),
-              });
-              if (loginRes.ok) {
-                const loginData = await loginRes.json() as { token: string };
-                const posRes = await fetch('https://api.elections.kalshi.com/trade-api/v2/portfolio/positions', {
-                  headers: { Authorization: `Bearer ${loginData.token}` },
-                });
+              const positionsUrl = `${KALSHI_API_BASE}/portfolio/positions`;
+              const apiKeyAuth = getKalshiApiKeyAuth(creds);
+
+              if (apiKeyAuth) {
+                const headers = buildKalshiHeadersForUrl(apiKeyAuth, 'GET', positionsUrl);
+                const posRes = await fetch(positionsUrl, { headers });
+                if (!posRes.ok) {
+                  throw new Error(`Kalshi API error: ${posRes.status}`);
+                }
                 const posData = await posRes.json() as { market_positions?: any[] };
                 positions = (posData.market_positions || []).map((p: any) => ({
                   ticker: p.ticker,
@@ -4626,6 +6324,29 @@ async function executeTool(
                   marketPrice: `${p.market_exposure || 0}¢`,
                 }));
                 await context.credentials.markSuccess(userId, 'kalshi');
+              } else if (creds.email && creds.password) {
+                const loginRes = await fetch(`${KALSHI_API_BASE}/login`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ email: creds.email, password: creds.password }),
+                });
+                if (loginRes.ok) {
+                  const loginData = await loginRes.json() as { token: string };
+                  const posRes = await fetch(positionsUrl, {
+                    headers: { Authorization: `Bearer ${loginData.token}` },
+                  });
+                  const posData = await posRes.json() as { market_positions?: any[] };
+                  positions = (posData.market_positions || []).map((p: any) => ({
+                    ticker: p.ticker,
+                    side: p.position > 0 ? 'Yes' : 'No',
+                    count: Math.abs(p.position),
+                    avgPrice: `${p.total_traded ? Math.round((p.realized_pnl || 0) / p.total_traded * 100) : 0}¢`,
+                    marketPrice: `${p.market_exposure || 0}¢`,
+                  }));
+                  await context.credentials.markSuccess(userId, 'kalshi');
+                }
+              } else {
+                positions = [{ error: 'Kalshi credentials missing. Use setup_kalshi_credentials.' }];
               }
             } catch (err) {
               await context.credentials.markFailure(userId, 'kalshi');
@@ -4703,16 +6424,15 @@ async function executeTool(
           if (kalshiCreds && kalshiCreds.platform === 'kalshi') {
             try {
               const creds = kalshiCreds.data as KalshiCredentials;
-              const loginRes = await fetch('https://api.elections.kalshi.com/trade-api/v2/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: creds.email, password: creds.password }),
-              });
-              if (loginRes.ok) {
-                const loginData = await loginRes.json() as { token: string };
-                const balRes = await fetch('https://api.elections.kalshi.com/trade-api/v2/portfolio/balance', {
-                  headers: { Authorization: `Bearer ${loginData.token}` },
-                });
+              const balanceUrl = `${KALSHI_API_BASE}/portfolio/balance`;
+              const apiKeyAuth = getKalshiApiKeyAuth(creds);
+
+              if (apiKeyAuth) {
+                const headers = buildKalshiHeadersForUrl(apiKeyAuth, 'GET', balanceUrl);
+                const balRes = await fetch(balanceUrl, { headers });
+                if (!balRes.ok) {
+                  throw new Error(`Kalshi API error: ${balRes.status}`);
+                }
                 const balData = await balRes.json() as any;
                 pnlData = {
                   balance: balData.balance ? `$${(balData.balance / 100).toFixed(2)}` : 'N/A',
@@ -4720,6 +6440,27 @@ async function executeTool(
                   pnl: balData.pnl ? `$${(balData.pnl / 100).toFixed(2)}` : 'N/A',
                 };
                 await context.credentials.markSuccess(userId, 'kalshi');
+              } else if (creds.email && creds.password) {
+                const loginRes = await fetch(`${KALSHI_API_BASE}/login`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ email: creds.email, password: creds.password }),
+                });
+                if (loginRes.ok) {
+                  const loginData = await loginRes.json() as { token: string };
+                  const balRes = await fetch(balanceUrl, {
+                    headers: { Authorization: `Bearer ${loginData.token}` },
+                  });
+                  const balData = await balRes.json() as any;
+                  pnlData = {
+                    balance: balData.balance ? `$${(balData.balance / 100).toFixed(2)}` : 'N/A',
+                    portfolioValue: balData.portfolio_value ? `$${(balData.portfolio_value / 100).toFixed(2)}` : 'N/A',
+                    pnl: balData.pnl ? `$${(balData.pnl / 100).toFixed(2)}` : 'N/A',
+                  };
+                  await context.credentials.markSuccess(userId, 'kalshi');
+                }
+              } else {
+                pnlData = { error: 'Kalshi credentials missing. Use setup_kalshi_credentials.' };
               }
             } catch (err) {
               await context.credentials.markFailure(userId, 'kalshi');
@@ -4851,7 +6592,7 @@ async function executeTool(
 
         try {
           // Fetch the original trade from the wallet
-          const tradesRes = await fetch(`https://clob.polymarket.com/trades?maker=${address}&limit=50`);
+          const tradesRes = await fetchPolymarketClob(context, `https://clob.polymarket.com/trades?maker=${address}&limit=50`);
           const tradesData = await tradesRes.json() as any[];
 
           // Find the specific trade
@@ -4975,17 +6716,36 @@ async function executeTool(
 
       case 'find_arbitrage': {
         const minEdge = (toolInput.min_edge as number) || 1;
+        const query = (toolInput.query as string | undefined)?.trim() || '';
+        const limit = (toolInput.limit as number) || 10;
+        const mode = (toolInput.mode as string) || 'both';
+        const minVolume = (toolInput.min_volume as number) || 0;
         const platforms = (toolInput.platforms as string[]) || ['polymarket', 'kalshi', 'manifold'];
 
-        // Search for common topics across platforms
-        const opportunities: any[] = [];
+        const normalize = (text: string) =>
+          text
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
 
-        // Check for YES+NO arbitrage within Polymarket
-        const polyMarkets = await feeds.searchMarkets('', 'polymarket');
-        for (const market of polyMarkets.slice(0, 20)) {
-          if (market.outcomes.length === 2) {
-            const yesPrice = market.outcomes[0]?.price || 0;
-            const noPrice = market.outcomes[1]?.price || 0;
+        const opportunities: Array<Record<string, unknown>> = [];
+
+        // Internal YES/NO arbitrage (Polymarket only)
+        if (mode === 'both' || mode === 'internal') {
+          const polyMarkets = await feeds.searchMarkets(query, 'polymarket');
+          for (const market of polyMarkets.slice(0, 60)) {
+            if (minVolume && (market.volume24h || 0) < minVolume) continue;
+            if (market.outcomes.length < 2) continue;
+
+            const yesOutcome = market.outcomes.find((o) => o.name?.toLowerCase() === 'yes') || market.outcomes[0];
+            const noOutcome = market.outcomes.find((o) => o.name?.toLowerCase() === 'no') || market.outcomes[1];
+            if (!yesOutcome || !noOutcome) continue;
+
+            const yesPrice = yesOutcome.price ?? 0;
+            const noPrice = noOutcome.price ?? 0;
+            if (!Number.isFinite(yesPrice) || !Number.isFinite(noPrice)) continue;
+
             const sum = yesPrice + noPrice;
             const edge = (1 - sum) * 100;
 
@@ -4993,22 +6753,72 @@ async function executeTool(
               opportunities.push({
                 type: 'internal_arb',
                 platform: market.platform,
-                market: market.question.slice(0, 50) + (market.question.length > 50 ? '...' : ''),
+                market: market.question,
                 yesPrice: `${Math.round(yesPrice * 100)}¢`,
                 noPrice: `${Math.round(noPrice * 100)}¢`,
                 sum: `${Math.round(sum * 100)}¢`,
                 edge: `${edge.toFixed(2)}%`,
-                action: `Buy YES at ${Math.round(yesPrice * 100)}¢ + NO at ${Math.round(noPrice * 100)}¢ = guaranteed ${Math.round(edge)}¢ profit per $1`,
+                action: `Buy YES at ${Math.round(yesPrice * 100)}¢ + NO at ${Math.round(noPrice * 100)}¢ = ${edge.toFixed(2)}% edge`,
               });
             }
           }
         }
 
+        // Cross-platform price discrepancies
+        if (mode === 'both' || mode === 'cross') {
+          const searchResults = await Promise.all(
+            platforms.map(async (platform) => ({
+              platform,
+              markets: await feeds.searchMarkets(query, platform),
+            }))
+          );
+
+          const grouped = new Map<string, Array<{ platform: string; market: Market; yesPrice: number }>>();
+          for (const { platform, markets } of searchResults) {
+            for (const market of markets.slice(0, 30)) {
+              if (minVolume && (market.volume24h || 0) < minVolume) continue;
+              const yesOutcome = market.outcomes.find((o) => o.name?.toLowerCase() === 'yes') || market.outcomes[0];
+              if (!yesOutcome || !Number.isFinite(yesOutcome.price)) continue;
+              const key = normalize(market.question).split(' ').slice(0, 8).join(' ');
+              if (!key) continue;
+              const list = grouped.get(key) || [];
+              list.push({ platform, market, yesPrice: yesOutcome.price });
+              grouped.set(key, list);
+            }
+          }
+
+          for (const [, entries] of grouped.entries()) {
+            const uniquePlatforms = new Set(entries.map((e) => e.platform));
+            if (uniquePlatforms.size < 2) continue;
+
+            const sorted = entries.slice().sort((a, b) => a.yesPrice - b.yesPrice);
+            const low = sorted[0];
+            const high = sorted[sorted.length - 1];
+            const spread = (high.yesPrice - low.yesPrice) * 100;
+            if (spread < minEdge) continue;
+
+            opportunities.push({
+              type: 'cross_platform',
+              topic: low.market.question,
+              low: { platform: low.platform, price: `${Math.round(low.yesPrice * 100)}¢` },
+              high: { platform: high.platform, price: `${Math.round(high.yesPrice * 100)}¢` },
+              spread: `${spread.toFixed(2)}%`,
+            });
+          }
+        }
+
+        opportunities.sort((a, b) => {
+          const edgeA = Number.parseFloat(String((a.edge as string) ?? (a.spread as string) ?? '0')) || 0;
+          const edgeB = Number.parseFloat(String((b.edge as string) ?? (b.spread as string) ?? '0')) || 0;
+          return edgeB - edgeA;
+        });
+
         return JSON.stringify({
           result: {
-            scanned: polyMarkets.length,
+            query: query || undefined,
             minEdge: `${minEdge}%`,
-            opportunities: opportunities.slice(0, 10),
+            mode,
+            opportunities: opportunities.slice(0, limit),
             message: opportunities.length === 0
               ? 'No arbitrage opportunities found above the minimum edge threshold.'
               : `Found ${opportunities.length} opportunities`,
@@ -5083,7 +6893,7 @@ async function executeTool(
 
         try {
           // Fetch the market to get current prices and token IDs
-          const marketRes = await fetch(`https://clob.polymarket.com/markets/${marketId}`);
+          const marketRes = await fetchPolymarketClob(context, `https://clob.polymarket.com/markets/${marketId}`);
           if (!marketRes.ok) {
             return JSON.stringify({ error: `Market ${marketId} not found` });
           }
@@ -5100,8 +6910,8 @@ async function executeTool(
 
           // Fetch current orderbook prices
           const [yesBookRes, noBookRes] = await Promise.all([
-            fetch(`https://clob.polymarket.com/book?token_id=${yesToken.token_id}`),
-            fetch(`https://clob.polymarket.com/book?token_id=${noToken.token_id}`),
+            fetchPolymarketClob(context, `https://clob.polymarket.com/book?token_id=${yesToken.token_id}`),
+            fetchPolymarketClob(context, `https://clob.polymarket.com/book?token_id=${noToken.token_id}`),
           ]);
           const yesBook = await yesBookRes.json() as any;
           const noBook = await noBookRes.json() as any;
@@ -5375,16 +7185,23 @@ async function executeTool(
       }
 
       case 'setup_kalshi_credentials': {
+        const apiKeyId = toolInput.api_key_id as string;
+        const privateKeyPem = toolInput.private_key_pem as string;
+        if (!apiKeyId || !privateKeyPem) {
+          return JSON.stringify({
+            error: 'Kalshi credentials require api_key_id and private_key_pem.',
+          });
+        }
+
         const creds: KalshiCredentials = {
-          email: toolInput.email as string,
-          password: toolInput.password as string,
+          apiKeyId,
+          privateKeyPem: normalizeKalshiPrivateKey(privateKeyPem),
         };
 
         await context.credentials.setCredentials(userId, 'kalshi', creds);
         return JSON.stringify({
           result: 'Kalshi credentials saved! You can now trade on Kalshi.',
-          email: creds.email,
-          security_notice: 'Your credentials are encrypted and stored securely. Consider using a unique password for trading. You can delete credentials anytime with delete_trading_credentials.',
+          security_notice: 'Your credentials are encrypted and stored securely. Keep your private key safe and rotate it if compromised.',
         });
       }
 
@@ -5439,6 +7256,16 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
         const price = toolInput.price as number;
         const size = toolInput.size as number;
+        const notional = price * size;
+        const maxError = enforceMaxOrderSize(context, notional, 'polymarket_buy');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'polymarket',
+          outcomeId: tokenId,
+          notional,
+          label: 'polymarket_buy',
+        });
+        if (exposureError) return exposureError;
 
         // Execute via Python trading script with user's credentials
         const tradingDir = join(__dirname, '..', '..', 'trading');
@@ -5727,6 +7554,15 @@ async function executeTool(
 
         const tokenId = toolInput.token_id as string;
         const amount = toolInput.amount as number;
+        const maxError = enforceMaxOrderSize(context, amount, 'polymarket_market_buy');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'polymarket',
+          outcomeId: tokenId,
+          notional: amount,
+          label: 'polymarket_market_buy',
+        });
+        if (exposureError) return exposureError;
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 polymarket.py market_buy ${tokenId} ${amount}`;
 
@@ -5764,6 +7600,16 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
         const price = toolInput.price as number;
         const size = toolInput.size as number;
+        const notional = price * size;
+        const maxError = enforceMaxOrderSize(context, notional, 'polymarket_maker_buy');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'polymarket',
+          outcomeId: tokenId,
+          notional,
+          label: 'polymarket_maker_buy',
+        });
+        if (exposureError) return exposureError;
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 polymarket.py maker_buy ${tokenId} ${price} ${size}`;
 
@@ -5832,7 +7678,7 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
 
         try {
-          const response = await fetch(`https://clob.polymarket.com/fee-rate?token_id=${tokenId}`);
+          const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/fee-rate?token_id=${tokenId}`);
           if (!response.ok) {
             return JSON.stringify({ error: `Failed to get fee rate: ${response.status}` });
           }
@@ -5859,7 +7705,7 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
 
         try {
-          const response = await fetch(`https://clob.polymarket.com/midpoint?token_id=${tokenId}`);
+          const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/midpoint?token_id=${tokenId}`);
           if (!response.ok) {
             return JSON.stringify({ error: `Failed to get midpoint: ${response.status}` });
           }
@@ -5880,7 +7726,7 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
 
         try {
-          const response = await fetch(`https://clob.polymarket.com/spread?token_id=${tokenId}`);
+          const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/spread?token_id=${tokenId}`);
           if (!response.ok) {
             return JSON.stringify({ error: `Failed to get spread: ${response.status}` });
           }
@@ -5902,7 +7748,7 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
 
         try {
-          const response = await fetch(`https://clob.polymarket.com/last-trade-price?token_id=${tokenId}`);
+          const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/last-trade-price?token_id=${tokenId}`);
           if (!response.ok) {
             return JSON.stringify({ error: `Failed to get last trade: ${response.status}` });
           }
@@ -5923,7 +7769,7 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
 
         try {
-          const response = await fetch(`https://clob.polymarket.com/tick-size?token_id=${tokenId}`);
+          const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/tick-size?token_id=${tokenId}`);
           if (!response.ok) {
             return JSON.stringify({ error: `Failed to get tick size: ${response.status}` });
           }
@@ -6085,7 +7931,7 @@ async function executeTool(
       // ========== HEALTH & CONFIG HANDLERS ==========
       case 'polymarket_health': {
         try {
-          const response = await fetch('https://clob.polymarket.com/');
+          const response = await fetchPolymarketClob(context, 'https://clob.polymarket.com/');
           return JSON.stringify({ ok: response.ok, status: response.status });
         } catch (err: unknown) {
           return JSON.stringify({ ok: false, error: (err as Error).message });
@@ -6094,7 +7940,7 @@ async function executeTool(
 
       case 'polymarket_server_time': {
         try {
-          const response = await fetch('https://clob.polymarket.com/time');
+          const response = await fetchPolymarketClob(context, 'https://clob.polymarket.com/time');
           const data = await response.json() as ApiResponse;
           return JSON.stringify(data);
         } catch (err: unknown) {
@@ -6131,7 +7977,7 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
         const side = toolInput.side as string;
         try {
-          const response = await fetch(`https://clob.polymarket.com/price?token_id=${tokenId}&side=${side}`);
+          const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/price?token_id=${tokenId}&side=${side}`);
           const data = await response.json() as ApiResponse;
           return JSON.stringify({ token_id: tokenId, side, price: data.price });
         } catch (err: unknown) {
@@ -6142,7 +7988,7 @@ async function executeTool(
       case 'polymarket_neg_risk': {
         const tokenId = toolInput.token_id as string;
         try {
-          const response = await fetch(`https://clob.polymarket.com/neg-risk?token_id=${tokenId}`);
+          const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/neg-risk?token_id=${tokenId}`);
           const data = await response.json() as ApiResponse;
           return JSON.stringify({ token_id: tokenId, neg_risk: data.neg_risk });
         } catch (err: unknown) {
@@ -6258,7 +8104,7 @@ async function executeTool(
       case 'polymarket_market_trades_events': {
         const conditionId = toolInput.condition_id as string;
         try {
-          const response = await fetch(`https://clob.polymarket.com/markets/${conditionId}/trades`);
+          const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/markets/${conditionId}/trades`);
           const data = await response.json() as ApiResponse;
           return JSON.stringify(data);
         } catch (err: unknown) {
@@ -6298,6 +8144,32 @@ async function executeTool(
           return JSON.stringify({ error: 'No Polymarket credentials set up.' });
         }
         const orders = toolInput.orders as Array<{ token_id: string; price: number; size: number; side: string }>;
+        if (Array.isArray(orders) && orders.length > 0) {
+          let total = 0;
+          const perToken = new Map<string, number>();
+          for (const order of orders) {
+            if (!order) continue;
+            const side = String(order.side || '').toUpperCase();
+            if (side && side !== 'BUY') continue;
+            const price = Number(order.price);
+            const size = Number(order.size);
+            if (!Number.isFinite(price) || !Number.isFinite(size)) continue;
+            const notional = price * size;
+            total += notional;
+            perToken.set(order.token_id, (perToken.get(order.token_id) || 0) + notional);
+          }
+          const maxError = enforceMaxOrderSize(context, total, 'polymarket_post_orders_batch');
+          if (maxError) return maxError;
+          for (const [tokenId, notional] of perToken) {
+            const exposureError = enforceExposureLimits(context, userId, {
+              platform: 'polymarket',
+              outcomeId: tokenId,
+              notional,
+              label: 'polymarket_post_orders_batch',
+            });
+            if (exposureError) return exposureError;
+          }
+        }
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const ordersJson = JSON.stringify(orders);
         const cmd = `cd ${tradingDir} && python3 polymarket.py post_orders_batch '${ordersJson}'`;
@@ -6707,7 +8579,7 @@ async function executeTool(
 
       case 'polymarket_closed_only_mode': {
         try {
-          const response = await fetch('https://clob.polymarket.com/closed-only');
+          const response = await fetchPolymarketClob(context, 'https://clob.polymarket.com/closed-only');
           const data = await response.json() as ApiResponse;
           return JSON.stringify(data);
         } catch (err: unknown) {
@@ -7184,16 +9056,23 @@ async function executeTool(
         const side = toolInput.side as string;
         const count = toolInput.count as number;
         const price = toolInput.price as number;
+        const notional = count * (price > 1 ? price / 100 : price);
+        const maxError = enforceMaxOrderSize(context, notional, 'kalshi_buy');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'kalshi',
+          marketId: ticker,
+          outcomeId: side,
+          notional,
+          label: 'kalshi_buy',
+        });
+        if (exposureError) return exposureError;
 
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py buy ${ticker} ${side} ${count} ${price}`;
 
         const creds = kalshiCreds.data;
-        const userEnv = {
-          ...process.env,
-          KALSHI_EMAIL: creds.email,
-          KALSHI_PASSWORD: creds.password,
-        };
+        const userEnv = buildKalshiEnv(creds);
 
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
@@ -7225,11 +9104,7 @@ async function executeTool(
         const cmd = `cd ${tradingDir} && python3 kalshi.py sell ${ticker} ${side} ${count} ${price}`;
 
         const creds = kalshiCreds.data;
-        const userEnv = {
-          ...process.env,
-          KALSHI_EMAIL: creds.email,
-          KALSHI_PASSWORD: creds.password,
-        };
+        const userEnv = buildKalshiEnv(creds);
 
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
@@ -7256,11 +9131,7 @@ async function executeTool(
         const cmd = `cd ${tradingDir} && python3 kalshi.py positions`;
 
         const creds = kalshiCreds.data;
-        const userEnv = {
-          ...process.env,
-          KALSHI_EMAIL: creds.email,
-          KALSHI_PASSWORD: creds.password,
-        };
+        const userEnv = buildKalshiEnv(creds);
 
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
@@ -7282,7 +9153,7 @@ async function executeTool(
           ? `cd ${tradingDir} && python3 kalshi.py search "${query}"`
           : `cd ${tradingDir} && python3 kalshi.py search`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7300,7 +9171,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py market ${ticker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7317,7 +9188,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py balance`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7334,7 +9205,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py orders`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7352,7 +9223,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py cancel ${orderId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7405,7 +9276,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py orderbook ${ticker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7426,7 +9297,7 @@ async function executeTool(
         if (ticker) cmd += ` --ticker ${ticker}`;
         if (limit) cmd += ` --limit ${limit}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7447,7 +9318,7 @@ async function executeTool(
         let cmd = `cd ${tradingDir} && python3 kalshi.py candlesticks ${seriesTicker} ${ticker}`;
         if (interval) cmd += ` --interval ${interval}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7469,7 +9340,7 @@ async function executeTool(
         if (status) cmd += ` --status ${status}`;
         if (seriesTicker) cmd += ` --series ${seriesTicker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7487,7 +9358,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py event ${eventTicker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7506,7 +9377,7 @@ async function executeTool(
         let cmd = `cd ${tradingDir} && python3 kalshi.py series`;
         if (category) cmd += ` --category ${category}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7524,7 +9395,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py series_info ${seriesTicker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7543,10 +9414,22 @@ async function executeTool(
         const side = toolInput.side as string;
         const action = toolInput.action as string;
         const count = toolInput.count as number;
+        if (action?.toLowerCase() === 'buy') {
+          const maxError = enforceMaxOrderSize(context, count, 'kalshi_market_order');
+          if (maxError) return maxError;
+          const exposureError = enforceExposureLimits(context, userId, {
+            platform: 'kalshi',
+            marketId: ticker,
+            outcomeId: side,
+            notional: count,
+            label: 'kalshi_market_order',
+          });
+          if (exposureError) return exposureError;
+        }
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py market_order ${ticker} ${side} ${action} ${count}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7561,11 +9444,48 @@ async function executeTool(
           return JSON.stringify({ error: 'No Kalshi credentials set up.' });
         }
         const orders = toolInput.orders as unknown[];
+        if (Array.isArray(orders) && orders.length > 0) {
+          let total = 0;
+          const perKey = new Map<string, number>();
+          for (const order of orders) {
+            if (!order || typeof order !== 'object') continue;
+            const raw = order as Record<string, unknown>;
+            const action = String(raw.action || '').toLowerCase();
+            if (action && action !== 'buy') continue;
+            const count = Number(raw.count);
+            if (!Number.isFinite(count) || count <= 0) continue;
+            const priceRaw = raw.yes_price ?? raw.no_price ?? raw.price ?? raw.yesPrice ?? raw.noPrice;
+            const priceNum = Number(priceRaw);
+            if (!Number.isFinite(priceNum) || priceNum <= 0) continue;
+            const price = priceNum > 1 ? priceNum / 100 : priceNum;
+            const notional = count * price;
+            total += notional;
+
+            const ticker = String(raw.ticker || '');
+            const side = String(raw.side || '');
+            const key = `${ticker}:${side}`;
+            perKey.set(key, (perKey.get(key) || 0) + notional);
+          }
+          const maxError = enforceMaxOrderSize(context, total, 'kalshi_batch_create_orders');
+          if (maxError) return maxError;
+
+          for (const [key, notional] of perKey) {
+            const [ticker, side] = key.split(':');
+            const exposureError = enforceExposureLimits(context, userId, {
+              platform: 'kalshi',
+              marketId: ticker,
+              outcomeId: side,
+              notional,
+              label: 'kalshi_batch_create_orders',
+            });
+            if (exposureError) return exposureError;
+          }
+        }
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const ordersJson = JSON.stringify(orders).replace(/"/g, '\\"');
         const cmd = `cd ${tradingDir} && python3 kalshi.py batch_create_orders "${ordersJson}"`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7583,7 +9503,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py batch_cancel_orders ${orderIds.join(',')}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7600,7 +9520,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py cancel_all`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7618,7 +9538,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py get_order ${orderId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7640,7 +9560,7 @@ async function executeTool(
         if (price !== undefined) cmd += ` --price ${price}`;
         if (count !== undefined) cmd += ` --count ${count}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7659,7 +9579,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py decrease_order ${orderId} ${reduceBy}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7677,7 +9597,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py queue_position ${orderId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7694,7 +9614,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py queue_positions`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7716,7 +9636,7 @@ async function executeTool(
         if (ticker) cmd += ` --ticker ${ticker}`;
         if (limit) cmd += ` --limit ${limit}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7735,7 +9655,7 @@ async function executeTool(
         let cmd = `cd ${tradingDir} && python3 kalshi.py settlements`;
         if (limit) cmd += ` --limit ${limit}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7753,7 +9673,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py account_limits`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7770,7 +9690,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py api_keys`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7787,7 +9707,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py create_api_key`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7805,7 +9725,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py delete_api_key ${apiKey}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7823,7 +9743,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py fee_changes`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7840,7 +9760,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py user_data_timestamp`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7860,7 +9780,7 @@ async function executeTool(
         const tickersJson = JSON.stringify(tickers);
         const cmd = `cd ${tradingDir} && python3 kalshi.py batch_candlesticks '${tickersJson}'`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7879,7 +9799,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py event_metadata ${eventTicker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7900,7 +9820,7 @@ async function executeTool(
         let cmd = `cd ${tradingDir} && python3 kalshi.py event_candlesticks ${seriesTicker} ${eventTicker}`;
         if (interval) cmd += ` --interval ${interval}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7919,7 +9839,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py forecast_history ${seriesTicker} ${eventTicker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7936,7 +9856,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py multivariate_events`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7958,7 +9878,7 @@ async function executeTool(
         let cmd = `cd ${tradingDir} && python3 kalshi.py create_order_group '${ordersJson}'`;
         if (maxLoss) cmd += ` --max_loss ${maxLoss}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7975,7 +9895,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py order_groups`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -7993,7 +9913,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py order_group ${groupId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8012,7 +9932,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py order_group_limit ${groupId} ${maxLoss}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8030,7 +9950,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py order_group_trigger ${groupId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8048,7 +9968,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py order_group_reset ${groupId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8066,7 +9986,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py delete_order_group ${groupId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8084,7 +10004,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py resting_order_value`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8103,7 +10023,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py create_subaccount "${name}"`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8120,7 +10040,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py subaccount_balances`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8140,7 +10060,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py subaccount_transfer ${fromId} ${toId} ${amount}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8157,7 +10077,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py subaccount_transfers`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8175,7 +10095,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py comms_id`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8199,7 +10119,7 @@ async function executeTool(
         if (minPrice) cmd += ` --min_price ${minPrice}`;
         if (maxPrice) cmd += ` --max_price ${maxPrice}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8216,7 +10136,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py rfqs`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8234,7 +10154,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py rfq ${rfqId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8252,7 +10172,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py cancel_rfq ${rfqId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8271,7 +10191,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py create_quote ${rfqId} ${price}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8288,7 +10208,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py quotes`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8306,7 +10226,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py quote ${quoteId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8324,7 +10244,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py cancel_quote ${quoteId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8342,7 +10262,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py accept_quote ${quoteId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8360,7 +10280,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py confirm_quote ${quoteId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8378,7 +10298,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py collections`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8396,7 +10316,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py collection ${collectionTicker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8414,7 +10334,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py collection_lookup ${collectionTicker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8432,7 +10352,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py collection_lookup_history ${collectionTicker}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8452,7 +10372,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py live_data ${dataType} ${milestoneId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8471,7 +10391,7 @@ async function executeTool(
         const requestsJson = JSON.stringify(requests);
         const cmd = `cd ${tradingDir} && python3 kalshi.py live_data_batch '${requestsJson}'`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8489,7 +10409,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py milestones`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8507,7 +10427,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py milestone ${milestoneId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8525,7 +10445,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py structured_targets`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8543,7 +10463,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py structured_target ${targetId}`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8561,7 +10481,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py incentives`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8579,7 +10499,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py fcm_orders`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8596,7 +10516,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py fcm_positions`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8614,7 +10534,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py search_tags`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8631,7 +10551,7 @@ async function executeTool(
         const tradingDir = join(__dirname, '..', '..', 'trading');
         const cmd = `cd ${tradingDir} && python3 kalshi.py search_sports`;
         const creds = kalshiCreds.data;
-        const userEnv = { ...process.env, KALSHI_EMAIL: creds.email, KALSHI_PASSWORD: creds.password };
+        const userEnv = buildKalshiEnv(creds);
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           return output.trim();
@@ -8652,6 +10572,16 @@ async function executeTool(
         const amount = toolInput.amount as number;
         const outcome = toolInput.outcome as string;
         const limitProb = toolInput.limit_prob as number | undefined;
+        const maxError = enforceMaxOrderSize(context, amount, 'manifold_bet');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'manifold',
+          marketId,
+          outcomeId: outcome,
+          notional: amount,
+          label: 'manifold_bet',
+        });
+        if (exposureError) return exposureError;
 
         const apiKey = manifoldCreds.data.apiKey;
 
@@ -8880,6 +10810,16 @@ async function executeTool(
         const marketId = toolInput.market_id as string;
         const answerId = toolInput.answer_id as string;
         const amount = toolInput.amount as number;
+        const maxError = enforceMaxOrderSize(context, amount, 'manifold_multiple_choice');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'manifold',
+          marketId,
+          outcomeId: answerId,
+          notional: amount,
+          label: 'manifold_multiple_choice',
+        });
+        if (exposureError) return exposureError;
         try {
           const response = await fetch('https://api.manifold.markets/v0/bet', {
             method: 'POST',
@@ -9381,6 +11321,15 @@ async function executeTool(
         const marketId = toolInput.market_id as string;
         const answerIds = toolInput.answer_ids as string[];
         const amount = toolInput.amount as number;
+        const maxError = enforceMaxOrderSize(context, amount, 'manifold_multi_bet');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'manifold',
+          marketId,
+          notional: amount,
+          label: 'manifold_multi_bet',
+        });
+        if (exposureError) return exposureError;
         try {
           const response = await fetch('https://api.manifold.markets/v0/multi-bet', {
             method: 'POST',
@@ -10645,54 +12594,129 @@ async function executeTool(
       // ============================================
 
       case 'drift_place_order': {
-        return JSON.stringify({
-          error: 'Drift trading requires self-hosted Gateway setup',
-          hint: 'Use drift_search and drift_all_markets for read-only data.',
-          docs: 'https://docs.drift.trade/sdk-documentation',
-          gateway: 'https://github.com/drift-labs/gateway',
-        });
+        const marketIndex = toolInput.market_index as number;
+        const marketType = toolInput.market_type as string;
+        const side = toolInput.side as string;
+        const orderType = toolInput.order_type as string;
+        const price = toolInput.price as number | undefined;
+        const amount = toolInput.amount as number;
+        const reduceOnly = toolInput.reduce_only as boolean | undefined;
+        const postOnly = toolInput.post_only as boolean | undefined;
+
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return JSON.stringify({ error: 'amount must be a positive number' });
+        }
+
+        const signedAmount = side === 'sell' ? -Math.abs(amount) : Math.abs(amount);
+        const payload: Record<string, unknown> = {
+          marketIndex,
+          marketType,
+          amount: signedAmount,
+          orderType: orderType === 'oracle' ? 'limit' : orderType,
+        };
+
+        if (orderType === 'oracle' && price !== undefined) {
+          payload.oraclePriceOffset = price;
+        } else if (price !== undefined) {
+          payload.price = price;
+        }
+        if (reduceOnly !== undefined) payload.reduceOnly = reduceOnly;
+        if (postOnly !== undefined) payload.postOnly = postOnly;
+
+        try {
+          const result = await driftGatewayRequest('POST', '/v2/orders', { orders: [payload] });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({
+            error: (err as Error).message,
+            hint: 'Ensure DRIFT_GATEWAY_URL points to a running drift-labs gateway.',
+            gateway: 'https://github.com/drift-labs/gateway',
+          });
+        }
       }
 
       case 'drift_cancel_order': {
-        return JSON.stringify({
-          error: 'Drift trading requires Gateway setup',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        const orderId = toolInput.order_id as number;
+        const marketIndex = toolInput.market_index as number | undefined;
+        const marketType = toolInput.market_type as string | undefined;
+        const payload: Record<string, unknown> = { ids: [orderId] };
+        if (marketIndex !== undefined) payload.marketIndex = marketIndex;
+        if (marketType) payload.marketType = marketType;
+
+        try {
+          const result = await driftGatewayRequest('DELETE', '/v2/orders', payload);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_cancel_all_orders': {
-        return JSON.stringify({
-          error: 'Drift trading requires Gateway setup',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        const marketIndex = toolInput.market_index as number | undefined;
+        const marketType = toolInput.market_type as string | undefined;
+        const payload: Record<string, unknown> = {};
+        if (marketIndex !== undefined) payload.marketIndex = marketIndex;
+        if (marketType) payload.marketType = marketType;
+
+        try {
+          const result = await driftGatewayRequest('DELETE', '/v2/orders', payload);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_orders': {
-        return JSON.stringify({
-          error: 'Drift account data requires Gateway setup',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        const marketIndex = toolInput.market_index as number | undefined;
+        const marketType = toolInput.market_type as string | undefined;
+        const payload: Record<string, unknown> = {};
+        if (marketIndex !== undefined) payload.marketIndex = marketIndex;
+        if (marketType) payload.marketType = marketType;
+
+        try {
+          const result = await driftGatewayRequest('GET', '/v2/orders', payload);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_positions': {
-        return JSON.stringify({
-          error: 'Drift account data requires Gateway setup',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        const marketIndex = toolInput.market_index as number | undefined;
+        const payload: Record<string, unknown> = {};
+        if (marketIndex !== undefined) payload.marketIndex = marketIndex;
+
+        try {
+          const result = await driftGatewayRequest('GET', '/v2/positions', payload);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_balance': {
-        return JSON.stringify({
-          error: 'Drift account data requires Gateway setup',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        try {
+          const result = await driftGatewayRequest('GET', '/v2/balance');
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_leverage': {
-        return JSON.stringify({
-          error: 'Drift account data requires Gateway setup',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        const setLeverage = toolInput.set_leverage as number | undefined;
+        try {
+          if (setLeverage !== undefined) {
+            const result = await driftGatewayRequest('POST', '/v2/leverage', {
+              leverage: setLeverage.toString(),
+            });
+            return JSON.stringify(result);
+          }
+          const result = await driftGatewayRequest('GET', '/v2/leverage');
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_orderbook': {
@@ -10736,43 +12760,666 @@ async function executeTool(
       }
 
       case 'drift_margin_info': {
-        return JSON.stringify({
-          error: 'Drift margin info requires Gateway setup',
-          endpoint: 'GET /v2/user/marginInfo',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        try {
+          const result = await driftGatewayRequest('GET', '/v2/user/marginInfo');
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_collateral': {
-        return JSON.stringify({
-          error: 'Drift collateral requires Gateway setup',
-          endpoint: 'GET /v2/collateral',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        try {
+          const result = await driftGatewayRequest('GET', '/v2/collateral');
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_modify_order': {
-        return JSON.stringify({
-          error: 'Drift order modify requires Gateway setup',
-          endpoint: 'PATCH /v2/orders',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        const orderId = toolInput.order_id as number;
+        const newPrice = toolInput.new_price as number | undefined;
+        const newSize = toolInput.new_size as number | undefined;
+
+        if (newPrice === undefined && newSize === undefined) {
+          return JSON.stringify({ error: 'Provide new_price and/or new_size to modify an order.' });
+        }
+
+        const payload: Record<string, unknown> = { orderId };
+        if (newPrice !== undefined) payload.price = newPrice;
+        if (newSize !== undefined) payload.amount = newSize;
+
+        try {
+          const result = await driftGatewayRequest('PATCH', '/v2/orders', { orders: [payload] });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_cancel_and_place': {
-        return JSON.stringify({
-          error: 'Drift atomic cancel+place requires Gateway setup',
-          endpoint: 'PUT /v2/orders',
-          docs: 'https://github.com/drift-labs/gateway',
+        const cancelOrderIds = (toolInput.cancel_order_ids as number[] | undefined) ?? [];
+        const newOrders = (toolInput.new_orders as Array<Record<string, unknown>>) || [];
+
+        const placeOrders = newOrders.map((order) => {
+          const marketIndex = order.market_index as number;
+          const marketType = order.market_type as string;
+          const side = order.side as string;
+          const orderType = order.order_type as string;
+          const price = order.price as number | undefined;
+          const amount = order.amount as number;
+          const signedAmount = side === 'sell' ? -Math.abs(amount) : Math.abs(amount);
+          const payload: Record<string, unknown> = {
+            marketIndex,
+            marketType,
+            amount: signedAmount,
+            orderType: orderType === 'oracle' ? 'limit' : orderType,
+          };
+          if (orderType === 'oracle' && price !== undefined) {
+            payload.oraclePriceOffset = price;
+          } else if (price !== undefined) {
+            payload.price = price;
+          }
+          return payload;
         });
+
+        try {
+          const result = await driftGatewayRequest('POST', '/v2/orders/cancelAndPlace', {
+            cancel: cancelOrderIds.length ? { ids: cancelOrderIds } : {},
+            place: { orders: placeOrders },
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
       }
 
       case 'drift_transaction_events': {
-        return JSON.stringify({
-          error: 'Drift transaction events requires Gateway setup',
-          endpoint: 'GET /v2/transactionEvents',
-          docs: 'https://github.com/drift-labs/gateway',
-        });
+        const signature = toolInput.signature as string | undefined;
+        if (!signature) {
+          return JSON.stringify({
+            error: 'Provide a transaction signature to fetch an event.',
+            endpoint: 'GET /v2/transactionEvent/{signature}',
+          });
+        }
+
+        try {
+          const result = await driftGatewayRequest('GET', `/v2/transactionEvent/${signature}`);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message, gateway: 'https://github.com/drift-labs/gateway' });
+        }
+      }
+
+      // ============================================
+      // SOLANA WALLET + AGGREGATORS (Jupiter + Pump.fun)
+      // ============================================
+
+      case 'solana_address': {
+        try {
+          const keypair = loadSolanaKeypair();
+          return JSON.stringify({ address: keypair.publicKey.toBase58() });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'solana_jupiter_swap': {
+        const inputMint = toolInput.input_mint as string;
+        const outputMint = toolInput.output_mint as string;
+        const amount = toolInput.amount as string;
+        const slippageBps = toolInput.slippage_bps as number | undefined;
+        const swapMode = toolInput.swap_mode as 'ExactIn' | 'ExactOut' | undefined;
+        const priorityFeeLamports = toolInput.priority_fee_lamports as number | undefined;
+        const onlyDirectRoutes = toolInput.only_direct_routes as boolean | undefined;
+
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await executeJupiterSwap(connection, keypair, {
+            inputMint,
+            outputMint,
+            amount,
+            slippageBps,
+            swapMode,
+            priorityFeeLamports,
+            onlyDirectRoutes,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({
+            error: (err as Error).message,
+            hint: 'Set SOLANA_PRIVATE_KEY or SOLANA_KEYPAIR_PATH and SOLANA_RPC_URL if needed.',
+          });
+        }
+      }
+
+      case 'pumpfun_trade': {
+        const action = toolInput.action as 'buy' | 'sell';
+        const mint = toolInput.mint as string;
+        const amountRaw = toolInput.amount as string;
+        const denominatedInSol = toolInput.denominated_in_sol as boolean;
+        const slippageBps = toolInput.slippage_bps as number | undefined;
+        const priorityFeeLamports = toolInput.priority_fee_lamports as number | undefined;
+        const pool = toolInput.pool as string | undefined;
+
+        const amountValue = amountRaw?.trim();
+        if (!amountValue) {
+          return JSON.stringify({ error: 'amount is required' });
+        }
+
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await executePumpFunTrade(connection, keypair, {
+            action,
+            mint,
+            amount: amountValue,
+            denominatedInSol,
+            slippageBps,
+            priorityFeeLamports,
+            pool,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({
+            error: (err as Error).message,
+            hint: 'Ensure PUMPFUN_LOCAL_TX_URL is reachable and SOLANA_PRIVATE_KEY is set.',
+          });
+        }
+      }
+
+      case 'meteora_dlmm_swap': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await executeMeteoraDlmmSwap(connection, keypair, {
+            poolAddress: toolInput.pool_address as string,
+            inputMint: toolInput.input_mint as string,
+            outputMint: toolInput.output_mint as string,
+            inAmount: toolInput.in_amount as string,
+            slippageBps: toolInput.slippage_bps as number | undefined,
+            allowPartialFill: toolInput.allow_partial_fill as boolean | undefined,
+            maxExtraBinArrays: toolInput.max_extra_bin_arrays as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_swap': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await executeRaydiumSwap(connection, keypair, {
+            inputMint: toolInput.input_mint as string,
+            outputMint: toolInput.output_mint as string,
+            amount: toolInput.amount as string,
+            slippageBps: toolInput.slippage_bps as number | undefined,
+            swapMode: toolInput.swap_mode as 'BaseIn' | 'BaseOut' | undefined,
+            txVersion: toolInput.tx_version as 'V0' | 'LEGACY' | undefined,
+            computeUnitPriceMicroLamports: toolInput.compute_unit_price_micro_lamports as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'orca_whirlpool_swap': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await executeOrcaWhirlpoolSwap(connection, keypair, {
+            poolAddress: toolInput.pool_address as string,
+            inputMint: toolInput.input_mint as string,
+            amount: toolInput.amount as string,
+            slippageBps: toolInput.slippage_bps as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'drift_direct_place_order': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await executeDriftDirectOrder(connection, keypair, {
+            marketType: toolInput.market_type as 'perp' | 'spot',
+            marketIndex: toolInput.market_index as number,
+            side: toolInput.side as 'buy' | 'sell',
+            orderType: toolInput.order_type as 'limit' | 'market',
+            baseAmount: toolInput.base_amount as string,
+            price: toolInput.price as string | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'meteora_dlmm_pools': {
+        try {
+          const connection = getSolanaConnection();
+          const tokenMints = toolInput.token_mints as string[] | undefined;
+          const tokenSymbols = toolInput.token_symbols as string[] | undefined;
+          const limit = toolInput.limit as number | undefined;
+          const resolvedMints = tokenMints && tokenMints.length > 0
+            ? tokenMints
+            : tokenSymbols && tokenSymbols.length > 0
+              ? await (await import('../solana/tokenlist')).resolveTokenMints(tokenSymbols)
+              : undefined;
+          const result = await listMeteoraDlmmPools(connection, { tokenMints: resolvedMints, limit, includeLiquidity: true });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_pools': {
+        try {
+          const tokenMints = toolInput.token_mints as string[] | undefined;
+          const tokenSymbols = toolInput.token_symbols as string[] | undefined;
+          const limit = toolInput.limit as number | undefined;
+          const resolvedMints = tokenMints && tokenMints.length > 0
+            ? tokenMints
+            : tokenSymbols && tokenSymbols.length > 0
+              ? await (await import('../solana/tokenlist')).resolveTokenMints(tokenSymbols)
+              : undefined;
+          const result = await listRaydiumPools({ tokenMints: resolvedMints, limit });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'orca_whirlpool_pools': {
+        try {
+          const tokenMints = toolInput.token_mints as string[] | undefined;
+          const tokenSymbols = toolInput.token_symbols as string[] | undefined;
+          const limit = toolInput.limit as number | undefined;
+          const resolvedMints = tokenMints && tokenMints.length > 0
+            ? tokenMints
+            : tokenSymbols && tokenSymbols.length > 0
+              ? await (await import('../solana/tokenlist')).resolveTokenMints(tokenSymbols)
+              : undefined;
+          const result = await listOrcaWhirlpoolPools({ tokenMints: resolvedMints, limit });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'solana_best_pool': {
+        try {
+          const connection = getSolanaConnection();
+          const tokenMints = toolInput.token_mints as string[] | undefined;
+          const tokenSymbols = toolInput.token_symbols as string[] | undefined;
+          const limit = toolInput.limit as number | undefined;
+          const sortBy = toolInput.sort_by as 'liquidity' | 'volume24h' | undefined;
+          const preferredDexes = toolInput.preferred_dexes as Array<'meteora' | 'raydium' | 'orca'> | undefined;
+
+          const result = await selectBestPool(connection, {
+            tokenMints,
+            tokenSymbols,
+            limit,
+            sortBy,
+            preferredDexes,
+          });
+
+          return JSON.stringify(result ?? { error: 'No matching pools found' });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'solana_auto_swap': {
+        try {
+          const amount = toolInput.amount as string;
+          const slippageBps = toolInput.slippage_bps as number | undefined;
+          const sortBy = toolInput.sort_by as 'liquidity' | 'volume24h' | undefined;
+          const preferredDexes = toolInput.preferred_dexes as Array<'meteora' | 'raydium' | 'orca'> | undefined;
+
+          const inputMint = toolInput.input_mint as string | undefined;
+          const outputMint = toolInput.output_mint as string | undefined;
+          const tokenSymbols = toolInput.token_symbols as string[] | undefined;
+
+          const connection = getSolanaConnection();
+          const keypair = loadSolanaKeypair();
+
+          const resolvedMints = inputMint && outputMint
+            ? [inputMint, outputMint]
+            : tokenSymbols && tokenSymbols.length >= 2
+              ? await (await import('../solana/tokenlist')).resolveTokenMints(tokenSymbols.slice(0, 2))
+              : [];
+
+          if (resolvedMints.length < 2) {
+            return JSON.stringify({ error: 'Provide input_mint/output_mint or token_symbols with 2 entries.' });
+          }
+
+          const { pool } = await selectBestPoolWithResolvedMints(connection, {
+            tokenMints: resolvedMints,
+            sortBy,
+            preferredDexes,
+          });
+
+          if (!pool) {
+            return JSON.stringify({ error: 'No matching pools found.' });
+          }
+
+          if (pool.dex === 'meteora') {
+            const result = await executeMeteoraDlmmSwap(connection, keypair, {
+              poolAddress: pool.address,
+              inputMint: resolvedMints[0],
+              outputMint: resolvedMints[1],
+              inAmount: amount,
+              slippageBps,
+            });
+            return JSON.stringify({ dex: pool.dex, pool, result });
+          }
+
+          if (pool.dex === 'raydium') {
+            const result = await executeRaydiumSwap(connection, keypair, {
+              inputMint: resolvedMints[0],
+              outputMint: resolvedMints[1],
+              amount,
+              slippageBps,
+            });
+            return JSON.stringify({ dex: pool.dex, pool, result });
+          }
+
+          if (pool.dex === 'orca') {
+            const result = await executeOrcaWhirlpoolSwap(connection, keypair, {
+              poolAddress: pool.address,
+              inputMint: resolvedMints[0],
+              amount,
+              slippageBps,
+            });
+            return JSON.stringify({ dex: pool.dex, pool, result });
+          }
+
+          return JSON.stringify({ error: 'Unsupported pool type' });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'solana_auto_route': {
+        try {
+          const connection = getSolanaConnection();
+          const tokenMints = toolInput.token_mints as string[] | undefined;
+          const tokenSymbols = toolInput.token_symbols as string[] | undefined;
+          const sortBy = toolInput.sort_by as 'liquidity' | 'volume24h' | undefined;
+          const preferredDexes = toolInput.preferred_dexes as Array<'meteora' | 'raydium' | 'orca'> | undefined;
+          const limit = toolInput.limit as number | undefined;
+
+          const { listAllPools } = await import('../solana/pools');
+          const pools = await listAllPools(connection, {
+            tokenMints,
+            tokenSymbols,
+            sortBy,
+            preferredDexes,
+            limit: limit ?? 20,
+          });
+
+          return JSON.stringify(pools);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'solana_auto_quote': {
+        try {
+          const connection = getSolanaConnection();
+          const tokenMints = toolInput.token_mints as string[] | undefined;
+          const tokenSymbols = toolInput.token_symbols as string[] | undefined;
+          const amount = toolInput.amount as string;
+          const slippageBps = toolInput.slippage_bps as number | undefined;
+          const sortBy = toolInput.sort_by as 'liquidity' | 'volume24h' | undefined;
+          const preferredDexes = toolInput.preferred_dexes as Array<'meteora' | 'raydium' | 'orca'> | undefined;
+
+          const { listAllPools } = await import('../solana/pools');
+          const pools = await listAllPools(connection, {
+            tokenMints,
+            tokenSymbols,
+            sortBy,
+            preferredDexes,
+            limit: 30,
+          });
+
+          const perDex = new Map<string, typeof pools>();
+          for (const pool of pools) {
+            const list = perDex.get(pool.dex) || [];
+            list.push(pool);
+            perDex.set(pool.dex, list);
+          }
+
+          const results: Array<Record<string, unknown>> = [];
+          for (const [dex, list] of perDex.entries()) {
+            const pool = list[0];
+            if (!pool) continue;
+
+            try {
+              if (dex === 'meteora') {
+                const quote = await getMeteoraDlmmQuote(connection, {
+                  poolAddress: pool.address,
+                  inputMint: pool.tokenMintA,
+                  inAmount: amount,
+                  slippageBps,
+                });
+                results.push({ dex, pool, quote });
+              } else if (dex === 'raydium') {
+                const quote = await getRaydiumQuote({
+                  inputMint: pool.tokenMintA,
+                  outputMint: pool.tokenMintB,
+                  amount,
+                  slippageBps,
+                });
+                results.push({ dex, pool, quote });
+              } else if (dex === 'orca') {
+                const quote = await getOrcaWhirlpoolQuote({
+                  poolAddress: pool.address,
+                  inputMint: pool.tokenMintA,
+                  amount,
+                  slippageBps,
+                });
+                results.push({ dex, pool, quote });
+              }
+            } catch (err: unknown) {
+              results.push({ dex, pool, error: (err as Error).message });
+            }
+          }
+
+          return JSON.stringify(results);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'wormhole_quote': {
+        try {
+          const result = await wormholeQuote({
+            network: toolInput.network as string | undefined,
+            protocol: toolInput.protocol as 'token_bridge' | 'cctp' | undefined,
+            source_chain: toolInput.source_chain as string,
+            destination_chain: toolInput.destination_chain as string,
+            source_address: toolInput.source_address as string | undefined,
+            destination_address: toolInput.destination_address as string,
+            token_address: toolInput.token_address as string | undefined,
+            amount: toolInput.amount as string,
+            amount_units: toolInput.amount_units as 'human' | 'atomic' | undefined,
+            automatic: toolInput.automatic as boolean | undefined,
+            payload_base64: toolInput.payload_base64 as string | undefined,
+            destination_native_gas: toolInput.destination_native_gas as string | undefined,
+            destination_native_gas_units: toolInput.destination_native_gas_units as 'human' | 'atomic' | undefined,
+            source_rpc_url: toolInput.source_rpc_url as string | undefined,
+            destination_rpc_url: toolInput.destination_rpc_url as string | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'wormhole_bridge': {
+        try {
+          const result = await wormholeBridge({
+            network: toolInput.network as string | undefined,
+            protocol: toolInput.protocol as 'token_bridge' | 'cctp' | undefined,
+            source_chain: toolInput.source_chain as string,
+            destination_chain: toolInput.destination_chain as string,
+            destination_address: toolInput.destination_address as string,
+            token_address: toolInput.token_address as string | undefined,
+            amount: toolInput.amount as string,
+            amount_units: toolInput.amount_units as 'human' | 'atomic' | undefined,
+            automatic: toolInput.automatic as boolean | undefined,
+            payload_base64: toolInput.payload_base64 as string | undefined,
+            destination_native_gas: toolInput.destination_native_gas as string | undefined,
+            destination_native_gas_units: toolInput.destination_native_gas_units as 'human' | 'atomic' | undefined,
+            attest_timeout_ms: toolInput.attest_timeout_ms as number | undefined,
+            skip_redeem: toolInput.skip_redeem as boolean | undefined,
+            source_rpc_url: toolInput.source_rpc_url as string | undefined,
+            destination_rpc_url: toolInput.destination_rpc_url as string | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({
+            error: (err as Error).message,
+            hint: 'Ensure RPC URLs and private keys are set for source/destination chains.',
+          });
+        }
+      }
+
+      case 'wormhole_redeem': {
+        try {
+          const result = await wormholeRedeem({
+            network: toolInput.network as string | undefined,
+            protocol: toolInput.protocol as 'token_bridge' | 'cctp' | undefined,
+            source_chain: toolInput.source_chain as string,
+            destination_chain: toolInput.destination_chain as string,
+            source_txid: toolInput.source_txid as string,
+            attest_timeout_ms: toolInput.attest_timeout_ms as number | undefined,
+            source_rpc_url: toolInput.source_rpc_url as string | undefined,
+            destination_rpc_url: toolInput.destination_rpc_url as string | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({
+            error: (err as Error).message,
+            hint: 'Ensure RPC URLs and destination private key are set for the target chain.',
+          });
+        }
+      }
+
+      case 'usdc_quote': {
+        try {
+          const result = await wormholeQuote({
+            network: toolInput.network as string | undefined,
+            protocol: 'cctp',
+            source_chain: toolInput.source_chain as string,
+            destination_chain: toolInput.destination_chain as string,
+            source_address: toolInput.source_address as string | undefined,
+            destination_address: toolInput.destination_address as string,
+            amount: toolInput.amount as string,
+            amount_units: toolInput.amount_units as 'human' | 'atomic' | undefined,
+            automatic: toolInput.automatic as boolean | undefined,
+            payload_base64: toolInput.payload_base64 as string | undefined,
+            destination_native_gas: toolInput.destination_native_gas as string | undefined,
+            destination_native_gas_units: toolInput.destination_native_gas_units as 'human' | 'atomic' | undefined,
+            source_rpc_url: toolInput.source_rpc_url as string | undefined,
+            destination_rpc_url: toolInput.destination_rpc_url as string | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'usdc_quote_auto': {
+        try {
+          const result = await usdcQuoteAuto({
+            network: toolInput.network as string | undefined,
+            source_chain: toolInput.source_chain as string,
+            destination_chain: toolInput.destination_chain as string,
+            source_address: toolInput.source_address as string | undefined,
+            destination_address: toolInput.destination_address as string,
+            token_address: toolInput.token_address as string | undefined,
+            amount: toolInput.amount as string,
+            amount_units: toolInput.amount_units as 'human' | 'atomic' | undefined,
+            automatic: toolInput.automatic as boolean | undefined,
+            payload_base64: toolInput.payload_base64 as string | undefined,
+            destination_native_gas: toolInput.destination_native_gas as string | undefined,
+            destination_native_gas_units: toolInput.destination_native_gas_units as 'human' | 'atomic' | undefined,
+            source_rpc_url: toolInput.source_rpc_url as string | undefined,
+            destination_rpc_url: toolInput.destination_rpc_url as string | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({
+            error: (err as Error).message,
+            hint: 'If CCTP is unsupported for this route, pass token_address for Token Bridge fallback.',
+          });
+        }
+      }
+
+      case 'usdc_bridge': {
+        try {
+          const result = await wormholeBridge({
+            network: toolInput.network as string | undefined,
+            protocol: 'cctp',
+            source_chain: toolInput.source_chain as string,
+            destination_chain: toolInput.destination_chain as string,
+            destination_address: toolInput.destination_address as string,
+            amount: toolInput.amount as string,
+            amount_units: toolInput.amount_units as 'human' | 'atomic' | undefined,
+            automatic: toolInput.automatic as boolean | undefined,
+            payload_base64: toolInput.payload_base64 as string | undefined,
+            destination_native_gas: toolInput.destination_native_gas as string | undefined,
+            destination_native_gas_units: toolInput.destination_native_gas_units as 'human' | 'atomic' | undefined,
+            attest_timeout_ms: toolInput.attest_timeout_ms as number | undefined,
+            skip_redeem: toolInput.skip_redeem as boolean | undefined,
+            source_rpc_url: toolInput.source_rpc_url as string | undefined,
+            destination_rpc_url: toolInput.destination_rpc_url as string | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({
+            error: (err as Error).message,
+            hint: 'Ensure RPC URLs and private keys are set for source/destination chains.',
+          });
+        }
+      }
+
+      case 'usdc_bridge_auto': {
+        try {
+          const result = await usdcBridgeAuto({
+            network: toolInput.network as string | undefined,
+            source_chain: toolInput.source_chain as string,
+            destination_chain: toolInput.destination_chain as string,
+            destination_address: toolInput.destination_address as string,
+            token_address: toolInput.token_address as string | undefined,
+            amount: toolInput.amount as string,
+            amount_units: toolInput.amount_units as 'human' | 'atomic' | undefined,
+            automatic: toolInput.automatic as boolean | undefined,
+            payload_base64: toolInput.payload_base64 as string | undefined,
+            destination_native_gas: toolInput.destination_native_gas as string | undefined,
+            destination_native_gas_units: toolInput.destination_native_gas_units as 'human' | 'atomic' | undefined,
+            attest_timeout_ms: toolInput.attest_timeout_ms as number | undefined,
+            skip_redeem: toolInput.skip_redeem as boolean | undefined,
+            source_rpc_url: toolInput.source_rpc_url as string | undefined,
+            destination_rpc_url: toolInput.destination_rpc_url as string | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({
+            error: (err as Error).message,
+            hint: 'If CCTP is unsupported for this route, pass token_address for Token Bridge fallback.',
+          });
+        }
       }
 
       // ============================================
@@ -11141,6 +13788,108 @@ async function executeTool(
       }
 
       // ============================================
+      // QMD (MARKDOWN SEARCH)
+      // ============================================
+
+      case 'qmd_search': {
+        const query = toolInput.query as string;
+        const mode = (toolInput.mode as string) || 'search';
+        if (!['search', 'vsearch', 'query'].includes(mode)) {
+          return JSON.stringify({ error: 'Invalid qmd mode. Use search, vsearch, or query.' });
+        }
+
+        const collection = toolInput.collection as string | undefined;
+        const limit = toolInput.limit as number | undefined;
+        const json = toolInput.json as boolean | undefined;
+        const files = toolInput.files as boolean | undefined;
+        const all = toolInput.all as boolean | undefined;
+        const full = toolInput.full as boolean | undefined;
+        const minScore = toolInput.min_score as number | undefined;
+        const timeoutMs = (toolInput.timeout_ms as number)
+          ?? (mode === 'search' ? 30_000 : 180_000);
+
+        const args = [mode, query];
+        if (collection) args.push('-c', collection);
+        if (typeof limit === 'number') args.push('-n', String(limit));
+        if (json) args.push('--json');
+        if (files) args.push('--files');
+        if (all) args.push('--all');
+        if (full) args.push('--full');
+        if (typeof minScore === 'number') args.push('--min-score', String(minScore));
+
+        const result = runQmdCommand(args, timeoutMs);
+        return formatQmdResult(result, Boolean(json || files));
+      }
+
+      case 'qmd_get': {
+        const target = toolInput.target as string;
+        const json = toolInput.json as boolean | undefined;
+        const full = toolInput.full as boolean | undefined;
+        const timeoutMs = (toolInput.timeout_ms as number) ?? 30_000;
+
+        const args = ['get', target];
+        if (json) args.push('--json');
+        if (full) args.push('--full');
+
+        const result = runQmdCommand(args, timeoutMs);
+        return formatQmdResult(result, Boolean(json));
+      }
+
+      case 'qmd_multi_get': {
+        const targets = toolInput.targets as string[];
+        if (!Array.isArray(targets) || targets.length === 0) {
+          return JSON.stringify({ error: 'targets must be a non-empty array' });
+        }
+        const json = toolInput.json as boolean | undefined;
+        const timeoutMs = (toolInput.timeout_ms as number) ?? 60_000;
+
+        const args = ['multi-get', targets.join(', ')];
+        if (json) args.push('--json');
+
+        const result = runQmdCommand(args, timeoutMs);
+        return formatQmdResult(result, Boolean(json));
+      }
+
+      case 'qmd_status': {
+        const result = runQmdCommand(['status'], 30_000);
+        return formatQmdResult(result, true);
+      }
+
+      case 'qmd_update': {
+        const timeoutMs = (toolInput.timeout_ms as number) ?? 120_000;
+        const result = runQmdCommand(['update'], timeoutMs);
+        return formatQmdResult(result, false);
+      }
+
+      case 'qmd_embed': {
+        const timeoutMs = (toolInput.timeout_ms as number) ?? 300_000;
+        const result = runQmdCommand(['embed'], timeoutMs);
+        return formatQmdResult(result, false);
+      }
+
+      case 'qmd_collection_add': {
+        const path = toolInput.path as string;
+        const name = toolInput.name as string;
+        const mask = toolInput.mask as string | undefined;
+        const timeoutMs = (toolInput.timeout_ms as number) ?? 60_000;
+
+        const args = ['collection', 'add', path, '--name', name];
+        if (mask) args.push('--mask', mask);
+
+        const result = runQmdCommand(args, timeoutMs);
+        return formatQmdResult(result, false);
+      }
+
+      case 'qmd_context_add': {
+        const collection = toolInput.collection as string;
+        const description = toolInput.description as string;
+        const timeoutMs = (toolInput.timeout_ms as number) ?? 30_000;
+
+        const result = runQmdCommand(['context', 'add', collection, description], timeoutMs);
+        return formatQmdResult(result, false);
+      }
+
+      // ============================================
       // EXECUTION & BOT HANDLERS (like Clawdbot)
       // ============================================
 
@@ -11175,12 +13924,36 @@ async function executeTool(
         const command = toolInput.command as string;
         const timeout = ((toolInput.timeout as number) || 30) * 1000;
 
+        // Basic input sanitization
+        const sanitized = sanitize(command, { allowCode: true, allowHtml: false, allowUrls: true, maxLength: 1000 });
+        const injection = detectInjection(sanitized);
+        if (!injection.safe) {
+          return JSON.stringify({ error: `Command blocked due to security risks: ${injection.threats.join(', ')}` });
+        }
+
         // Security: Block dangerous commands
         const blockedPatterns = ['rm -rf /', 'mkfs', 'dd if=', ':(){', 'fork bomb'];
         for (const pattern of blockedPatterns) {
           if (command.includes(pattern)) {
             return JSON.stringify({ error: 'Command blocked for safety' });
           }
+        }
+
+        const approval = await execApprovals.checkCommand('default', command, {
+          sessionId: session.id,
+          waitForApproval: false,
+          requester: {
+            userId: session.userId,
+            channel: session.channel,
+            chatId: session.chatId,
+          },
+        });
+        if (!approval.allowed) {
+          return JSON.stringify({
+            error: approval.reason || 'Approval required',
+            requestId: approval.requestId,
+            hint: 'Run: clodds permissions pending / clodds permissions approve <id>',
+          });
         }
 
         try {
@@ -11342,25 +14115,12 @@ async function executeTool(
       case 'write_file': {
         const filePath = toolInput.path as string;
         const content = toolInput.content as string;
-
-        // Security: Restrict to workspace
-        const workspaceDir = process.cwd();
-        const fullPath = join(workspaceDir, filePath);
-
-        // Prevent path traversal
-        if (!fullPath.startsWith(workspaceDir)) {
-          return JSON.stringify({ error: 'Path must be within workspace' });
-        }
+        const append = Boolean(toolInput.append);
+        const createDirs = Boolean(toolInput.create_dirs);
 
         try {
-          // Create directory if needed
-          const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
-          if (dir && !existsSync(dir)) {
-            mkdirSync(dir, { recursive: true });
-          }
-
-          writeFileSync(fullPath, content);
-          return JSON.stringify({ result: 'File written', path: filePath });
+          context.files.write(filePath, content, { append, createDirs });
+          return JSON.stringify({ result: 'File written', path: filePath, mode: append ? 'append' : 'write' });
         } catch (err: unknown) {
           const error = err as Error;
           return JSON.stringify({ error: 'Write failed', details: error.message });
@@ -11370,24 +14130,475 @@ async function executeTool(
       case 'read_file': {
         const filePath = toolInput.path as string;
 
-        const workspaceDir = process.cwd();
-        const fullPath = join(workspaceDir, filePath);
-
-        // Prevent path traversal
-        if (!fullPath.startsWith(workspaceDir)) {
-          return JSON.stringify({ error: 'Path must be within workspace' });
-        }
-
-        if (!existsSync(fullPath)) {
-          return JSON.stringify({ error: 'File not found' });
-        }
-
         try {
-          const content = readFileSync(fullPath, 'utf-8');
+          const maxBytes = toolInput.max_bytes as number | undefined;
+          const content = context.files.read(filePath, { maxBytes });
           return JSON.stringify({ result: { path: filePath, content } });
         } catch (err: unknown) {
           const error = err as Error;
           return JSON.stringify({ error: 'Read failed', details: error.message });
+        }
+      }
+      case 'edit_file': {
+        const filePath = toolInput.path as string;
+        const edits = Array.isArray(toolInput.edits) ? toolInput.edits : [];
+        const createIfMissing = Boolean(toolInput.create_if_missing);
+
+        try {
+          const normalizedEdits = edits.map((edit) => ({
+            find: edit.find as string,
+            replace: edit.replace as string,
+            all: Boolean(edit.all),
+          }));
+
+          const result = context.files.edit(filePath, normalizedEdits, { createIfMissing });
+          return JSON.stringify({ result: { path: filePath, updated: result.updated, content: result.content } });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Edit failed', details: error.message });
+        }
+      }
+      case 'list_files': {
+        const dir = (toolInput.dir as string) || '.';
+        const recursive = Boolean(toolInput.recursive);
+        const includeDirs = Boolean(toolInput.include_dirs);
+        const limit = toolInput.limit as number | undefined;
+
+        try {
+          const entries = context.files.list(dir, { recursive, includeDirs, limit });
+          return JSON.stringify({ result: entries });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'List failed', details: error.message });
+        }
+      }
+      case 'search_files': {
+        const dir = (toolInput.dir as string) || '.';
+        const query = toolInput.query as string;
+        const recursive = toolInput.recursive === undefined ? true : Boolean(toolInput.recursive);
+        const limit = toolInput.limit as number | undefined;
+
+        try {
+          const results = context.files.search(dir, query, { recursive, limit });
+          return JSON.stringify({ result: results });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Search failed', details: error.message });
+        }
+      }
+      case 'shell_history_list': {
+        const shell = toolInput.shell as 'auto' | 'zsh' | 'bash' | 'fish' | undefined;
+        const limit = toolInput.limit as number | undefined;
+        const query = toolInput.query as string | undefined;
+
+        try {
+          const results = context.shellHistory.list({
+            shell: shell && shell !== 'auto' ? shell : 'auto',
+            limit,
+            query,
+          });
+          return JSON.stringify({ result: results });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Shell history failed', details: error.message });
+        }
+      }
+      case 'shell_history_search': {
+        const shell = toolInput.shell as 'auto' | 'zsh' | 'bash' | 'fish' | undefined;
+        const limit = toolInput.limit as number | undefined;
+        const query = toolInput.query as string;
+
+        try {
+          const results = context.shellHistory.search(query, {
+            shell: shell && shell !== 'auto' ? shell : 'auto',
+            limit,
+          });
+          return JSON.stringify({ result: results });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Shell history failed', details: error.message });
+        }
+      }
+      case 'git_status': {
+        const cwd = toolInput.cwd as string | undefined;
+
+        try {
+          if (!context.git.isRepo(cwd)) {
+            return JSON.stringify({ error: 'Not a git repository', cwd: cwd || '.' });
+          }
+          const result = context.git.status(cwd);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Git status failed', details: error.message });
+        }
+      }
+      case 'git_diff': {
+        const cwd = toolInput.cwd as string | undefined;
+        const args = Array.isArray(toolInput.args) ? (toolInput.args as string[]) : undefined;
+
+        try {
+          if (!context.git.isRepo(cwd)) {
+            return JSON.stringify({ error: 'Not a git repository', cwd: cwd || '.' });
+          }
+          const result = context.git.diff(cwd, args);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Git diff failed', details: error.message });
+        }
+      }
+      case 'git_log': {
+        const cwd = toolInput.cwd as string | undefined;
+        const limit = toolInput.limit as number | undefined;
+
+        try {
+          if (!context.git.isRepo(cwd)) {
+            return JSON.stringify({ error: 'Not a git repository', cwd: cwd || '.' });
+          }
+          const result = context.git.log(cwd, { limit });
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Git log failed', details: error.message });
+        }
+      }
+      case 'git_show': {
+        const cwd = toolInput.cwd as string | undefined;
+        const ref = (toolInput.ref as string | undefined) || 'HEAD';
+
+        try {
+          if (!context.git.isRepo(cwd)) {
+            return JSON.stringify({ error: 'Not a git repository', cwd: cwd || '.' });
+          }
+          const result = context.git.show(ref, cwd);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Git show failed', details: error.message });
+        }
+      }
+      case 'git_rev_parse': {
+        const cwd = toolInput.cwd as string | undefined;
+        const ref = (toolInput.ref as string | undefined) || 'HEAD';
+
+        try {
+          if (!context.git.isRepo(cwd)) {
+            return JSON.stringify({ error: 'Not a git repository', cwd: cwd || '.' });
+          }
+          const result = context.git.revParse(ref, cwd);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Git rev-parse failed', details: error.message });
+        }
+      }
+      case 'git_branch': {
+        const cwd = toolInput.cwd as string | undefined;
+
+        try {
+          if (!context.git.isRepo(cwd)) {
+            return JSON.stringify({ error: 'Not a git repository', cwd: cwd || '.' });
+          }
+          const result = context.git.branch(cwd);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Git branch failed', details: error.message });
+        }
+      }
+      case 'git_add': {
+        const cwd = toolInput.cwd as string | undefined;
+        const paths = Array.isArray(toolInput.paths) ? (toolInput.paths as string[]) : [];
+
+        try {
+          if (!context.git.isRepo(cwd)) {
+            return JSON.stringify({ error: 'Not a git repository', cwd: cwd || '.' });
+          }
+          context.git.add(paths, cwd);
+          return JSON.stringify({ result: 'Git add completed', count: paths.length });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Git add failed', details: error.message });
+        }
+      }
+      case 'git_commit': {
+        const cwd = toolInput.cwd as string | undefined;
+        const message = toolInput.message as string;
+
+        try {
+          if (!context.git.isRepo(cwd)) {
+            return JSON.stringify({ error: 'Not a git repository', cwd: cwd || '.' });
+          }
+          const result = context.git.commit(message, cwd);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Git commit failed', details: error.message });
+        }
+      }
+      case 'email_send': {
+        try {
+          const result = await context.email.send({
+            from: toolInput.from as { name?: string; email: string },
+            to: toolInput.to as Array<{ name?: string; email: string } | string>,
+            cc: toolInput.cc as Array<{ name?: string; email: string } | string> | undefined,
+            bcc: toolInput.bcc as Array<{ name?: string; email: string } | string> | undefined,
+            subject: toolInput.subject as string,
+            text: toolInput.text as string,
+            replyTo: toolInput.reply_to as { name?: string; email: string } | string | undefined,
+            dryRun: Boolean(toolInput.dry_run),
+          });
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Email send failed', details: error.message });
+        }
+      }
+      case 'sms_send': {
+        try {
+          const result = await context.sms.send({
+            to: toolInput.to as string,
+            body: toolInput.body as string,
+            from: toolInput.from as string | undefined,
+            dryRun: Boolean(toolInput.dry_run),
+          });
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'SMS send failed', details: error.message });
+        }
+      }
+      case 'transcribe_audio': {
+        const filePath = toolInput.path as string;
+
+        try {
+          const options: TranscriptionOptions = {
+            engine: toolInput.engine as TranscriptionOptions['engine'] | undefined,
+            language: toolInput.language as string | undefined,
+            prompt: toolInput.prompt as string | undefined,
+            model: toolInput.model as string | undefined,
+            temperature: toolInput.temperature as number | undefined,
+            timestamps: toolInput.timestamps as boolean | undefined,
+            timeoutMs: toolInput.timeout_ms as number | undefined,
+          };
+
+          const result = await context.transcription.transcribe({ path: filePath, ...options });
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Transcription failed', details: error.message });
+        }
+      }
+      case 'sql_query': {
+        try {
+          const sql = toolInput.sql as string;
+          const params = Array.isArray(toolInput.params) ? toolInput.params : undefined;
+          const maxRows = toolInput.max_rows as number | undefined;
+          const result = await context.sql.query({ sql, params, maxRows });
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'SQL query failed', details: error.message });
+        }
+      }
+      case 'register_webhook': {
+        try {
+          if (!context.webhooks) {
+            return JSON.stringify({ error: 'Webhook manager not available in this runtime' });
+          }
+
+          const result = await context.webhooks.register({
+            id: toolInput.id as string | undefined,
+            path: toolInput.path as string,
+            description: toolInput.description as string | undefined,
+            rateLimit: toolInput.rate_limit as number | undefined,
+            enabled: toolInput.enabled as boolean | undefined,
+            secret: toolInput.secret as string | undefined,
+            template: toolInput.template as string | undefined,
+            target: {
+              platform: toolInput.target_platform as string,
+              chatId: toolInput.target_chat_id as string,
+              userId: toolInput.target_user_id as string,
+              username: toolInput.target_username as string | undefined,
+            },
+          });
+
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Webhook registration failed', details: error.message });
+        }
+      }
+      case 'list_webhooks': {
+        try {
+          if (!context.webhooks) {
+            return JSON.stringify({ error: 'Webhook manager not available in this runtime' });
+          }
+          const includeSecrets = Boolean(toolInput.include_secrets);
+          const result = await context.webhooks.list(includeSecrets);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Failed to list webhooks', details: error.message });
+        }
+      }
+      case 'delete_webhook': {
+        try {
+          if (!context.webhooks) {
+            return JSON.stringify({ error: 'Webhook manager not available in this runtime' });
+          }
+          const id = toolInput.id as string;
+          const result = await context.webhooks.remove(id);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Failed to delete webhook', details: error.message });
+        }
+      }
+      case 'enable_webhook': {
+        try {
+          if (!context.webhooks) {
+            return JSON.stringify({ error: 'Webhook manager not available in this runtime' });
+          }
+          const id = toolInput.id as string;
+          const enabled = Boolean(toolInput.enabled);
+          const result = await context.webhooks.setEnabled(id, enabled);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Failed to toggle webhook', details: error.message });
+        }
+      }
+      case 'rotate_webhook_secret': {
+        try {
+          if (!context.webhooks) {
+            return JSON.stringify({ error: 'Webhook manager not available in this runtime' });
+          }
+          const id = toolInput.id as string;
+          const result = await context.webhooks.rotateSecret(id);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Failed to rotate webhook secret', details: error.message });
+        }
+      }
+      case 'sign_webhook_payload': {
+        try {
+          if (!context.webhooks) {
+            return JSON.stringify({ error: 'Webhook manager not available in this runtime' });
+          }
+          const id = toolInput.id as string;
+          const rawPayload = toolInput.payload as string;
+          let payload: unknown = rawPayload;
+          try {
+            payload = JSON.parse(rawPayload);
+          } catch {
+            // keep raw string
+          }
+          const result = await context.webhooks.sign(id, payload);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Failed to sign payload', details: error.message });
+        }
+      }
+      case 'trigger_webhook': {
+        try {
+          if (!context.webhooks) {
+            return JSON.stringify({ error: 'Webhook manager not available in this runtime' });
+          }
+          const id = toolInput.id as string;
+          const rawPayload = toolInput.payload as string;
+          let payload: unknown = rawPayload;
+          try {
+            payload = JSON.parse(rawPayload);
+          } catch {
+            // keep raw string
+          }
+          const signature = toolInput.signature as string | undefined;
+          const result = await context.webhooks.trigger(id, payload, signature);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Failed to trigger webhook', details: error.message });
+        }
+      }
+      case 'docker_list_containers': {
+        try {
+          const all = toolInput.all as boolean | undefined;
+          const result = await context.docker.listContainers(all ?? true);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Failed to list containers', details: error.message });
+        }
+      }
+      case 'docker_list_images': {
+        try {
+          const result = await context.docker.listImages();
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Failed to list images', details: error.message });
+        }
+      }
+      case 'docker_run': {
+        try {
+          const image = toolInput.image as string;
+          const name = toolInput.name as string | undefined;
+          const command = Array.isArray(toolInput.command)
+            ? toolInput.command.map((c) => String(c))
+            : undefined;
+          const detach = toolInput.detach as boolean | undefined;
+          const workdir = toolInput.workdir as string | undefined;
+          const network = toolInput.network as string | undefined;
+
+          const result = await context.docker.run({
+            image,
+            name,
+            command,
+            detach,
+            workdir,
+            network,
+          });
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Docker run failed', details: error.message });
+        }
+      }
+      case 'docker_stop': {
+        try {
+          const container = toolInput.container as string;
+          const timeoutSeconds = toolInput.timeout_seconds as number | undefined;
+          const result = await context.docker.stop(container, timeoutSeconds);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Docker stop failed', details: error.message });
+        }
+      }
+      case 'docker_remove': {
+        try {
+          const container = toolInput.container as string;
+          const force = toolInput.force as boolean | undefined;
+          const result = await context.docker.remove(container, force);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Docker remove failed', details: error.message });
+        }
+      }
+      case 'docker_logs': {
+        try {
+          const container = toolInput.container as string;
+          const tail = toolInput.tail as number | undefined;
+          const result = await context.docker.logs(container, tail);
+          return JSON.stringify({ result });
+        } catch (err: unknown) {
+          const error = err as Error;
+          return JSON.stringify({ error: 'Docker logs failed', details: error.message });
         }
       }
 
@@ -11400,6 +14611,226 @@ async function executeTool(
         return JSON.stringify({
           result: 'Conversation history cleared. Starting fresh!',
         });
+      }
+
+      case 'save_session_checkpoint': {
+        const summary = toolInput.summary as string | undefined;
+        context.sessionManager.saveCheckpoint(session, summary);
+        return JSON.stringify({ result: 'Checkpoint saved.' });
+      }
+
+      case 'restore_session_checkpoint': {
+        const restored = context.sessionManager.restoreCheckpoint(session);
+        if (!restored) {
+          return JSON.stringify({ error: 'No checkpoint available to restore.' });
+        }
+        return JSON.stringify({ result: 'Checkpoint restored.' });
+      }
+
+      case 'edit_message': {
+        const platform = toolInput.platform as string;
+        const chatId = toolInput.chat_id as string;
+        const messageId = toolInput.message_id as string;
+        const text = toolInput.text as string;
+        const accountId = toolInput.account_id as string | undefined;
+
+        if (!context.editMessage) {
+          return JSON.stringify({ error: 'Edit not supported in this runtime.' });
+        }
+
+        await context.editMessage({
+          platform,
+          chatId,
+          messageId,
+          text,
+          accountId,
+          parseMode: 'Markdown',
+        });
+        return JSON.stringify({ result: 'Message edited.' });
+      }
+
+      case 'delete_message': {
+        const platform = toolInput.platform as string;
+        const chatId = toolInput.chat_id as string;
+        const messageId = toolInput.message_id as string;
+        const accountId = toolInput.account_id as string | undefined;
+
+        if (!context.deleteMessage) {
+          return JSON.stringify({ error: 'Delete not supported in this runtime.' });
+        }
+
+        await context.deleteMessage({
+          platform,
+          chatId,
+          messageId,
+          accountId,
+          text: '',
+        });
+        return JSON.stringify({ result: 'Message deleted.' });
+      }
+
+      case 'react_message': {
+        const platform = toolInput.platform as string;
+        const chatId = toolInput.chat_id as string;
+        const messageId = toolInput.message_id as string;
+        const emoji = toolInput.emoji as string;
+        const remove = toolInput.remove === true;
+        const participant = toolInput.participant as string | undefined;
+        const fromMe = toolInput.from_me === true;
+        const accountId = toolInput.account_id as string | undefined;
+
+        if (!context.reactMessage) {
+          return JSON.stringify({ error: 'Reactions not supported in this runtime.' });
+        }
+
+        await context.reactMessage({
+          platform,
+          chatId,
+          messageId,
+          emoji,
+          remove,
+          participant,
+          fromMe,
+          accountId,
+        });
+        return JSON.stringify({ result: remove ? 'Reaction removed.' : 'Reaction added.' });
+      }
+
+      case 'create_poll': {
+        const platform = toolInput.platform as string;
+        const chatId = toolInput.chat_id as string;
+        const question = toolInput.question as string;
+        const options = Array.isArray(toolInput.options) ? (toolInput.options as string[]) : [];
+        const multiSelect = toolInput.multi_select === true;
+        const accountId = toolInput.account_id as string | undefined;
+
+        if (!context.createPoll) {
+          return JSON.stringify({ error: 'Polls not supported in this runtime.' });
+        }
+
+        const messageId = await context.createPoll({
+          platform,
+          chatId,
+          question,
+          options,
+          multiSelect,
+          accountId,
+        });
+        return JSON.stringify({ result: 'Poll sent.', message_id: messageId });
+      }
+
+      // ============================================
+      // SUBAGENT HANDLERS
+      // ============================================
+
+      case 'subagent_start': {
+        const task = toolInput.task as string;
+        const id = (toolInput.id as string) || `subagent_${randomUUID()}`;
+        const model = toolInput.model as string | undefined;
+        const thinkingMode = toolInput.thinking_mode as
+          | 'none'
+          | 'basic'
+          | 'extended'
+          | 'chain-of-thought'
+          | undefined;
+        const maxTurns = toolInput.max_turns as number | undefined;
+        const timeout = toolInput.timeout_ms as number | undefined;
+        const toolsAllowlist = Array.isArray(toolInput.tools)
+          ? (toolInput.tools as string[])
+          : undefined;
+        const background = toolInput.background !== false;
+
+        const config = {
+          id,
+          sessionId: session.id,
+          userId: session.userId,
+          task,
+          model,
+          thinkingMode,
+          maxTurns,
+          timeout,
+          tools: toolsAllowlist,
+          background: background,
+        };
+
+        const subagentToolExecutor: ToolExecutor = async (tool, params, state) => {
+          if (tool.startsWith('subagent_')) {
+            return JSON.stringify({ error: 'Subagent tools are not allowed inside subagents.' });
+          }
+          if (state.config.tools && !state.config.tools.includes(tool)) {
+            return JSON.stringify({ error: `Tool not allowed: ${tool}` });
+          }
+          return executeTool(tool, params, context);
+        };
+
+        if (background) {
+          subagentManager.startBackground(config, subagentToolExecutor);
+        } else {
+          const run = subagentManager.start(config);
+          await subagentManager.execute(run, subagentToolExecutor);
+        }
+
+        return JSON.stringify({ result: 'Subagent started', id });
+      }
+
+      case 'subagent_pause': {
+        const id = toolInput.id as string;
+        const ok = subagentManager.pause(id);
+        if (!ok) {
+          return JSON.stringify({ error: `Subagent not running: ${id}` });
+        }
+        return JSON.stringify({ result: 'Subagent paused', id });
+      }
+
+      case 'subagent_resume': {
+        const id = toolInput.id as string;
+        const background = toolInput.background !== false;
+        const run = subagentManager.resume(id);
+        if (!run) {
+          return JSON.stringify({ error: `Subagent not found: ${id}` });
+        }
+
+        const subagentToolExecutor: ToolExecutor = async (tool, params, state) => {
+          if (tool.startsWith('subagent_')) {
+            return JSON.stringify({ error: 'Subagent tools are not allowed inside subagents.' });
+          }
+          if (state.config.tools && !state.config.tools.includes(tool)) {
+            return JSON.stringify({ error: `Tool not allowed: ${tool}` });
+          }
+          return executeTool(tool, params, context);
+        };
+
+        if (background) {
+          setImmediate(() => {
+            subagentManager.execute(run, subagentToolExecutor).catch((error) => {
+              logger.error({ id, error }, 'Subagent resume failed');
+            });
+          });
+        } else {
+          await subagentManager.execute(run, subagentToolExecutor);
+        }
+
+        return JSON.stringify({ result: 'Subagent resumed', id });
+      }
+
+      case 'subagent_status': {
+        const id = toolInput.id as string;
+        const state = subagentManager.getStatus(id);
+        if (!state) {
+          return JSON.stringify({ error: `Subagent not found: ${id}` });
+        }
+        return JSON.stringify({ result: state });
+      }
+
+      case 'subagent_progress': {
+        const id = toolInput.id as string;
+        const message = toolInput.message as string | undefined;
+        const percent = typeof toolInput.percent === 'number' ? (toolInput.percent as number) : undefined;
+        const ok = subagentManager.updateProgress(id, message, percent);
+        if (!ok) {
+          return JSON.stringify({ error: `Subagent not found: ${id}` });
+        }
+        return JSON.stringify({ result: 'Progress updated', id });
       }
 
       default:
@@ -11418,8 +14849,14 @@ export async function createAgentManager(
   feeds: FeedManager,
   db: Database,
   sessionManager: SessionManager,
-  sendMessage: (msg: OutgoingMessage) => Promise<void>,
-  memory?: MemoryService
+  sendMessage: (msg: OutgoingMessage) => Promise<string | null>,
+  editMessage?: (msg: OutgoingMessage & { messageId: string }) => Promise<void>,
+  deleteMessage?: (msg: OutgoingMessage & { messageId: string }) => Promise<void>,
+  reactMessage?: (msg: ReactionMessage) => Promise<void>,
+  createPoll?: (msg: PollMessage) => Promise<string | null>,
+  memory?: MemoryService,
+  configProvider?: () => Config,
+  webhookToolProvider?: () => WebhookTool | undefined
 ): Promise<AgentManager> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -11429,31 +14866,101 @@ export async function createAgentManager(
   const client = new Anthropic({ apiKey });
   const skills = createSkillManager(config.agents.defaults.workspace);
   const credentials = createCredentialsManager(db);
+  const transcription = createTranscriptionTool(config.agents.defaults.workspace);
+  const files = createFileTool(config.agents.defaults.workspace);
+  const shellHistory = createShellHistoryTool();
+  const git = createGitTool(config.agents.defaults.workspace);
+  const email = createEmailTool();
+  const sms = createSmsTool();
+  const sql = createSqlTool(db);
+  const embeddings: EmbeddingsService = createEmbeddingsService(db);
+  const marketIndex = createMarketIndexService(db, embeddings, {
+    platformWeights: config.marketIndex?.platformWeights,
+  });
+  const docker = createDockerTool(config.agents.defaults.workspace);
+  const subagentManager = createSubagentManager();
+  subagentManager.setClient(client);
+  const subagentProgressLastSent = new Map<string, number>();
+  subagentManager.setAnnouncer(async (state) => {
+    const session = sessionManager.getSessionById(state.config.sessionId);
+    if (!session) {
+      logger.warn({ id: state.config.id }, 'Subagent completed but session not found');
+      return;
+    }
+
+    if (state.progress && state.status === 'running') {
+      const lastSent = subagentProgressLastSent.get(state.config.id) ?? 0;
+      const now = Date.now();
+      if (now - lastSent < 5000) {
+        return;
+      }
+      subagentProgressLastSent.set(state.config.id, now);
+      const progressLine = [
+        state.progress.message || 'Working…',
+        typeof state.progress.percent === 'number' ? `(${state.progress.percent}%)` : '',
+      ].filter(Boolean).join(' ');
+      await sendMessage({
+        platform: session.channel,
+        chatId: session.chatId,
+        accountId: session.accountId,
+        text: `Subagent progress (${state.config.id}): ${progressLine}`,
+        parseMode: 'Markdown',
+      });
+      return;
+    }
+
+    const result = state.result
+      ? state.result.length > 500
+        ? `${state.result.slice(0, 500)}…`
+        : state.result
+      : state.error
+        ? `Error: ${state.error.message}`
+        : 'No result.';
+    await sendMessage({
+      platform: session.channel,
+      chatId: session.chatId,
+      accountId: session.accountId,
+      text: `Subagent finished (${state.config.id}). Result:\n\n${result}`,
+      parseMode: 'Markdown',
+    });
+  });
   const tools = buildTools();
+  const getConfig = configProvider || (() => config);
+  const getWebhooks = webhookToolProvider || (() => undefined);
+  const summarizer = createClaudeSummarizer();
 
   // =========================================================================
   // RATE LIMITING - Per-user rate limits to prevent abuse
   // =========================================================================
-  const rateLimitConfig: RateLimitConfig = {
-    maxRequests: config.agents.defaults.rateLimit?.maxRequests ?? 30,  // 30 requests
-    windowMs: config.agents.defaults.rateLimit?.windowMs ?? 60000,     // per minute
-    perUser: true,
-  };
-  const rateLimiter = new RateLimiter(rateLimitConfig);
+  function computeRateLimitConfig(): RateLimitConfig {
+    const cfg = getConfig();
+    return {
+      maxRequests: cfg.agents.defaults.rateLimit?.maxRequests ?? 30,
+      windowMs: cfg.agents.defaults.rateLimit?.windowMs ?? 60000,
+      perUser: true,
+    };
+  }
+
+  let rateLimitConfig: RateLimitConfig = computeRateLimitConfig();
+  let rateLimiter = new RateLimiter(rateLimitConfig);
+
+  function ensureRateLimiter(): void {
+    const next = computeRateLimitConfig();
+    if (next.maxRequests !== rateLimitConfig.maxRequests || next.windowMs !== rateLimitConfig.windowMs) {
+      rateLimitConfig = next;
+      rateLimiter = new RateLimiter(rateLimitConfig);
+      logger.info({ rateLimitConfig }, 'Rate limiter reconfigured');
+    }
+  }
 
   // Periodic cleanup of expired rate limit entries (every 5 minutes)
   const rateLimitCleanupInterval = setInterval(() => {
     rateLimiter.cleanup();
   }, 5 * 60 * 1000);
 
-  // Build system prompt with skills
-  const skillContext = skills.getSkillContext();
-  const systemPrompt = SYSTEM_PROMPT.replace(
-    '{{SKILLS}}',
-    skillContext ? `\n## Skills Reference\n${skillContext}` : ''
-  );
+  async function handleMessage(message: IncomingMessage, session: Session): Promise<string | null> {
+    ensureRateLimiter();
 
-  async function handleMessage(message: IncomingMessage, session: Session): Promise<string> {
     // =========================================================================
     // ACCESS CONTROL - Check if user is allowed
     // =========================================================================
@@ -11512,14 +15019,50 @@ export async function createAgentManager(
       sessionManager.clearHistory(session);
     };
 
+    const sendMessageWithAccount = (msg: OutgoingMessage) =>
+      sendMessage({ ...msg, accountId: msg.accountId ?? session.accountId });
+    const editMessageWithAccount = editMessage
+      ? (msg: OutgoingMessage & { messageId: string }) =>
+          editMessage({ ...msg, accountId: msg.accountId ?? session.accountId })
+      : undefined;
+    const deleteMessageWithAccount = deleteMessage
+      ? (msg: OutgoingMessage & { messageId: string }) =>
+          deleteMessage({ ...msg, accountId: msg.accountId ?? session.accountId })
+      : undefined;
+    const reactMessageWithAccount = reactMessage
+      ? (msg: ReactionMessage) =>
+          reactMessage({ ...msg, accountId: msg.accountId ?? session.accountId })
+      : undefined;
+    const createPollWithAccount = createPoll
+      ? (msg: PollMessage) =>
+          createPoll({ ...msg, accountId: msg.accountId ?? session.accountId })
+      : undefined;
+
     const context: AgentContext = {
       session,
       feeds,
       db,
+      sessionManager,
       skills,
       credentials,
+      transcription,
+      files,
+      shellHistory,
+      git,
+      email,
+      sms,
+      sql,
+      webhooks: getWebhooks(),
+      docker,
+      subagents: subagentManager,
+      marketIndex,
+      marketIndexConfig: config.marketIndex,
       tradingContext: tradingContext.credentials.size > 0 ? tradingContext : null,
-      sendMessage,
+      sendMessage: sendMessageWithAccount,
+      editMessage: editMessageWithAccount,
+      deleteMessage: deleteMessageWithAccount,
+      reactMessage: reactMessageWithAccount,
+      createPoll: createPollWithAccount,
       addToHistory,
       clearHistory,
     };
@@ -11544,18 +15087,213 @@ export async function createAgentManager(
       addToHistory('user', processedMessage.text);
 
       // Get model: session override > config default (Clawdbot-style)
-      const defaultModel = config.agents.defaults.model.primary.replace('anthropic/', '');
-      const modelId = session.context.modelOverride || defaultModel;
+      const liveConfig = getConfig();
+      const defaultModelChain = {
+        primary: liveConfig.agents.defaults.model.primary,
+        fallbacks: liveConfig.agents.defaults.model.fallbacks,
+      };
+      const adaptiveModel = selectAdaptiveModel({
+        ...defaultModelChain,
+        strategy: getModelStrategy(),
+      });
+      const modelId = session.context.modelOverride || adaptiveModel;
+      logger.info({ modelId, strategy: getModelStrategy() }, 'Selected model');
+
+      let streamedResponseSent = false;
+      let streamedMessageId: string | null = null;
+
+      const createMessageWithRetry = (params: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message> => {
+        return withRetry(
+          () => client.messages.create(params) as Promise<Anthropic.Message>,
+          {
+            ...RETRY_POLICIES.default.config,
+            onRetry: (info) => {
+              logger.warn({
+                userId: session.userId,
+                attempt: info.attempt,
+                maxAttempts: info.maxAttempts,
+                delay: info.delay,
+                error: info.error.message,
+              }, 'Retrying LLM request');
+            },
+          }
+        );
+      };
+
+      const canStreamResponse =
+        STREAM_RESPONSES_ENABLED &&
+        Boolean(editMessage) &&
+        STREAM_RESPONSE_PLATFORMS.has(processedMessage.platform);
+
+      const extractResponseText = (response: Anthropic.Message): string => {
+        const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text');
+        return textBlocks.map((b) => b.text).join('\n');
+      };
+
+      const createMessageStreamed = async (
+        params: Anthropic.MessageCreateParamsNonStreaming
+      ): Promise<Anthropic.Message> => {
+        let streamHasOutput = false;
+        let pendingText = '';
+        let lastSentText = '';
+        let lastUpdateAt = 0;
+        let updateTimer: NodeJS.Timeout | null = null;
+
+        const scheduleFlush = (): void => {
+          if (updateTimer) return;
+          const delay = Math.max(0, STREAM_RESPONSE_INTERVAL_MS - (Date.now() - lastUpdateAt));
+          updateTimer = setTimeout(() => {
+            updateTimer = null;
+            void flushUpdate(true);
+          }, delay);
+        };
+
+        const flushUpdate = async (force = false): Promise<void> => {
+          if (!pendingText || pendingText === lastSentText) return;
+          const now = Date.now();
+          if (!force && now - lastUpdateAt < STREAM_RESPONSE_INTERVAL_MS) {
+            scheduleFlush();
+            return;
+          }
+          try {
+            if (!streamedMessageId) {
+              const sentId = await sendMessage({
+                platform: processedMessage.platform,
+                chatId: processedMessage.chatId,
+                text: pendingText,
+                parseMode: 'Markdown',
+                thread: processedMessage.thread,
+              });
+              if (!sentId) {
+                logger.debug({ platform: processedMessage.platform }, 'Streaming send returned no messageId');
+                return;
+              }
+              streamedMessageId = sentId;
+              streamedResponseSent = true;
+            } else if (editMessage) {
+              await editMessage({
+                platform: processedMessage.platform,
+                chatId: processedMessage.chatId,
+                messageId: streamedMessageId,
+                text: pendingText,
+                parseMode: 'Markdown',
+                thread: processedMessage.thread,
+              });
+            }
+            lastSentText = pendingText;
+            lastUpdateAt = Date.now();
+          } catch (error) {
+            logger.debug({ error }, 'Streaming response update failed');
+          }
+        };
+
+        const message = await withRetry(
+          async () => {
+            streamHasOutput = false;
+            pendingText = '';
+            lastSentText = '';
+            lastUpdateAt = 0;
+            if (updateTimer) {
+              clearTimeout(updateTimer);
+              updateTimer = null;
+            }
+
+            const stream = client.messages.stream(params);
+            stream.on('text', (_delta, fullText) => {
+              streamHasOutput = true;
+              pendingText = fullText;
+              scheduleFlush();
+            });
+
+            const finalMessage = await stream.finalMessage();
+            if (updateTimer) {
+              clearTimeout(updateTimer);
+              updateTimer = null;
+            }
+            await flushUpdate(true);
+            return finalMessage;
+          },
+          {
+            ...RETRY_POLICIES.default.config,
+            shouldRetry: (error) => !streamHasOutput && isRetryableError(error),
+            onRetry: (info) => {
+              logger.warn({
+                userId: session.userId,
+                attempt: info.attempt,
+                maxAttempts: info.maxAttempts,
+                delay: info.delay,
+                error: info.error.message,
+              }, 'Retrying streaming LLM request');
+            },
+          }
+        );
+
+        if (!streamedResponseSent) {
+          const finalText = extractResponseText(message);
+          if (finalText) {
+            await sendMessage({
+              platform: processedMessage.platform,
+              chatId: processedMessage.chatId,
+              text: finalText,
+              parseMode: 'Markdown',
+              thread: processedMessage.thread,
+            });
+            streamedResponseSent = true;
+          }
+        }
+
+        return message;
+      };
+
+      const createMessage = async (
+        params: Anthropic.MessageCreateParamsNonStreaming
+      ): Promise<Anthropic.Message> => {
+        if (!canStreamResponse) {
+          return createMessageWithRetry(params);
+        }
+        return createMessageStreamed(params);
+      };
 
       // Build final system prompt (Clawdbot-style)
       // Priority: routed agent prompt > default system prompt
-      let finalSystemPrompt = session.context.routedAgentPrompt || systemPrompt;
+      const skillContext = skills.getSkillContext();
+      const baseSystemPrompt = SYSTEM_PROMPT.replace(
+        '{{SKILLS}}',
+        skillContext ? `\n## Skills Reference\n${skillContext}` : ''
+      );
+      let finalSystemPrompt = session.context.routedAgentPrompt || baseSystemPrompt;
 
       // Add memory context if available
       if (memory) {
-        const memoryContext = memory.buildContextString(session.userId, processedMessage.platform);
-        if (memoryContext) {
-          finalSystemPrompt += `\n\n## User Memory\n${memoryContext}`;
+        const memoryAuto = config.memory?.auto || {};
+        const channelKey = processedMessage.chatId || processedMessage.platform;
+        const scope = memoryAuto.scope === 'channel' ? channelKey : 'global';
+        if (memoryAuto.includeMemoryContext !== false) {
+          const memoryContext = memory.buildContextString(session.userId, scope);
+          if (memoryContext) {
+            finalSystemPrompt += `\n\n## User Memory\n${memoryContext}`;
+          }
+        }
+
+        const semanticTopK = memoryAuto.semanticSearchTopK ?? (process.env.CLODDS_MEMORY_SEARCH === '1'
+          ? Number(process.env.CLODDS_MEMORY_SEARCH_TOPK || 5)
+          : 0);
+
+        if (semanticTopK > 0 && processedMessage.text?.trim()) {
+          try {
+            const results = await memory.semanticSearch(
+              session.userId,
+              scope,
+              processedMessage.text,
+              semanticTopK
+            );
+            if (results.length > 0) {
+              const lines = results.map((r) => `- ${r.entry.key}: ${r.entry.value} (score ${r.score.toFixed(2)})`);
+              finalSystemPrompt += `\n\n## Relevant Memory (semantic search)\n${lines.join('\n')}`;
+            }
+          } catch (error) {
+            logger.debug({ error }, 'Memory semantic search failed');
+          }
         }
       }
 
@@ -11568,7 +15306,7 @@ export async function createAgentManager(
           message: processedMessage,
           session,
           data: {
-            agentId: session.agentId || 'default',
+            agentId: session.context.routedAgentId || 'default',
             systemPrompt: finalSystemPrompt,
             messages,
           },
@@ -11591,8 +15329,25 @@ export async function createAgentManager(
         reserveTokens: 4096,
         compactThreshold: 0.85,
         minMessagesAfterCompact: 6,
+        summarizer,
+        dedupe: process.env.CLODDS_CONTEXT_DEDUPE === '1',
+        dedupeThreshold: Number(process.env.CLODDS_CONTEXT_DEDUPE_THRESHOLD || 0.92),
+        dedupeWindow: Number(process.env.CLODDS_CONTEXT_DEDUPE_WINDOW || 12),
+        embedder: memory?.embed,
+        similarity: memory?.cosineSimilarity,
       };
       const contextManager = createContextManager(contextConfig, memory);
+      const effectiveMaxTokens =
+        (contextConfig.maxTokens ?? 128000) - (contextConfig.reserveTokens ?? 4096);
+
+      const estimateSubmitTokens = (): number => {
+        const system = estimateTokens(finalSystemPrompt, modelId);
+        const msgs = messages.reduce((sum, m) => {
+          const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+          return sum + estimateTokens(content, modelId) + 4;
+        }, 0);
+        return system + msgs;
+      };
 
       // Add all messages to context manager for tracking
       for (const msg of messages) {
@@ -11604,7 +15359,7 @@ export async function createAgentManager(
       }
 
       // Add system prompt tokens
-      const systemTokens = estimateTokens(finalSystemPrompt);
+      const systemTokens = estimateTokens(finalSystemPrompt, modelId);
 
       // Check if we need to compact before first API call
       const guard = contextManager.checkGuard(systemTokens);
@@ -11644,6 +15399,7 @@ export async function createAgentManager(
               content: msg.content,
             });
           }
+          sessionManager.saveCheckpoint(session, compactionResult.summary);
           logger.info({
             removed: compactionResult.removedMessages,
             tokensSaved: compactionResult.tokensBefore - compactionResult.tokensAfter,
@@ -11651,7 +15407,13 @@ export async function createAgentManager(
         }
       }
 
-      let response = await client.messages.create({
+      const initialEstimate = estimateSubmitTokens();
+      logger.info(
+        { tokens: initialEstimate, max: effectiveMaxTokens },
+        'Token estimate before submit'
+      );
+
+      let response = await createMessage({
         model: modelId,
         max_tokens: 1024,
         system: finalSystemPrompt,
@@ -11679,6 +15441,8 @@ export async function createAgentManager(
               {
                 message: processedMessage,
                 session,
+                toolName: block.name,
+                toolParams,
                 data: {
                   toolName: block.name,
                   toolParams,
@@ -11700,11 +15464,44 @@ export async function createAgentManager(
             // Use potentially modified params
             const finalParams = toolBeforeResult?.params || toolParams;
 
+            const toolStart = Date.now();
+            let announced = false;
+            let announceTimer: NodeJS.Timeout | null = null;
+
+            const notifyToolStatus = async (text: string): Promise<void> => {
+              try {
+                await sendMessage({
+                  platform: processedMessage.platform,
+                  chatId: processedMessage.chatId,
+                  text,
+                });
+              } catch (error) {
+                logger.debug({ error, tool: block.name }, 'Tool status notification failed');
+              }
+            };
+
+            if (STREAM_TOOL_CALLS_ENABLED && TOOL_STREAM_DELAY_MS > 0) {
+              announceTimer = setTimeout(() => {
+                announced = true;
+                void notifyToolStatus(`Running tool: ${block.name}...`);
+              }, TOOL_STREAM_DELAY_MS);
+            }
+
             const result = await executeTool(
               block.name,
               finalParams,
               context
             );
+
+            if (announceTimer) {
+              clearTimeout(announceTimer);
+              announceTimer = null;
+            }
+
+            if (announced && STREAM_TOOL_CALLS_ENABLED) {
+              const elapsedMs = Date.now() - toolStart;
+              void notifyToolStatus(`Finished tool: ${block.name} (${elapsedMs}ms)`);
+            }
 
             // =========================================================================
             // HOOKS: tool:after_call - Fire-and-forget notification
@@ -11712,6 +15509,8 @@ export async function createAgentManager(
             hooks.trigger('tool:after_call', {
               message: processedMessage,
               session,
+              toolName: block.name,
+              toolParams: finalParams,
               data: {
                 toolName: block.name,
                 toolParams: finalParams,
@@ -11754,10 +15553,17 @@ export async function createAgentManager(
                 content: msg.content,
               });
             }
+            sessionManager.saveCheckpoint(session, loopCompactResult.summary);
           }
         }
 
-        response = await client.messages.create({
+        const loopEstimate = estimateSubmitTokens();
+        logger.info(
+          { tokens: loopEstimate, max: effectiveMaxTokens },
+          'Token estimate before submit (tool loop)'
+        );
+
+        response = await createMessage({
           model: modelId,
           max_tokens: 1024,
           system: finalSystemPrompt,
@@ -11767,10 +15573,7 @@ export async function createAgentManager(
       }
 
       // Extract text response
-      const textBlocks = response.content.filter(b => b.type === 'text');
-      const responseText = textBlocks
-        .map(b => (b as Anthropic.TextBlock).text)
-        .join('\n');
+      const responseText = extractResponseText(response);
 
       // Save assistant response to history
       if (responseText) {
@@ -11790,7 +15593,7 @@ export async function createAgentManager(
         message: processedMessage,
         session,
         data: {
-          agentId: session.agentId || 'default',
+          agentId: session.context.routedAgentId || 'default',
           response: finalResponse,
         },
       });
@@ -11804,9 +15607,67 @@ export async function createAgentManager(
         response: { text: finalResponse, platform: processedMessage.platform } as OutgoingMessage,
       });
 
+      // Auto memory capture (fire-and-forget)
+      if (memory && config.memory?.auto?.enabled !== false) {
+        const memoryAuto = config.memory?.auto || {};
+        const channelKey = processedMessage.chatId || processedMessage.platform;
+        const scope = memoryAuto.scope === 'channel' ? channelKey : 'global';
+        const minIntervalMs = memoryAuto.minIntervalMs ?? 2 * 60 * 1000;
+        const lastCaptureAt = (session.context as { lastMemoryCaptureAt?: number }).lastMemoryCaptureAt ?? 0;
+        const maxItems = memoryAuto.maxItemsPerType ?? 5;
+        const profileUpdateEvery = memoryAuto.profileUpdateEvery ?? 6;
+        const excludeSensitive = memoryAuto.excludeSensitive !== false;
+        const turnCount = session.context.messageCount;
+
+        if (Date.now() - lastCaptureAt >= minIntervalMs) {
+          (session.context as { lastMemoryCaptureAt?: number }).lastMemoryCaptureAt = Date.now();
+
+          void (async () => {
+            const userText = sanitizeMemoryText(processedMessage.text || '');
+            const assistantText = sanitizeMemoryText(finalResponse || '');
+
+            if (!userText && !assistantText) return;
+            if (excludeSensitive && containsSensitiveMemory(`${userText}\n${assistantText}`)) return;
+
+            const extractInput = `User: ${userText}\nAssistant: ${assistantText}`;
+            const extraction = await extractMemoryWithClaude(client, extractInput, maxItems);
+            if (!extraction) return;
+
+            const facts = limitItems(extraction.facts, maxItems);
+            const prefs = limitItems(extraction.preferences, maxItems);
+            const notes = limitItems(extraction.notes, maxItems);
+
+            for (const fact of facts) {
+              memory.remember(session.userId, scope, 'fact', fact.key, fact.value);
+            }
+            for (const pref of prefs) {
+              memory.remember(session.userId, scope, 'preference', pref.key, pref.value);
+            }
+            for (const note of notes) {
+              memory.remember(session.userId, scope, 'note', note.key, note.value);
+            }
+
+            if (extraction.profile_summary && turnCount % profileUpdateEvery === 0) {
+              memory.remember(session.userId, scope, 'profile', 'profile', extraction.profile_summary);
+            }
+
+            if (extraction.summary) {
+              const topics = Array.isArray(extraction.topics) ? extraction.topics.slice(0, 8) : [];
+              const date = new Date().toISOString().slice(0, 10);
+              memory.logDaily(session.userId, scope, date, extraction.summary, 1, topics);
+            }
+          })().catch((error) => {
+            logger.debug({ error }, 'Memory auto-capture failed');
+          });
+        }
+      }
+
+      if (streamedResponseSent) {
+        return null;
+      }
       return finalResponse;
     } catch (error) {
-      logger.error('Agent error:', error);
+      logger.error({ err: error }, 'Agent error');
 
       // =========================================================================
       // HOOKS: error - Error occurred during processing
@@ -11827,6 +15688,20 @@ export async function createAgentManager(
       // Cleanup rate limit interval
       clearInterval(rateLimitCleanupInterval);
       logger.info('Agent manager disposed');
+    },
+    reloadSkills() {
+      skills.reload();
+    },
+    reloadConfig(nextConfig: Config) {
+      // This method acts as a signal hook; most config is read lazily via getConfig().
+      logger.info(
+        {
+          model: nextConfig.agents.defaults.model.primary,
+          workspace: nextConfig.agents.defaults.workspace,
+        },
+        'Agent manager received config reload signal'
+      );
+      ensureRateLimiter();
     },
   };
 }

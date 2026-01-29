@@ -12,14 +12,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Database } from '../db/index';
 import { logger } from '../utils/logger';
-import { createEmbeddingsService, EmbeddingsService, EmbeddingConfig } from '../embeddings/index';
+import { createEmbeddingsService, EmbeddingsService, EmbeddingConfig, EmbeddingVector } from '../embeddings/index';
 import { createHybridSearchService, HybridSearchService } from '../search/index';
 
 // Re-export context management
 export * from './context';
+export * from './summarizer';
 
 /** Memory entry types */
-export type MemoryType = 'fact' | 'preference' | 'note' | 'summary' | 'context';
+export type MemoryType = 'fact' | 'preference' | 'note' | 'summary' | 'context' | 'profile';
 
 /** A single memory entry */
 export interface MemoryEntry {
@@ -100,6 +101,11 @@ export interface MemoryService {
     query: string,
     topK?: number
   ): Promise<Array<{ entry: MemoryEntry; score: number }>>;
+
+  /** Embed a piece of text for semantic utilities */
+  embed?: (text: string) => Promise<EmbeddingVector>;
+  /** Compute cosine similarity between two vectors */
+  cosineSimilarity?: (a: EmbeddingVector, b: EmbeddingVector) => number;
 
   /** Forget (delete) a memory by key */
   forget(userId: string, channel: string, key: string): boolean;
@@ -352,6 +358,9 @@ export function createMemoryService(
       }));
     },
 
+    embed: embeddings.embed.bind(embeddings),
+    cosineSimilarity: embeddings.cosineSimilarity.bind(embeddings),
+
     forget(userId, channel, key) {
       // Check if entry exists first
       const existing = this.recall(userId, channel, key);
@@ -444,6 +453,15 @@ export function createMemoryService(
 
     buildContextString(userId, channel) {
       const parts: string[] = [];
+
+      // Add user profile summary
+      const profile = this.recallByType(userId, channel, 'profile');
+      if (profile.length > 0) {
+        parts.push('## User Profile');
+        for (const entry of profile.slice(0, 1)) {
+          parts.push(`- ${entry.value}`);
+        }
+      }
 
       // Add user facts
       const facts = this.recallByType(userId, channel, 'fact');

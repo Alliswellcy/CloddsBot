@@ -6,14 +6,70 @@
  * - Daily reset at configurable hour
  * - Idle reset after configurable minutes
  * - Manual reset via commands
+ * - Transcript encryption (AES-256-GCM)
  */
 
 import { Session, SessionContext, User, IncomingMessage, ConversationMessage, Config } from '../types';
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
 
 // Re-export Session type for consumers
 export type { Session } from '../types';
 import { Database } from '../db';
 import { logger } from '../utils/logger';
+
+// =============================================================================
+// TRANSCRIPT ENCRYPTION (AES-256-GCM)
+// =============================================================================
+
+const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 16;
+const AUTH_TAG_LENGTH = 16;
+const SALT_LENGTH = 32;
+
+interface EncryptedData {
+  encrypted: string;  // base64
+  iv: string;         // base64
+  authTag: string;    // base64
+  salt: string;       // base64
+}
+
+function deriveKey(password: string, salt: Buffer): Buffer {
+  return scryptSync(password, salt, 32);
+}
+
+function encryptTranscript(data: string, password: string): EncryptedData {
+  const salt = randomBytes(SALT_LENGTH);
+  const key = deriveKey(password, salt);
+  const iv = randomBytes(IV_LENGTH);
+
+  const cipher = createCipheriv(ENCRYPTION_ALGORITHM, key, iv);
+  let encrypted = cipher.update(data, 'utf8', 'base64');
+  encrypted += cipher.final('base64');
+
+  return {
+    encrypted,
+    iv: iv.toString('base64'),
+    authTag: cipher.getAuthTag().toString('base64'),
+    salt: salt.toString('base64'),
+  };
+}
+
+function decryptTranscript(encryptedData: EncryptedData, password: string): string {
+  const salt = Buffer.from(encryptedData.salt, 'base64');
+  const key = deriveKey(password, salt);
+  const iv = Buffer.from(encryptedData.iv, 'base64');
+  const authTag = Buffer.from(encryptedData.authTag, 'base64');
+
+  const decipher = createDecipheriv(ENCRYPTION_ALGORITHM, key, iv);
+  decipher.setAuthTag(authTag);
+
+  let decrypted = decipher.update(encryptedData.encrypted, 'base64', 'utf8');
+  decrypted += decipher.final('utf8');
+
+  return decrypted;
+}
+
+export { encryptTranscript, decryptTranscript, EncryptedData };
 
 export type DmScope = 'main' | 'per-peer' | 'per-channel-peer';
 
@@ -25,11 +81,23 @@ export interface SessionConfig {
     idleMinutes: number;
   };
   resetTriggers: string[];
+  cleanup: {
+    enabled: boolean;
+    maxAgeDays: number;
+    idleDays: number;
+  };
+  /** Encryption settings for transcript storage */
+  encryption?: {
+    enabled: boolean;
+    /** Password for encryption (or use CLODDS_SESSION_KEY env var) */
+    password?: string;
+  };
 }
 
 export interface SessionManager {
   getOrCreateSession: (message: IncomingMessage) => Promise<Session>;
   getSession: (key: string) => Session | undefined;
+  getSessionById: (id: string) => Session | undefined;
   updateSession: (session: Session) => void;
   deleteSession: (key: string) => void;
   /** Add a message to conversation history */
@@ -40,10 +108,16 @@ export interface SessionManager {
   clearHistory: (session: Session) => void;
   /** Reset a session by ID (clears history, keeps context) */
   reset: (sessionId: string) => void;
+  /** Save a checkpoint for resumption */
+  saveCheckpoint: (session: Session, summary?: string) => void;
+  /** Restore session history from checkpoint */
+  restoreCheckpoint: (session: Session) => boolean;
   /** Check and perform scheduled resets */
   checkScheduledResets: () => void;
   /** Get session config */
   getConfig: () => SessionConfig;
+  /** Dispose timers and background work */
+  dispose: () => void;
 }
 
 /** Max conversation history to keep (prevent unbounded growth) */
@@ -58,7 +132,59 @@ const DEFAULT_CONFIG: SessionConfig = {
     idleMinutes: 60,
   },
   resetTriggers: ['/new', '/reset'],
+  cleanup: {
+    enabled: true,
+    maxAgeDays: 30,
+    idleDays: 14,
+  },
+  encryption: {
+    enabled: false,
+  },
 };
+
+/**
+ * Get encryption password from config or environment
+ */
+function getEncryptionPassword(config: SessionConfig): string | null {
+  if (!config.encryption?.enabled) return null;
+  return config.encryption.password || process.env.CLODDS_SESSION_KEY || null;
+}
+
+/**
+ * Encrypt session context if encryption is enabled
+ */
+function maybeEncryptContext(context: SessionContext, password: string | null): string {
+  const json = JSON.stringify(context);
+  if (!password) return json;
+
+  try {
+    const encrypted = encryptTranscript(json, password);
+    return JSON.stringify({ __encrypted: true, ...encrypted });
+  } catch (err) {
+    logger.warn({ error: err }, 'Failed to encrypt session context, storing plaintext');
+    return json;
+  }
+}
+
+/**
+ * Decrypt session context if encryption was used
+ */
+function maybeDecryptContext(data: string, password: string | null): SessionContext {
+  try {
+    const parsed = JSON.parse(data);
+
+    // Check if this is encrypted data
+    if (parsed.__encrypted && password) {
+      const decrypted = decryptTranscript(parsed as EncryptedData, password);
+      return JSON.parse(decrypted) as SessionContext;
+    }
+
+    return parsed as SessionContext;
+  } catch (err) {
+    logger.warn({ error: err }, 'Failed to decrypt session context');
+    return { messageCount: 0, lastMarkets: [], preferences: {}, conversationHistory: [] };
+  }
+}
 
 /**
  * Generate a session key based on scope
@@ -69,10 +195,13 @@ function generateSessionKey(
   agentId: string = 'main'
 ): string {
   const isGroup = message.chatType === 'group';
+  const platformSegment = message.accountId
+    ? `${message.platform}:${message.accountId}`
+    : message.platform;
 
   if (isGroup) {
     // Groups always get their own key
-    return `agent:${agentId}:${message.platform}:group:${message.chatId}`;
+    return `agent:${agentId}:${platformSegment}:group:${message.chatId}`;
   }
 
   // DM scoping
@@ -88,12 +217,13 @@ function generateSessionKey(
     case 'per-channel-peer':
     default:
       // Isolate by channel + sender (most specific)
-      return `agent:${agentId}:${message.platform}:dm:${message.chatId}:${message.userId}`;
+      return `agent:${agentId}:${platformSegment}:dm:${message.chatId}:${message.userId}`;
   }
 }
 
 export function createSessionManager(db: Database, configInput?: Config['session']): SessionManager {
   const sessions = new Map<string, Session>();
+  const sessionsById = new Map<string, Session>();
 
   // Merge with defaults
   const config: SessionConfig = {
@@ -104,6 +234,11 @@ export function createSessionManager(db: Database, configInput?: Config['session
       idleMinutes: configInput?.reset?.idleMinutes ?? DEFAULT_CONFIG.reset.idleMinutes,
     },
     resetTriggers: configInput?.resetTriggers || DEFAULT_CONFIG.resetTriggers,
+    cleanup: {
+      enabled: configInput?.cleanup?.enabled ?? DEFAULT_CONFIG.cleanup.enabled,
+      maxAgeDays: configInput?.cleanup?.maxAgeDays ?? DEFAULT_CONFIG.cleanup.maxAgeDays,
+      idleDays: configInput?.cleanup?.idleDays ?? DEFAULT_CONFIG.cleanup.idleDays,
+    },
   };
 
   logger.info({ config }, 'Session manager initialized');
@@ -125,6 +260,66 @@ export function createSessionManager(db: Database, configInput?: Config['session
     }
   }, 60000); // Check every minute
 
+  const cleanupInterval = setInterval(() => {
+    if (config.cleanup.enabled) {
+      cleanupOldSessions();
+    }
+  }, 60 * 60 * 1000); // Hourly cleanup
+
+  function resetSessionContext(context: SessionContext): SessionContext {
+    return {
+      ...context,
+      messageCount: 0,
+      conversationHistory: [],
+      checkpoint: undefined,
+      checkpointRestoredAt: undefined,
+    };
+  }
+
+  function resetSessionInMemory(session: Session): void {
+    session.history = [];
+    session.context = resetSessionContext(session.context);
+    session.lastActivity = new Date();
+    session.updatedAt = new Date();
+  }
+
+  function resetSessionsInDb(whereClause: string, params: Array<string | number>, reason: string): number {
+    const rows = db.query<{ key: string; context: string }>(
+      `SELECT key, context FROM sessions ${whereClause}`,
+      params
+    );
+    if (rows.length === 0) return 0;
+
+    let resetCount = 0;
+    const now = Date.now();
+    for (const row of rows) {
+      let context: SessionContext;
+      try {
+        context = JSON.parse(row.context || '{}') as SessionContext;
+      } catch {
+        context = { messageCount: 0, lastMarkets: [], preferences: {}, conversationHistory: [] };
+      }
+
+      if (!context.conversationHistory || context.conversationHistory.length === 0) {
+        continue;
+      }
+
+      const updated = resetSessionContext(context);
+      db.run('UPDATE sessions SET context = ?, updated_at = ? WHERE key = ?', [
+        JSON.stringify(updated),
+        now,
+        row.key,
+      ]);
+      resetCount++;
+    }
+
+    if (resetCount > 0) {
+      logger.info({ resetCount, reason }, 'Session reset persisted to database');
+    }
+
+    return resetCount;
+  }
+
   function checkDailyReset() {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
@@ -135,10 +330,12 @@ export function createSessionManager(db: Database, configInput?: Config['session
       logger.info({ hour: config.reset.atHour }, 'Performing daily session reset');
 
       // Clear all sessions
-      for (const [key, session] of sessions) {
-        session.context.conversationHistory = [];
+      for (const session of sessions.values()) {
+        resetSessionInMemory(session);
         db.updateSession(session);
       }
+
+      resetSessionsInDb('', [], 'daily');
 
       lastDailyResetDate = today;
       logger.info({ sessionsReset: sessions.size }, 'Daily reset complete');
@@ -153,8 +350,7 @@ export function createSessionManager(db: Database, configInput?: Config['session
     for (const [key, session] of sessions) {
       const idleTime = now - session.updatedAt.getTime();
       if (idleTime > idleThreshold && session.context.conversationHistory.length > 0) {
-        session.context.conversationHistory = [];
-        session.updatedAt = new Date();
+        resetSessionInMemory(session);
         db.updateSession(session);
         resetCount++;
         logger.debug({ sessionKey: key, idleMinutes: Math.round(idleTime / 60000) }, 'Session reset due to idle');
@@ -163,6 +359,35 @@ export function createSessionManager(db: Database, configInput?: Config['session
 
     if (resetCount > 0) {
       logger.info({ resetCount }, 'Idle sessions reset');
+    }
+
+    const cutoff = now - idleThreshold;
+    resetSessionsInDb('WHERE updated_at < ?', [cutoff], 'idle');
+  }
+
+  function cleanupOldSessions() {
+    const now = Date.now();
+    const maxAgeMs = config.cleanup.maxAgeDays * 24 * 60 * 60 * 1000;
+    const idleMs = config.cleanup.idleDays * 24 * 60 * 60 * 1000;
+    const cutoff = Math.min(now - maxAgeMs, now - idleMs);
+
+    if (!Number.isFinite(cutoff)) return;
+
+    // Purge from in-memory cache
+    let removed = 0;
+    for (const [key, session] of sessions) {
+      const updatedAt = session.updatedAt?.getTime?.() ?? 0;
+      if (updatedAt && updatedAt < cutoff) {
+        sessions.delete(key);
+        sessionsById.delete(session.id);
+        removed++;
+      }
+    }
+
+    // Purge from DB
+    const deleted = db.deleteSessionsBefore(cutoff);
+    if (removed > 0 || deleted > 0) {
+      logger.info({ removed, deleted, cutoff }, 'Session cleanup completed');
     }
   }
 
@@ -180,6 +405,7 @@ export function createSessionManager(db: Database, configInput?: Config['session
       session = db.getSession(key);
       if (session) {
         sessions.set(key, session);
+        sessionsById.set(session.id, session);
         return session;
       }
 
@@ -209,6 +435,7 @@ export function createSessionManager(db: Database, configInput?: Config['session
         key,
         userId: user.id,
         channel: message.platform,
+        accountId: message.accountId,
         chatId: message.chatId,
         chatType: message.chatType,
         context: {
@@ -225,23 +452,45 @@ export function createSessionManager(db: Database, configInput?: Config['session
 
       db.createSession(session);
       sessions.set(key, session);
+      sessionsById.set(session.id, session);
 
       logger.info({ key, scope: config.dmScope }, 'Created new session');
       return session;
     },
 
     getSession(key: string): Session | undefined {
-      return sessions.get(key) || db.getSession(key);
+      const cached = sessions.get(key);
+      if (cached) return cached;
+
+      const fromDb = db.getSession(key);
+      if (fromDb) {
+        sessions.set(key, fromDb);
+        sessionsById.set(fromDb.id, fromDb);
+      }
+      return fromDb;
+    },
+
+    getSessionById(id: string): Session | undefined {
+      const cached = sessionsById.get(id);
+      if (cached) return cached;
+
+      // Fallback to scan DB by loading all sessions is expensive; return undefined if not cached.
+      return undefined;
     },
 
     updateSession(session: Session): void {
       session.updatedAt = new Date();
       sessions.set(session.key, session);
+      sessionsById.set(session.id, session);
       db.updateSession(session);
     },
 
     deleteSession(key: string): void {
+      const existing = sessions.get(key) || db.getSession(key);
       sessions.delete(key);
+      if (existing) {
+        sessionsById.delete(existing.id);
+      }
       db.deleteSession(key);
     },
 
@@ -274,12 +523,36 @@ export function createSessionManager(db: Database, configInput?: Config['session
       logger.info({ sessionKey: session.key }, 'Conversation history cleared');
     },
 
+    saveCheckpoint(session: Session, summary?: string): void {
+      const history = session.context.conversationHistory || [];
+      session.context.checkpoint = {
+        createdAt: Date.now(),
+        messageCount: session.context.messageCount,
+        summary,
+        history: history.slice(-MAX_HISTORY_LENGTH),
+      };
+      this.updateSession(session);
+      logger.info({ sessionKey: session.key }, 'Session checkpoint saved');
+    },
+
+    restoreCheckpoint(session: Session): boolean {
+      const checkpoint = session.context.checkpoint;
+      if (!checkpoint || !checkpoint.history?.length) {
+        return false;
+      }
+
+      session.context.conversationHistory = checkpoint.history.slice();
+      session.context.messageCount = checkpoint.messageCount;
+      session.context.checkpointRestoredAt = Date.now();
+      this.updateSession(session);
+      logger.info({ sessionKey: session.key }, 'Session checkpoint restored');
+      return true;
+    },
+
     reset(sessionId: string): void {
-      const session = sessions.get(sessionId);
+      const session = sessionsById.get(sessionId);
       if (session) {
-        session.history = [];
-        session.context.conversationHistory = [];
-        session.lastActivity = new Date();
+        resetSessionInMemory(session);
         this.updateSession(session);
         logger.info({ sessionId }, 'Session reset');
       }
@@ -296,6 +569,12 @@ export function createSessionManager(db: Database, configInput?: Config['session
 
     getConfig(): SessionConfig {
       return config;
+    },
+
+    dispose(): void {
+      clearInterval(dailyResetInterval);
+      clearInterval(idleResetInterval);
+      clearInterval(cleanupInterval);
     },
   };
 }

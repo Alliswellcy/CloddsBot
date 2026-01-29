@@ -14,6 +14,7 @@ import { existsSync, accessSync, constants } from 'fs';
 import { promisify } from 'util';
 import { platform, homedir, cpus, totalmem, freemem } from 'os';
 import { logger } from '../utils/logger';
+import { resolveStateDir } from '../utils/config';
 
 const execAsync = promisify(exec);
 
@@ -99,7 +100,32 @@ const checks: Record<string, Check> = {
 
   async diskSpace(): Promise<CheckResult> {
     if (platform() === 'win32') {
-      return { name: 'Disk Space', status: 'skip', message: 'Windows check not implemented' };
+      try {
+        const drive = (process.env.SystemDrive || 'C:').toUpperCase();
+        const { stdout } = await execAsync('wmic logicaldisk get size,freespace,caption');
+        const lines = stdout
+          .split(/\r?\n/)
+          .slice(1)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const row = lines.find((line) => line.toUpperCase().startsWith(drive));
+        if (row) {
+          const parts = row.split(/\s+/);
+          const free = Number.parseInt(parts[1] || '0', 10);
+          const size = Number.parseInt(parts[2] || '0', 10);
+          if (size > 0) {
+            const usedPercent = ((size - free) / size) * 100;
+            const freeGb = (free / 1024 / 1024 / 1024).toFixed(1);
+            return {
+              name: 'Disk Space',
+              status: usedPercent < 80 ? 'pass' : usedPercent < 95 ? 'warn' : 'fail',
+              message: `${usedPercent.toFixed(1)}% disk used`,
+              details: `Drive ${drive}, Free: ${freeGb}GB`,
+            };
+          }
+        }
+      } catch {}
+      return { name: 'Disk Space', status: 'skip', message: 'Could not check disk space' };
     }
 
     try {
@@ -120,7 +146,7 @@ const checks: Record<string, Check> = {
 
   // Config checks
   async configDir(): Promise<CheckResult> {
-    const dir = `${homedir()}/.clodds`;
+    const dir = resolveStateDir();
 
     if (!existsSync(dir)) {
       return {

@@ -15,6 +15,7 @@ import { join, dirname, basename } from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger';
 import type { MemoryService } from './index';
+import { countTokensAccurate } from './tokenizer';
 
 // =============================================================================
 // TYPES
@@ -39,6 +40,18 @@ export interface ContextConfig {
   indexTranscripts?: boolean;
   /** Summarization provider function */
   summarizer?: (text: string, maxTokens: number) => Promise<string>;
+  /** Eviction policy when over budget */
+  evictionPolicy?: 'lru' | 'importance';
+  /** Semantic deduplication toggle */
+  dedupe?: boolean;
+  /** Similarity threshold for dedupe (0-1) */
+  dedupeThreshold?: number;
+  /** Max recent messages to consider for dedupe */
+  dedupeWindow?: number;
+  /** Embedding provider for semantic dedupe */
+  embedder?: (text: string) => Promise<number[]>;
+  /** Cosine similarity helper */
+  similarity?: (a: number[], b: number[]) => number;
 }
 
 export interface Message {
@@ -47,6 +60,8 @@ export interface Message {
   timestamp?: Date;
   tokens?: number;
   metadata?: Record<string, unknown>;
+  /** Importance score (0-1). Higher means keep longer. */
+  importance?: number;
 }
 
 export interface ContextState {
@@ -132,10 +147,9 @@ const CHARS_PER_TOKEN = 4;
  * Estimate token count for text (approximate)
  * Uses 4 chars per token as a rough estimate
  */
-export function estimateTokens(text: string): number {
+export function estimateTokens(text: string, model?: string): number {
   if (!text) return 0;
-  // More accurate would use tiktoken, but this is a reasonable estimate
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
+  return countTokensAccurate(text, model);
 }
 
 /**
@@ -299,6 +313,12 @@ export function createContextManager(
   const compactThreshold = config.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
   const minMessagesAfterCompact = config.minMessagesAfterCompact ?? DEFAULT_MIN_MESSAGES;
   const summarizer = config.summarizer;
+  const evictionPolicy = config.evictionPolicy || 'lru';
+  const dedupeEnabled = config.dedupe ?? false;
+  const dedupeThreshold = config.dedupeThreshold ?? 0.92;
+  const dedupeWindow = config.dedupeWindow ?? 12;
+  const embedder = config.embedder;
+  const similarity = config.similarity;
 
   // State
   const state: ContextState = {
@@ -350,11 +370,66 @@ export function createContextManager(
       return `[Summarized ${messages.length} messages]:\n${content.slice(0, 1000)}`;
     }
 
-    const fullText = messages
-      .map(m => `${m.role.toUpperCase()}: ${m.content}`)
-      .join('\n\n');
+    const summaryTokens = 500;
+    const inputTokenLimit = Number(process.env.CLODDS_SUMMARY_INPUT_TOKENS || 4000);
+    const maxDepth = 3;
 
-    return summarizer(fullText, 500);
+    const toText = (msgs: Message[]) =>
+      msgs.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+
+    const chunkByTokens = (msgs: Message[], limit: number): Message[][] => {
+      const chunks: Message[][] = [];
+      let current: Message[] = [];
+      let currentTokens = 0;
+
+      for (const msg of msgs) {
+        const tokens = estimateMessageTokens(msg);
+        if (currentTokens + tokens > limit && current.length > 0) {
+          chunks.push(current);
+          current = [];
+          currentTokens = 0;
+        }
+        current.push(msg);
+        currentTokens += tokens;
+      }
+
+      if (current.length > 0) {
+        chunks.push(current);
+      }
+
+      return chunks;
+    };
+
+    const summarizeText = async (text: string, depth: number): Promise<string> => {
+      if (depth > maxDepth) {
+        const maxChars = summaryTokens * CHARS_PER_TOKEN;
+        return text.length > maxChars ? `${text.slice(0, maxChars)}\n\n[...truncated]` : text;
+      }
+
+      if (estimateTokens(text) <= inputTokenLimit) {
+        return summarizer(text, summaryTokens);
+      }
+
+      // If too large, split into pseudo-messages and summarize recursively.
+      const pseudoMessages: Message[] = text
+        .split(/\n{2,}/)
+        .filter(Boolean)
+        .map((part) => ({ role: 'user', content: part }));
+
+      const chunks = chunkByTokens(pseudoMessages, inputTokenLimit);
+      const summaries: string[] = [];
+
+      for (const chunk of chunks) {
+        const chunkText = toText(chunk);
+        summaries.push(await summarizeText(chunkText, depth + 1));
+      }
+
+      const combined = summaries.join('\n\n');
+      return summarizeText(combined, depth + 1);
+    };
+
+    const fullText = toText(messages);
+    return summarizeText(fullText, 0);
   }
 
   const manager: ContextManager = {
@@ -365,6 +440,7 @@ export function createContextManager(
     addMessage(message) {
       const tokens = estimateMessageTokens(message);
       message.tokens = tokens;
+      message.timestamp = message.timestamp || new Date();
 
       // Check guard first
       const guard = calculateGuard(tokens);
@@ -377,6 +453,37 @@ export function createContextManager(
       // Add message regardless (compaction is async)
       state.messages.push(message);
       state.totalTokens += tokens;
+
+      if (dedupeEnabled && embedder && similarity) {
+        const recent = state.messages.slice(-(dedupeWindow + 1), -1);
+        const content = message.content.trim();
+        if (content.length > 0 && recent.length > 0) {
+          // Best-effort async dedupe check (remove if duplicate)
+          void (async () => {
+            try {
+              const [candidate, ...others] = await Promise.all([
+                embedder(content),
+                ...recent.map((m) => embedder(m.content)),
+              ]);
+
+              for (let i = 0; i < others.length; i++) {
+                const score = similarity(candidate, others[i]);
+                if (score >= dedupeThreshold) {
+                  const index = state.messages.indexOf(message);
+                  if (index >= 0) {
+                    state.messages.splice(index, 1);
+                    state.totalTokens = Math.max(0, state.totalTokens - tokens);
+                  }
+                  logger.debug({ score }, 'Dropped duplicate message by semantic dedupe');
+                  return;
+                }
+              }
+            } catch (error) {
+              logger.debug({ error }, 'Semantic dedupe failed; keeping message');
+            }
+          })();
+        }
+      }
 
       return calculateGuard();
     },
@@ -398,9 +505,37 @@ export function createContextManager(
         };
       }
 
-      // Keep last N messages, summarize the rest
-      const messagesToKeep = state.messages.slice(-minMessagesAfterCompact);
-      const messagesToSummarize = state.messages.slice(0, -minMessagesAfterCompact);
+      const effectiveMax = maxTokens - reserveTokens;
+
+      const scoreMessage = (msg: Message): number => {
+        if (evictionPolicy === 'importance') {
+          return msg.importance ?? 0.5;
+        }
+        // LRU-ish: newer messages score higher
+        const ts = msg.timestamp ? msg.timestamp.getTime() : 0;
+        return ts / 1000;
+      };
+
+      // Rank messages by score (descending) but always keep most recent N
+      const recentMessages = state.messages.slice(-minMessagesAfterCompact);
+      const recentSet = new Set(recentMessages);
+
+      const candidates = state.messages.filter(m => !recentSet.has(m));
+      const ranked = [...candidates].sort((a, b) => scoreMessage(b) - scoreMessage(a));
+
+      const kept: Message[] = [...recentMessages];
+      let keptTokens = estimateTotalTokens(kept);
+
+      for (const msg of ranked) {
+        if (keptTokens + estimateMessageTokens(msg) > effectiveMax * 0.7) {
+          continue;
+        }
+        kept.unshift(msg); // keep older/high score at front
+        keptTokens += estimateMessageTokens(msg);
+      }
+
+      const messagesToKeep = kept;
+      const messagesToSummarize = state.messages.filter(m => !messagesToKeep.includes(m));
 
       let summary: string | undefined;
       if (messagesToSummarize.length > 0) {

@@ -10,6 +10,9 @@
  */
 
 import { EventEmitter } from 'events';
+import type { ChannelAdapter, ChannelCallbacks } from '../index';
+import type { IncomingMessage, OutgoingMessage, MessageAttachment } from '../../types';
+import type { PairingService } from '../../pairing/index';
 import * as http from 'http';
 import * as https from 'https';
 import { createHmac } from 'crypto';
@@ -139,6 +142,26 @@ export interface LineWebhookEvent {
     type: string;
     dm?: string;
   };
+}
+
+export interface LineWebhookPayload {
+  events?: LineWebhookEvent[];
+}
+
+export interface LineChannelConfig extends LineConfig {
+  enabled: boolean;
+  /** DM policy */
+  dmPolicy?: 'pairing' | 'open';
+  /** Allowed user IDs */
+  allowFrom?: string[];
+  /** Allowed group IDs */
+  groupAllowlist?: string[];
+  /** Allowed room IDs */
+  roomAllowlist?: string[];
+  /** If true, start internal webhook server instead of gateway */
+  useInternalWebhookServer?: boolean;
+  /** Per-group policies */
+  groups?: Record<string, { requireMention?: boolean }>;
 }
 
 export interface LineProfile {
@@ -286,6 +309,18 @@ export class LineClient extends EventEmitter {
         this.emit(`message:${event.message?.type}`, event);
         break;
     }
+  }
+
+  /** Handle webhook payload from external server */
+  handleWebhookPayload(payload: LineWebhookPayload | LineWebhookEvent): void {
+    if (!payload) return;
+    if (Array.isArray((payload as LineWebhookPayload).events)) {
+      for (const event of (payload as LineWebhookPayload).events || []) {
+        this.handleEvent(event);
+      }
+      return;
+    }
+    this.handleEvent(payload as LineWebhookEvent);
   }
 
   /** Reply to a message */
@@ -625,23 +660,42 @@ export class ActionBuilder {
 export class LineChannel extends EventEmitter {
   private client: LineClient;
   private isConnected = false;
+  private config: LineChannelConfig;
+  private dmPolicy: 'pairing' | 'open';
+  private allowFrom: Set<string>;
+  private groupAllowlist: Set<string>;
+  private roomAllowlist: Set<string>;
+  private callbacks?: ChannelCallbacks;
+  private pairing?: PairingService;
 
-  constructor(config: LineConfig) {
+  constructor(config: LineConfig, callbacks?: ChannelCallbacks, pairing?: PairingService) {
     super();
+    this.config = config as LineChannelConfig;
     this.client = new LineClient(config);
+    this.callbacks = callbacks;
+    this.pairing = pairing;
+    const policy = (config as LineChannelConfig).dmPolicy || 'pairing';
+    this.dmPolicy = policy;
+    this.allowFrom = new Set((config as LineChannelConfig).allowFrom || []);
+    this.groupAllowlist = new Set((config as LineChannelConfig).groupAllowlist || []);
+    this.roomAllowlist = new Set((config as LineChannelConfig).roomAllowlist || []);
 
     this.client.on('message:text', (event: LineWebhookEvent) => {
-      this.emit('message', {
-        id: event.message?.id,
-        text: event.message?.text,
-        userId: event.source.userId,
-        groupId: event.source.groupId,
-        roomId: event.source.roomId,
-        replyToken: event.replyToken,
-        timestamp: event.timestamp,
-        raw: event,
+      this.handleTextMessage(event).catch((error) => {
+        logger.error({ error }, 'LINE message handler failed');
       });
     });
+
+    const mediaHandler = (event: LineWebhookEvent) => {
+      this.handleMediaMessage(event).catch((error) => {
+        logger.error({ error }, 'LINE media handler failed');
+      });
+    };
+    this.client.on('message:image', mediaHandler);
+    this.client.on('message:video', mediaHandler);
+    this.client.on('message:audio', mediaHandler);
+    this.client.on('message:file', mediaHandler);
+    this.client.on('message:sticker', mediaHandler);
 
     this.client.on('follow', (event: LineWebhookEvent) => {
       this.emit('follow', { userId: event.source.userId, raw: event });
@@ -676,6 +730,129 @@ export class LineChannel extends EventEmitter {
         raw: event,
       });
     });
+  }
+
+  /** Check if sender is allowed */
+  private isAllowed(event: LineWebhookEvent): boolean {
+    const userId = event.source.userId;
+    if (!userId) return false;
+
+    // Group/room messages
+    if (event.source.groupId) {
+      if (this.groupAllowlist.size > 0) {
+        return this.groupAllowlist.has(event.source.groupId);
+      }
+      return true;
+    }
+    if (event.source.roomId) {
+      if (this.roomAllowlist.size > 0) {
+        return this.roomAllowlist.has(event.source.roomId);
+      }
+      return true;
+    }
+
+    // DM policy
+    if (this.dmPolicy === 'open') {
+      if (this.allowFrom.size === 0) return true;
+      return this.allowFrom.has(userId) || this.allowFrom.has('*');
+    }
+
+    if (this.pairing) {
+      return this.pairing.isPaired('line', userId);
+    }
+
+    return false;
+  }
+
+  private async handleTextMessage(event: LineWebhookEvent): Promise<void> {
+    if (!this.callbacks) return;
+    if (!event.message?.text) return;
+    if (!event.source.userId) return;
+
+    if (!this.isAllowed(event)) {
+      if (this.dmPolicy === 'pairing' && this.pairing) {
+        const code = await this.pairing.createPairingRequest('line', event.source.userId);
+        if (code && event.replyToken) {
+          await this.reply(event.replyToken, `Hi! I need to verify you first.\n\nYour pairing code is: **${code}**\n\nAsk an admin to approve it.`);
+        }
+      }
+      return;
+    }
+
+    const chatId = event.source.groupId || event.source.roomId || event.source.userId;
+    if (!chatId) return;
+    const chatType = event.source.groupId || event.source.roomId ? 'group' : 'dm';
+
+    if (chatType === 'group') {
+      const requireMention =
+        this.config.groups?.[chatId]?.requireMention ?? false;
+      if (requireMention) {
+        // LINE doesn't expose mentions in webhook events; skip when required.
+        return;
+      }
+    }
+
+    const message: IncomingMessage = {
+      id: event.message.id,
+      platform: 'line',
+      userId: event.source.userId,
+      chatId,
+      chatType,
+      text: event.message.text,
+      timestamp: new Date(event.timestamp),
+    };
+
+    await this.callbacks.onMessage(message);
+  }
+
+  private async handleMediaMessage(event: LineWebhookEvent): Promise<void> {
+    if (!this.callbacks) return;
+    if (!event.message?.id) return;
+    if (!event.source.userId) return;
+
+    if (!this.isAllowed(event)) {
+      if (this.dmPolicy === 'pairing' && this.pairing) {
+        const code = await this.pairing.createPairingRequest('line', event.source.userId);
+        if (code && event.replyToken) {
+          await this.reply(event.replyToken, `Hi! I need to verify you first.\n\nYour pairing code is: **${code}**\n\nAsk an admin to approve it.`);
+        }
+      }
+      return;
+    }
+
+    const chatId = event.source.groupId || event.source.roomId || event.source.userId;
+    if (!chatId) return;
+    const chatType = event.source.groupId || event.source.roomId ? 'group' : 'dm';
+
+    let attachmentType: MessageAttachment['type'] = 'document';
+    if (event.message.type === 'image') attachmentType = 'image';
+    if (event.message.type === 'video') attachmentType = 'video';
+    if (event.message.type === 'audio') attachmentType = 'audio';
+    if (event.message.type === 'sticker') attachmentType = 'sticker';
+
+    let data: string | undefined;
+    try {
+      const buffer = await this.client.getContent(event.message.id);
+      data = buffer.toString('base64');
+    } catch (error) {
+      logger.warn({ error }, 'Failed to download LINE media content');
+    }
+
+    const message: IncomingMessage = {
+      id: event.message.id,
+      platform: 'line',
+      userId: event.source.userId,
+      chatId,
+      chatType,
+      text: event.message?.text || '',
+      attachments: [{
+        type: attachmentType,
+        data,
+      }],
+      timestamp: new Date(event.timestamp),
+    };
+
+    await this.callbacks.onMessage(message);
   }
 
   /** Connect (start webhook) */
@@ -715,6 +892,54 @@ export class LineChannel extends EventEmitter {
   connected(): boolean {
     return this.isConnected;
   }
+
+  async sendOutgoing(message: OutgoingMessage): Promise<void> {
+    const target = message.chatId;
+    if (!target) return;
+    const replyToken = message.thread?.threadId || message.thread?.replyToMessageId;
+    if (replyToken) {
+      await this.reply(replyToken, message.text);
+      return;
+    }
+    const attachments = message.attachments || [];
+    if (attachments.length > 0) {
+      if (message.text) {
+        await this.send(target, message.text);
+      }
+      for (const attachment of attachments) {
+        if (!attachment.url) {
+          logger.warn({ attachment }, 'LINE attachment missing public URL');
+          continue;
+        }
+        switch (attachment.type) {
+          case 'image':
+            await this.send(target, MessageBuilder.image(attachment.url, attachment.url));
+            break;
+          case 'video':
+            await this.send(target, MessageBuilder.video(attachment.url, attachment.url));
+            break;
+          case 'audio':
+          case 'voice':
+            await this.send(target, MessageBuilder.audio(attachment.url, attachment.duration || 1));
+            break;
+          case 'document':
+            await this.send(
+              target,
+              `${attachment.filename || 'file'}: ${attachment.url}`
+            );
+            break;
+          default:
+            await this.send(
+              target,
+              `${attachment.filename || 'file'}: ${attachment.url}`
+            );
+            break;
+        }
+      }
+      return;
+    }
+    await this.send(target, message.text);
+  }
 }
 
 // =============================================================================
@@ -725,6 +950,57 @@ export function createLineClient(config: LineConfig): LineClient {
   return new LineClient(config);
 }
 
-export function createLineChannel(config: LineConfig): LineChannel {
-  return new LineChannel(config);
+export function createLineChannel(
+  config: LineChannelConfig,
+  callbacks: ChannelCallbacks,
+  pairing?: PairingService
+): ChannelAdapter {
+  const channel = new LineChannel(config, callbacks, pairing);
+  const useInternalWebhook = Boolean(config.useInternalWebhookServer || config.webhookPort || config.webhookPath);
+
+  return {
+    platform: 'line',
+    async start(): Promise<void> {
+      if (useInternalWebhook) {
+        await channel.connect();
+      } else {
+        logger.info('LINE channel started (gateway webhook mode)');
+      }
+    },
+    async stop(): Promise<void> {
+      if (useInternalWebhook) {
+        await channel.disconnect();
+      }
+    },
+    async sendMessage(message: OutgoingMessage): Promise<string | null> {
+      await channel.sendOutgoing(message);
+      return null;
+    },
+    async editMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      logger.warn(
+        { chatId: message.chatId, messageId: message.messageId },
+        'LINE does not support message editing'
+      );
+    },
+    async deleteMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      logger.warn(
+        { chatId: message.chatId, messageId: message.messageId },
+        'LINE does not support message deletion'
+      );
+    },
+    async handleEvent(event: unknown, req?: unknown): Promise<unknown> {
+      // Optional signature verification if raw body + signature are provided
+      const rawBody = (req as { rawBody?: string } | undefined)?.rawBody;
+      const signature = (req as { headers?: Record<string, unknown> } | undefined)?.headers?.['x-line-signature'];
+      if (rawBody && typeof signature === 'string') {
+        const ok = channel.getClient().verifySignature(rawBody, signature);
+        if (!ok) {
+          throw new Error('Invalid LINE signature');
+        }
+      }
+
+      channel.getClient().handleWebhookPayload(event as LineWebhookPayload);
+      return null;
+    },
+  };
 }

@@ -5,15 +5,27 @@
  * Entry point - starts the gateway and all services
  */
 
+import 'dotenv/config';
 import { createGateway } from './gateway/index';
 import { loadConfig } from './utils/config';
 import { logger } from './utils/logger';
+import { installHttpClient, configureHttpClient } from './utils/http';
 
 async function main() {
   logger.info('Starting Clodds...');
+  installHttpClient();
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ reason }, 'Unhandled promise rejection');
+  });
+  process.on('uncaughtException', (error) => {
+    logger.error({ error }, 'Uncaught exception');
+    process.exit(1);
+  });
 
   // Load configuration
   const config = await loadConfig();
+  configureHttpClient(config.http);
   logger.info({ port: config.gateway.port }, 'Config loaded');
 
   // Create and start gateway

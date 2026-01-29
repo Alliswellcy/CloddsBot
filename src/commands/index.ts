@@ -6,16 +6,34 @@
  * /status - Check agent status and context usage
  * /model - Show/change model
  * /help - Show help
+ *
+ * Also supports:
+ * - Skill-based commands (from installed skills)
+ * - Per-command enable/disable configuration
+ * - Per-channel command overrides
  */
 
 import { SessionManager } from '../sessions/index';
 import { Session, IncomingMessage } from '../types';
 import { logger } from '../utils/logger';
+import { SkillRegistry, InstalledSkill } from '../skills/index';
 
 export interface CommandResult {
   handled: boolean;
   response?: string;
-  action?: 'reset_session' | 'show_status' | 'show_help' | 'change_model';
+  action?: 'reset_session' | 'show_status' | 'show_help' | 'change_model' | 'skill_command';
+  /** If skill command, the skill that handled it */
+  skill?: string;
+}
+
+/** Command configuration */
+export interface CommandConfig {
+  /** Enable/disable specific commands */
+  enabled?: Record<string, boolean>;
+  /** Per-channel command overrides */
+  channelOverrides?: Record<string, Record<string, boolean>>;
+  /** Whether to register skill commands */
+  enableSkillCommands?: boolean;
 }
 
 export interface CommandsService {
@@ -24,12 +42,34 @@ export interface CommandsService {
 
   /** Get list of available commands */
   getCommands(): CommandInfo[];
+
+  /** Check if a command is enabled */
+  isEnabled(commandName: string, channel?: string): boolean;
+
+  /** Enable a command */
+  enable(commandName: string): void;
+
+  /** Disable a command */
+  disable(commandName: string): void;
+
+  /** Get all skill commands */
+  getSkillCommands(): CommandInfo[];
+
+  /** Register a skill's commands */
+  registerSkillCommands(skill: InstalledSkill): void;
+
+  /** Unregister a skill's commands */
+  unregisterSkillCommands(skillName: string): void;
 }
 
 export interface CommandInfo {
   name: string;
   description: string;
   usage: string;
+  /** Whether this is a skill command */
+  isSkillCommand?: boolean;
+  /** The skill that provides this command */
+  skillName?: string;
 }
 
 const NATIVE_COMMANDS: CommandInfo[] = [
@@ -51,7 +91,78 @@ const MODEL_ALIASES: Record<string, string> = {
   'claude-haiku-3': 'claude-haiku-3-20240307',
 };
 
-export function createCommandsService(sessionManager: SessionManager): CommandsService {
+const DEFAULT_CONFIG: CommandConfig = {
+  enabled: {},
+  channelOverrides: {},
+  enableSkillCommands: true,
+};
+
+export function createCommandsService(
+  sessionManager: SessionManager,
+  configInput?: CommandConfig,
+  skillRegistry?: SkillRegistry
+): CommandsService {
+  const config: CommandConfig = { ...DEFAULT_CONFIG, ...configInput };
+
+  // Track enabled status
+  const enabledCommands = new Map<string, boolean>();
+
+  // Initialize from config
+  if (config.enabled) {
+    for (const [cmd, enabled] of Object.entries(config.enabled)) {
+      enabledCommands.set(cmd, enabled);
+    }
+  }
+
+  // Track skill commands
+  const skillCommands = new Map<string, CommandInfo[]>();
+
+  // Load skill commands on startup
+  if (config.enableSkillCommands && skillRegistry) {
+    for (const skill of skillRegistry.listEnabled()) {
+      registerSkillCommandsInternal(skill);
+    }
+
+    // Listen for skill install/uninstall
+    skillRegistry.on('install', (skill: InstalledSkill) => {
+      registerSkillCommandsInternal(skill);
+    });
+    skillRegistry.on('uninstall', ({ name }: { name: string }) => {
+      skillCommands.delete(name);
+    });
+  }
+
+  function registerSkillCommandsInternal(skill: InstalledSkill) {
+    if (!skill.manifest.commands?.length) return;
+
+    const commands: CommandInfo[] = skill.manifest.commands.map(cmd => ({
+      name: cmd.name.startsWith('/') ? cmd.name : `/${cmd.name}`,
+      description: cmd.description,
+      usage: cmd.name.startsWith('/') ? cmd.name : `/${cmd.name}`,
+      isSkillCommand: true,
+      skillName: skill.manifest.name,
+    }));
+
+    skillCommands.set(skill.manifest.name, commands);
+    logger.info({ skillName: skill.manifest.name, commands: commands.length }, 'Registered skill commands');
+  }
+
+  function isCommandEnabled(commandName: string, channel?: string): boolean {
+    // Check channel override first
+    if (channel && config.channelOverrides?.[channel]?.[commandName] !== undefined) {
+      return config.channelOverrides[channel][commandName];
+    }
+
+    // Check global setting
+    const globalSetting = enabledCommands.get(commandName);
+    if (globalSetting !== undefined) {
+      return globalSetting;
+    }
+
+    // Default to enabled
+    return true;
+  }
+
   return {
     async handleCommand(message, session): Promise<CommandResult> {
       const text = message.text.trim();
@@ -63,6 +174,12 @@ export function createCommandsService(sessionManager: SessionManager): CommandsS
 
       const [cmd, ...args] = text.split(/\s+/);
       const command = cmd.toLowerCase();
+
+      // Check if command is enabled
+      if (!isCommandEnabled(command, message.platform)) {
+        logger.debug({ command, channel: message.platform }, 'Command is disabled');
+        return { handled: false }; // Let agent handle as regular message
+      }
 
       switch (command) {
         case '/new':
@@ -194,13 +311,68 @@ export function createCommandsService(sessionManager: SessionManager): CommandsS
         }
 
         default:
+          // Check if this is a skill command
+          if (config.enableSkillCommands) {
+            for (const [skillName, commands] of skillCommands.entries()) {
+              for (const cmd of commands) {
+                if (cmd.name === command && isCommandEnabled(command, message.platform)) {
+                  logger.info({ command, skillName }, 'Skill command invoked');
+                  return {
+                    handled: true,
+                    action: 'skill_command',
+                    skill: skillName,
+                    response: `🔧 Skill command \`${command}\` from *${skillName}* is ready to execute.`,
+                  };
+                }
+              }
+            }
+          }
+
           // Unknown command - don't handle, let agent process it
           return { handled: false };
       }
     },
 
     getCommands() {
-      return NATIVE_COMMANDS;
+      const allCommands = [...NATIVE_COMMANDS];
+
+      // Add skill commands
+      for (const commands of skillCommands.values()) {
+        allCommands.push(...commands);
+      }
+
+      return allCommands;
+    },
+
+    isEnabled(commandName, channel?) {
+      return isCommandEnabled(commandName, channel);
+    },
+
+    enable(commandName) {
+      enabledCommands.set(commandName, true);
+      logger.info({ commandName }, 'Command enabled');
+    },
+
+    disable(commandName) {
+      enabledCommands.set(commandName, false);
+      logger.info({ commandName }, 'Command disabled');
+    },
+
+    getSkillCommands() {
+      const commands: CommandInfo[] = [];
+      for (const cmds of skillCommands.values()) {
+        commands.push(...cmds);
+      }
+      return commands;
+    },
+
+    registerSkillCommands(skill) {
+      registerSkillCommandsInternal(skill);
+    },
+
+    unregisterSkillCommands(skillName) {
+      skillCommands.delete(skillName);
+      logger.info({ skillName }, 'Unregistered skill commands');
     },
   };
 }

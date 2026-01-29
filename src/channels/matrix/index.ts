@@ -10,8 +10,9 @@
 
 import { logger } from '../../utils/logger';
 import type { ChannelAdapter, ChannelCallbacks } from '../index';
-import type { IncomingMessage, OutgoingMessage } from '../../types';
+import type { IncomingMessage, OutgoingMessage, MessageAttachment } from '../../types';
 import type { PairingService } from '../../pairing/index';
+import { resolveAttachment } from '../../utils/attachments';
 
 export interface MatrixConfig {
   enabled: boolean;
@@ -29,6 +30,8 @@ export interface MatrixConfig {
   roomAllowlist?: string[];
   /** Device ID for E2EE */
   deviceId?: string;
+  /** Per-room group policies */
+  groups?: Record<string, { requireMention?: boolean }>;
 }
 
 /** Matrix event types */
@@ -43,6 +46,14 @@ interface MatrixEvent {
     body?: string;
     formatted_body?: string;
     format?: string;
+    url?: string;
+    info?: {
+      mimetype?: string;
+      size?: number;
+      width?: number;
+      height?: number;
+      duration?: number;
+    };
     'm.relates_to'?: {
       rel_type: string;
       event_id: string;
@@ -155,15 +166,36 @@ export async function createMatrixChannel(
 
   /** Handle incoming event */
   async function handleEvent(event: MatrixEvent): Promise<void> {
-    // Only handle text messages
+    // Only handle room messages
     if (event.type !== 'm.room.message') return;
-    if (event.content.msgtype !== 'm.text') return;
 
     // Ignore own messages
     if (event.sender === config.userId) return;
 
-    const text = event.content.body;
-    if (!text) return;
+    const msgType = event.content.msgtype;
+    const text = event.content.body || '';
+    const attachments: MessageAttachment[] = [];
+
+    if (msgType && msgType !== 'm.text') {
+      attachments.push({
+        type: msgType === 'm.image'
+          ? 'image'
+          : msgType === 'm.video'
+            ? 'video'
+            : msgType === 'm.audio'
+              ? 'audio'
+              : 'document',
+        url: event.content.url,
+        mimeType: event.content.info?.mimetype,
+        size: event.content.info?.size,
+        width: event.content.info?.width,
+        height: event.content.info?.height,
+        duration: event.content.info?.duration,
+        caption: text || undefined,
+      });
+    }
+
+    if (!text && attachments.length === 0) return;
 
     // Check if allowed
     if (!isAllowed(event.sender, event.room_id)) {
@@ -187,6 +219,14 @@ export async function createMatrixChannel(
     // Determine room type
     const chatType = await getRoomType(event.room_id);
 
+    if (chatType === 'group') {
+      const requireMention =
+        (config as any).groups?.[event.room_id]?.requireMention ?? false;
+      if (requireMention && !text.includes(config.userId)) {
+        return;
+      }
+    }
+
     // Create incoming message
     const message: IncomingMessage = {
       id: event.event_id,
@@ -195,6 +235,7 @@ export async function createMatrixChannel(
       chatId: event.room_id,
       chatType,
       text,
+      attachments: attachments.length > 0 ? attachments : undefined,
       timestamp: new Date(event.origin_server_ts),
     };
 
@@ -258,31 +299,92 @@ export async function createMatrixChannel(
     }
   }
 
-  /** Send message to Matrix room */
-  async function sendMessage(message: OutgoingMessage): Promise<void> {
-    const txnId = Date.now().toString(36) + Math.random().toString(36).slice(2);
-
-    // Check if message contains markdown
-    const hasMarkdown = /[*_`#\[\]]/.test(message.text);
-
-    const content: Record<string, unknown> = {
-      msgtype: 'm.text',
-      body: message.text,
-    };
-
-    // Add formatted body for markdown
-    if (hasMarkdown) {
-      content.format = 'org.matrix.custom.html';
-      content.formatted_body = markdownToHtml(message.text);
+  async function uploadMedia(attachment: MessageAttachment): Promise<string | null> {
+    if (attachment.url?.startsWith('mxc://')) {
+      return attachment.url;
     }
 
-    await matrixApi(
+    const resolved = await resolveAttachment(attachment);
+    if (!resolved) return null;
+
+    const response = await fetch(
+      `${config.homeserverUrl}/_matrix/media/v3/upload`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.accessToken}`,
+          'Content-Type': resolved.mimeType || 'application/octet-stream',
+          'Content-Length': resolved.buffer.length.toString(),
+        },
+        body: resolved.buffer,
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Matrix media upload failed: ${response.status} ${error}`);
+    }
+
+    const data = await response.json() as { content_uri?: string };
+    return data.content_uri || null;
+  }
+
+  /** Send message to Matrix room */
+  async function sendMessage(message: OutgoingMessage): Promise<string | null> {
+    const attachments = message.attachments || [];
+    if (attachments.length > 0 && message.text) {
+      // Send text first to preserve context
+      await sendMessage({ ...message, attachments: undefined });
+    }
+
+    for (const attachment of attachments) {
+      const mxcUrl = await uploadMedia(attachment);
+      if (!mxcUrl) continue;
+
+      const msgtype =
+        attachment.type === 'image'
+          ? 'm.image'
+          : attachment.type === 'video'
+            ? 'm.video'
+            : attachment.type === 'audio' || attachment.type === 'voice'
+              ? 'm.audio'
+              : 'm.file';
+
+      const content: Record<string, unknown> = {
+        msgtype,
+        body: attachment.filename || attachment.caption || 'attachment',
+        url: mxcUrl,
+        info: {
+          mimetype: attachment.mimeType,
+          size: attachment.size,
+          width: attachment.width,
+          height: attachment.height,
+          duration: attachment.duration,
+        },
+      };
+
+      await matrixApi(
+        'PUT',
+        `/rooms/${encodeURIComponent(message.chatId)}/send/m.room.message/${Date.now().toString(36)}`,
+        content
+      );
+    }
+
+    if (attachments.length > 0) {
+      return null;
+    }
+
+    const txnId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    const content = buildMatrixTextContent(message.text);
+
+    const response = await matrixApi<{ event_id?: string }>(
       'PUT',
       `/rooms/${encodeURIComponent(message.chatId)}/send/m.room.message/${txnId}`,
       content
     );
 
     logger.debug({ roomId: message.chatId }, 'Matrix message sent');
+    return response.event_id ?? null;
   }
 
   return {
@@ -310,8 +412,28 @@ export async function createMatrixChannel(
       logger.info('Matrix channel stopped');
     },
 
-    async sendMessage(message: OutgoingMessage): Promise<void> {
-      await sendMessage(message);
+    async sendMessage(message: OutgoingMessage): Promise<string | null> {
+      return sendMessage(message);
+    },
+
+    async editMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      const txnId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      const content = buildMatrixEditContent(message.text, message.messageId);
+
+      await matrixApi(
+        'PUT',
+        `/rooms/${encodeURIComponent(message.chatId)}/send/m.room.message/${txnId}`,
+        content
+      );
+    },
+
+    async deleteMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
+      const txnId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      await matrixApi(
+        'PUT',
+        `/rooms/${encodeURIComponent(message.chatId)}/redact/${encodeURIComponent(message.messageId)}/${txnId}`,
+        {}
+      );
     },
   };
 }
@@ -325,4 +447,37 @@ function markdownToHtml(text: string): string {
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
     .replace(/`(.*?)`/g, '<code>$1</code>')
     .replace(/\n/g, '<br>');
+}
+
+export function buildMatrixTextContent(text: string): Record<string, unknown> {
+  const hasMarkdown = /[*_`#\[\]]/.test(text);
+  const content: Record<string, unknown> = {
+    msgtype: 'm.text',
+    body: text,
+  };
+
+  if (hasMarkdown) {
+    content.format = 'org.matrix.custom.html';
+    content.formatted_body = markdownToHtml(text);
+  }
+
+  return content;
+}
+
+export function buildMatrixEditContent(
+  text: string,
+  messageId: string
+): Record<string, unknown> {
+  const newContent = buildMatrixTextContent(text);
+  const fallbackText = text ? `* ${text}` : '* (edited)';
+
+  return {
+    msgtype: 'm.text',
+    body: fallbackText,
+    'm.relates_to': {
+      rel_type: 'm.replace',
+      event_id: messageId,
+    },
+    'm.new_content': newContent,
+  };
 }

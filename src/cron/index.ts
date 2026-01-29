@@ -10,9 +10,25 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
+import { randomUUID } from 'crypto';
+import { execSync } from 'child_process';
+import { join } from 'path';
 import { Database } from '../db';
 import { FeedManager } from '../feeds';
-import { Alert, OutgoingMessage } from '../types';
+import type {
+  Alert,
+  Config,
+  ManifoldCredentials,
+  Market,
+  OutgoingMessage,
+  Platform,
+  PolymarketCredentials,
+  Position,
+  User,
+  KalshiCredentials,
+} from '../types';
+import type { CredentialsManager } from '../credentials';
+import { buildKalshiHeadersForUrl } from '../utils/kalshi-auth';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -55,6 +71,15 @@ export type CronPayload =
     }
   | {
       kind: 'alertScan';
+    }
+  | {
+      kind: 'portfolioSync';
+    }
+  | {
+      kind: 'dailyDigest';
+    }
+  | {
+      kind: 'stopLossScan';
     };
 
 /** Job state tracking */
@@ -172,7 +197,9 @@ function calculateNextRun(schedule: CronSchedule, lastRunMs?: number): number {
 export interface CronServiceDeps {
   db: Database;
   feeds: FeedManager;
-  sendMessage: (msg: OutgoingMessage) => Promise<void>;
+  sendMessage: (msg: OutgoingMessage) => Promise<string | null>;
+  config?: Config;
+  credentials?: CredentialsManager;
   /** Execute agent turn (optional) */
   executeAgentTurn?: (message: string, options: {
     model?: string;
@@ -200,11 +227,105 @@ export function createCronService(deps: CronServiceDeps): CronService {
   const timers = new Map<string, NodeJS.Timeout>();
   let running = false;
   let tickInterval: NodeJS.Timeout | null = null;
+  const digestSentOn = new Map<string, string>();
+
+  const alertDefaults = {
+    priceChangeThresholdPct: deps.config?.alerts?.priceChange?.threshold ?? 5,
+    priceChangeWindowSecs: deps.config?.alerts?.priceChange?.windowSecs ?? 600,
+    volumeSpikeMultiplier: deps.config?.alerts?.volumeSpike?.multiplier ?? 3,
+  };
 
   /** Generate unique job ID */
   function generateId(): string {
     return `cron_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
+
+  function persistJob(job: CronJob): void {
+    job.updatedAtMs = Date.now();
+    deps.db.upsertCronJob({
+      id: job.id,
+      data: JSON.stringify(job),
+      enabled: job.enabled,
+      createdAtMs: job.createdAtMs,
+      updatedAtMs: job.updatedAtMs,
+    });
+  }
+
+  function loadPersistedJobs(): void {
+    const records = deps.db.listCronJobs();
+    if (records.length === 0) return;
+    for (const record of records) {
+      try {
+        const parsed = JSON.parse(record.data) as CronJob;
+        if (!parsed || typeof parsed !== 'object' || !parsed.id) continue;
+        const job: CronJob = {
+          ...parsed,
+          enabled: record.enabled,
+          createdAtMs: record.createdAtMs ?? parsed.createdAtMs ?? Date.now(),
+          updatedAtMs: record.updatedAtMs ?? parsed.updatedAtMs ?? Date.now(),
+          state: parsed.state || {},
+        };
+        jobs.set(job.id, job);
+      } catch (error) {
+        logger.warn({ error, jobId: record.id }, 'Failed to parse persisted cron job');
+      }
+    }
+  }
+
+  function formatCents(price: number): string {
+    return `${(price * 100).toFixed(1)}¢`;
+  }
+
+  function getPrimaryOutcome(market: Market): { name: string; price: number; previousPrice?: number } | null {
+    if (!market?.outcomes?.length) return null;
+    const yesOutcome = market.outcomes.find((o) => o.name?.toLowerCase() === 'yes');
+    const outcome = yesOutcome || market.outcomes[0];
+    if (!outcome || typeof outcome.price !== 'number') return null;
+    return {
+      name: outcome.name,
+      price: outcome.price,
+      previousPrice: outcome.previousPrice,
+    };
+  }
+
+  function normalizeThresholdPct(value: number): number {
+    if (!Number.isFinite(value)) return alertDefaults.priceChangeThresholdPct;
+    return value <= 1 ? value * 100 : value;
+  }
+
+function resolveAlertRecipient(userId: string): { platform: string; chatId: string } | null {
+  const latest = deps.db.getLatestSessionForUser(userId);
+  if (latest) {
+    return { platform: latest.channel, chatId: latest.chatId };
+  }
+  const user = deps.db.getUser(userId);
+  if (!user) return null;
+  return { platform: user.platform, chatId: user.platformUserId };
+}
+
+function buildPolymarketEnv(creds: PolymarketCredentials): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PRIVATE_KEY: creds.privateKey,
+    POLY_FUNDER_ADDRESS: creds.funderAddress,
+    POLY_API_KEY: creds.apiKey,
+    POLY_API_SECRET: creds.apiSecret,
+    POLY_API_PASSPHRASE: creds.apiPassphrase,
+  };
+}
+
+function buildKalshiEnv(creds: KalshiCredentials): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (creds.apiKeyId && creds.privateKeyPem) {
+    env.KALSHI_API_KEY_ID = creds.apiKeyId;
+    env.KALSHI_PRIVATE_KEY = creds.privateKeyPem;
+  }
+  if (creds.email && creds.password) {
+    env.KALSHI_EMAIL = creds.email;
+    env.KALSHI_PASSWORD = creds.password;
+  }
+  return env;
+}
 
   /** Execute a job based on its payload */
   async function executeJob(job: CronJob): Promise<void> {
@@ -221,6 +342,18 @@ export function createCronService(deps: CronServiceDeps): CronService {
 
       case 'marketCheck':
         await checkMarket(payload.marketId, payload.platform);
+        break;
+
+      case 'portfolioSync':
+        await syncAllPortfolios();
+        break;
+
+      case 'dailyDigest':
+        await runDailyDigest();
+        break;
+
+      case 'stopLossScan':
+        await scanStopLosses();
         break;
 
       case 'agentTurn':
@@ -261,8 +394,16 @@ export function createCronService(deps: CronServiceDeps): CronService {
     const market = await deps.feeds.getMarket(alert.marketId, alert.platform);
     if (!market) return;
 
-    const currentPrice = market.outcomes[0]?.price;
-    if (currentPrice === undefined) return;
+    const outcome = getPrimaryOutcome(market);
+    if (!outcome) return;
+
+    const currentPrice = outcome.price;
+    const windowSecs = alert.condition.timeWindowSecs ?? alertDefaults.priceChangeWindowSecs;
+    const previousMarket = deps.db.getCachedMarket(alert.platform, alert.marketId, windowSecs * 1000);
+    const previousOutcome = previousMarket ? getPrimaryOutcome(previousMarket) : null;
+    const previousPrice = previousOutcome?.price ?? outcome.previousPrice;
+    const currentVolume = market.volume24h ?? 0;
+    const previousVolume = previousMarket?.volume24h ?? 0;
 
     let triggered = false;
     let message = '';
@@ -281,16 +422,56 @@ export function createCronService(deps: CronServiceDeps): CronService {
           message = `📉 Price Alert: ${market.question}\nPrice is now ${(currentPrice * 100).toFixed(1)}¢ (below ${(alert.condition.threshold * 100).toFixed(1)}¢)`;
         }
         break;
+
+      case 'price_change_pct': {
+        if (previousPrice === undefined || previousPrice <= 0) break;
+        const thresholdPct = normalizeThresholdPct(alert.condition.threshold);
+        const changePct = ((currentPrice - previousPrice) / previousPrice) * 100;
+        const direction = alert.condition.direction ?? 'any';
+        const directionMatch =
+          direction === 'any'
+            ? Math.abs(changePct) >= thresholdPct
+            : direction === 'up'
+              ? changePct >= thresholdPct
+              : changePct <= -thresholdPct;
+        if (directionMatch) {
+          triggered = true;
+          const arrow = changePct >= 0 ? '📈' : '📉';
+          message =
+            `${arrow} Price Change Alert: ${market.question}\n` +
+            `Price moved ${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}% ` +
+            `(${formatCents(previousPrice)} → ${formatCents(currentPrice)})`;
+        }
+        break;
+      }
+
+      case 'volume_spike': {
+        const multiplier = Number.isFinite(alert.condition.threshold)
+          ? alert.condition.threshold
+          : alertDefaults.volumeSpikeMultiplier;
+        if (previousVolume > 0 && currentVolume / previousVolume >= multiplier) {
+          triggered = true;
+          const ratio = currentVolume / previousVolume;
+          message =
+            `📊 Volume Spike: ${market.question}\n` +
+            `24h volume is ${ratio.toFixed(2)}x (${currentVolume.toLocaleString()} vs ${previousVolume.toLocaleString()})`;
+        }
+        break;
+      }
     }
+
+    deps.db.cacheMarket(market);
 
     if (triggered) {
       deps.db.triggerAlert(alert.id);
 
-      const user = deps.db.getUser(alert.userId);
-      if (user) {
+      const target = alert.channel && alert.chatId
+        ? { platform: alert.channel, chatId: alert.chatId }
+        : resolveAlertRecipient(alert.userId);
+      if (target) {
         await deps.sendMessage({
-          platform: user.platform,
-          chatId: user.platformUserId,
+          platform: target.platform,
+          chatId: target.chatId,
           text: message,
         });
       }
@@ -304,6 +485,615 @@ export function createCronService(deps: CronServiceDeps): CronService {
     const market = await deps.feeds.getMarket(marketId, platform);
     if (market) {
       logger.debug({ marketId, platform, price: market.outcomes[0]?.price }, 'Market checked');
+    }
+  }
+
+  function parseDigestTime(raw: string | undefined): { hour: number; minute: number } | null {
+    if (!raw) return { hour: 9, minute: 0 };
+    const parts = raw.split(':').map((p) => p.trim()).filter(Boolean);
+    const hour = Number.parseInt(parts[0] ?? '', 10);
+    const minute = Number.parseInt(parts[1] ?? '0', 10);
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) return null;
+    if (!Number.isFinite(minute) || minute < 0 || minute > 59) return null;
+    return { hour, minute };
+  }
+
+  function shouldSendDigest(user: User, now: Date, windowMinutes: number): boolean {
+    if (!user.settings?.digestEnabled) return false;
+    const time = parseDigestTime(user.settings.digestTime);
+    if (!time) return false;
+    const today = now.toISOString().slice(0, 10);
+    if (digestSentOn.get(user.id) === today) return false;
+
+    if (now.getHours() !== time.hour) return false;
+    const minute = now.getMinutes();
+    return minute >= time.minute && minute < time.minute + windowMinutes;
+  }
+
+  function buildPosition(params: {
+    platform: Platform;
+    marketId: string;
+    marketQuestion: string;
+    outcome: string;
+    outcomeId: string;
+    side: 'YES' | 'NO';
+    shares: number;
+    avgPrice: number;
+    currentPrice: number;
+  }): Position {
+    const value = params.shares * params.currentPrice;
+    const pnl = params.shares * (params.currentPrice - params.avgPrice);
+    const pnlPct = params.avgPrice > 0 ? ((params.currentPrice - params.avgPrice) / params.avgPrice) * 100 : 0;
+    return {
+      id: randomUUID(),
+      platform: params.platform,
+      marketId: params.marketId,
+      marketQuestion: params.marketQuestion,
+      outcome: params.outcome,
+      outcomeId: params.outcomeId,
+      side: params.side,
+      shares: params.shares,
+      avgPrice: params.avgPrice,
+      currentPrice: params.currentPrice,
+      pnl,
+      pnlPct,
+      value,
+      openedAt: new Date(),
+    };
+  }
+
+  function normalizeSide(outcome: string | undefined): 'YES' | 'NO' {
+    return outcome && outcome.toString().toUpperCase().includes('NO') ? 'NO' : 'YES';
+  }
+
+  function toNumber(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (value === null || value === undefined) return null;
+    const parsed = Number.parseFloat(String(value));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function normalizeKalshiPrice(value: unknown): number | null {
+    const num = toNumber(value);
+    if (num === null) return null;
+    return num > 1 ? num / 100 : num;
+  }
+
+  async function runDailyDigest(): Promise<void> {
+    const users = deps.db.listUsers();
+    if (users.length === 0) return;
+
+    const now = new Date();
+    const windowMinutes = 5;
+
+    for (const user of users) {
+      if (!shouldSendDigest(user, now, windowMinutes)) continue;
+
+      const positions = deps.db.getPositions(user.id);
+      const alerts = deps.db.getAlerts(user.id).filter((a) => a.enabled && !a.triggered);
+      const news = deps.feeds.getRecentNews(5);
+
+      const lines: string[] = [];
+      lines.push(`📬 Daily Digest — ${now.toLocaleDateString()}`);
+
+      if (positions.length > 0) {
+        const totalValue = positions.reduce((sum, p) => sum + p.value, 0);
+        const totalPnl = positions.reduce((sum, p) => sum + p.pnl, 0);
+        lines.push(
+          `Portfolio: $${totalValue.toFixed(2)} (${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)})`
+        );
+        const topPositions = [...positions]
+          .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
+          .slice(0, 3);
+        for (const pos of topPositions) {
+          lines.push(
+            `• ${pos.marketQuestion.slice(0, 60)} — ${pos.side} ${formatCents(pos.currentPrice)} ` +
+            `(${pos.pnl >= 0 ? '+' : ''}$${pos.pnl.toFixed(2)})`
+          );
+        }
+      } else {
+        lines.push('Portfolio: no tracked positions yet.');
+      }
+
+      if (alerts.length > 0) {
+        lines.push(`Active alerts: ${alerts.length}`);
+      }
+
+      if (news.length > 0) {
+        lines.push('', 'Top news:');
+        for (const item of news.slice(0, 3)) {
+          lines.push(`• ${item.title} (${item.source})`);
+        }
+      }
+
+      const target = resolveAlertRecipient(user.id);
+      if (!target) continue;
+      await deps.sendMessage({
+        platform: target.platform,
+        chatId: target.chatId,
+        text: lines.join('\n'),
+      });
+      digestSentOn.set(user.id, now.toISOString().slice(0, 10));
+    }
+  }
+
+  async function fetchPolymarketPositions(
+    userId: string,
+    creds: PolymarketCredentials
+  ): Promise<Position[]> {
+    const address = creds.funderAddress;
+    if (!address) return [];
+
+    const response = await fetch(`https://data-api.polymarket.com/positions?user=${address}`);
+    if (!response.ok) {
+      throw new Error(`Polymarket positions fetch failed: ${response.status}`);
+    }
+    const data = await response.json() as Array<Record<string, unknown>>;
+    const positions: Position[] = [];
+
+    for (const item of data || []) {
+      const marketId =
+        (item.conditionId as string) ||
+        (item.condition_id as string) ||
+        (item.marketId as string) ||
+        (item.market_id as string) ||
+        (item.market as string);
+      if (!marketId) continue;
+      const outcome = (item.outcome as string) || 'YES';
+      const side = normalizeSide(outcome);
+      const shares = toNumber(item.size ?? item.shares ?? item.balance) ?? 0;
+      if (shares <= 0) continue;
+      const avgPrice = toNumber(item.avgPrice ?? item.avg_price ?? item.entryPrice ?? item.entry_price) ?? 0;
+      const currentPrice = toNumber(item.currentPrice ?? item.current_price ?? item.price) ?? avgPrice;
+      const outcomeId = (item.tokenId as string) || (item.token_id as string) || `${marketId}-${side}`;
+      const marketQuestion =
+        (item.title as string) ||
+        (item.market as string) ||
+        (item.question as string) ||
+        marketId;
+
+      positions.push(
+        buildPosition({
+          platform: 'polymarket',
+          marketId,
+          marketQuestion,
+          outcome,
+          outcomeId,
+          side,
+          shares,
+          avgPrice: avgPrice > 0 ? avgPrice : currentPrice,
+          currentPrice,
+        })
+      );
+    }
+
+    await deps.credentials?.markSuccess(userId, 'polymarket');
+    return positions;
+  }
+
+  async function fetchKalshiPositions(
+    userId: string,
+    creds: KalshiCredentials
+  ): Promise<Position[]> {
+    const KALSHI_API_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
+    let headers: Record<string, string> | undefined;
+
+    if (creds.apiKeyId && creds.privateKeyPem) {
+      headers = buildKalshiHeadersForUrl(
+        { apiKeyId: creds.apiKeyId, privateKeyPem: creds.privateKeyPem },
+        'GET',
+        `${KALSHI_API_BASE}/portfolio/positions`
+      );
+    } else if (creds.email && creds.password) {
+      const loginRes = await fetch(`${KALSHI_API_BASE}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: creds.email, password: creds.password }),
+      });
+      if (!loginRes.ok) {
+        throw new Error(`Kalshi login failed: ${loginRes.status}`);
+      }
+      const loginData = await loginRes.json() as { token: string };
+      headers = { Authorization: `Bearer ${loginData.token}` };
+    } else {
+      return [];
+    }
+
+    const posRes = await fetch(`${KALSHI_API_BASE}/portfolio/positions`, { headers });
+    if (!posRes.ok) {
+      throw new Error(`Kalshi positions fetch failed: ${posRes.status}`);
+    }
+    const posData = await posRes.json() as { market_positions?: Array<Record<string, unknown>> };
+    const marketCache = new Map<string, Record<string, unknown>>();
+    const positions: Position[] = [];
+
+    for (const entry of posData.market_positions || []) {
+      const ticker = entry.ticker as string;
+      if (!ticker) continue;
+      const rawPosition = toNumber(entry.position ?? entry.shares ?? entry.count) ?? 0;
+      if (rawPosition === 0) continue;
+      const side: 'YES' | 'NO' = rawPosition >= 0 ? 'YES' : 'NO';
+      const shares = Math.abs(rawPosition);
+
+      let market = marketCache.get(ticker);
+      if (!market) {
+        const marketRes = await fetch(`${KALSHI_API_BASE}/markets/${ticker}`, { headers });
+        if (marketRes.ok) {
+          const marketJson = await marketRes.json() as { market?: Record<string, unknown> };
+          market = (marketJson.market || marketJson) as Record<string, unknown>;
+          marketCache.set(ticker, market);
+        }
+      }
+
+      const marketQuestion = (market?.title as string) || (entry.market as string) || ticker;
+      const yesPrice = normalizeKalshiPrice(
+        market?.yes_bid ?? market?.yes_ask ?? market?.yes_price ?? market?.last_price
+      ) ?? 0.5;
+      const currentPrice = side === 'YES' ? yesPrice : Math.max(0, 1 - yesPrice);
+
+      let avgPrice =
+        normalizeKalshiPrice(entry.avg_price ?? entry.average_price ?? entry.avg_entry_price) ??
+        null;
+      if (avgPrice === null) {
+        const totalTraded = toNumber(entry.total_traded ?? entry.cost_basis);
+        if (totalTraded && shares > 0) {
+          avgPrice = normalizeKalshiPrice(totalTraded / shares);
+        }
+      }
+      avgPrice = avgPrice ?? currentPrice;
+
+      positions.push(
+        buildPosition({
+          platform: 'kalshi',
+          marketId: ticker,
+          marketQuestion,
+          outcome: side,
+          outcomeId: `${ticker}-${side}`,
+          side,
+          shares,
+          avgPrice,
+          currentPrice,
+        })
+      );
+    }
+
+    await deps.credentials?.markSuccess(userId, 'kalshi');
+    return positions;
+  }
+
+  async function fetchManifoldPositions(
+    userId: string,
+    creds: ManifoldCredentials
+  ): Promise<Position[]> {
+    if (!creds.apiKey) return [];
+    const headers = { Authorization: `Key ${creds.apiKey}` };
+
+    const meRes = await fetch('https://api.manifold.markets/v0/me', { headers });
+    if (!meRes.ok) {
+      throw new Error(`Manifold /me failed: ${meRes.status}`);
+    }
+    const meData = await meRes.json() as { id?: string; name?: string };
+    if (!meData.id) return [];
+
+    const betsRes = await fetch(`https://api.manifold.markets/v0/bets?userId=${meData.id}&limit=1000`, { headers });
+    if (!betsRes.ok) {
+      throw new Error(`Manifold bets fetch failed: ${betsRes.status}`);
+    }
+    const bets = await betsRes.json() as Array<Record<string, unknown>>;
+    const byMarket = new Map<string, {
+      question?: string;
+      yesShares: number;
+      noShares: number;
+      yesInvested: number;
+      noInvested: number;
+    }>();
+
+    for (const bet of bets || []) {
+      if (bet.isSold || bet.isCancelled) continue;
+      const marketId = bet.contractId as string;
+      if (!marketId) continue;
+      const entry = byMarket.get(marketId) || {
+        question: bet.contractQuestion as string | undefined,
+        yesShares: 0,
+        noShares: 0,
+        yesInvested: 0,
+        noInvested: 0,
+      };
+      const shares = toNumber(bet.shares) ?? 0;
+      const amount = toNumber(bet.amount) ?? 0;
+      if ((bet.outcome as string) === 'YES') {
+        entry.yesShares += shares;
+        entry.yesInvested += amount;
+      } else if ((bet.outcome as string) === 'NO') {
+        entry.noShares += shares;
+        entry.noInvested += amount;
+      }
+      if (!entry.question && bet.contractQuestion) {
+        entry.question = bet.contractQuestion as string;
+      }
+      byMarket.set(marketId, entry);
+    }
+
+    const marketCache = new Map<string, Record<string, unknown>>();
+    const positions: Position[] = [];
+
+    for (const [marketId, entry] of byMarket.entries()) {
+      if (entry.yesShares <= 0 && entry.noShares <= 0) continue;
+
+      let market = marketCache.get(marketId);
+      if (!market) {
+        const marketRes = await fetch(`https://api.manifold.markets/v0/market/${marketId}`);
+        if (marketRes.ok) {
+          market = await marketRes.json() as Record<string, unknown>;
+          marketCache.set(marketId, market);
+        }
+      }
+
+      const question = (market?.question as string) || entry.question || marketId;
+      const prob = toNumber(market?.probability) ?? 0.5;
+
+      if (entry.yesShares > 0) {
+        const avg = entry.yesShares > 0 ? entry.yesInvested / entry.yesShares : prob;
+        positions.push(
+          buildPosition({
+            platform: 'manifold',
+            marketId,
+            marketQuestion: question,
+            outcome: 'YES',
+            outcomeId: `${marketId}-YES`,
+            side: 'YES',
+            shares: entry.yesShares,
+            avgPrice: avg,
+            currentPrice: prob,
+          })
+        );
+      }
+
+      if (entry.noShares > 0) {
+        const noPrice = Math.max(0, 1 - prob);
+        const avg = entry.noShares > 0 ? entry.noInvested / entry.noShares : noPrice;
+        positions.push(
+          buildPosition({
+            platform: 'manifold',
+            marketId,
+            marketQuestion: question,
+            outcome: 'NO',
+            outcomeId: `${marketId}-NO`,
+            side: 'NO',
+            shares: entry.noShares,
+            avgPrice: avg,
+            currentPrice: noPrice,
+          })
+        );
+      }
+    }
+
+    await deps.credentials?.markSuccess(userId, 'manifold');
+    return positions;
+  }
+
+  async function syncAllPortfolios(): Promise<void> {
+    const credentials = deps.credentials;
+    if (!credentials) {
+      logger.warn('Portfolio sync skipped: credentials manager not configured');
+      return;
+    }
+
+    const credentialUsers = deps.db.query<{ user_id: string }>(
+      'SELECT DISTINCT user_id FROM trading_credentials WHERE enabled = 1'
+    );
+    const userIds = credentialUsers.map((row) => row.user_id);
+    if (userIds.length === 0) return;
+
+    for (const userId of userIds) {
+      const user = deps.db.getUser(userId);
+      if (!user) continue;
+
+      const platforms = await credentials.listUserPlatforms(userId);
+      if (platforms.length === 0) continue;
+
+      for (const platform of platforms) {
+        try {
+          let positions: Position[] | null = null;
+          if (platform === 'polymarket') {
+            const creds = await credentials.getCredentials<PolymarketCredentials>(userId, 'polymarket');
+            if (creds) positions = await fetchPolymarketPositions(userId, creds);
+          } else if (platform === 'kalshi') {
+            const creds = await credentials.getCredentials<KalshiCredentials>(userId, 'kalshi');
+            if (creds) positions = await fetchKalshiPositions(userId, creds);
+          } else if (platform === 'manifold') {
+            const creds = await credentials.getCredentials<ManifoldCredentials>(userId, 'manifold');
+            if (creds) positions = await fetchManifoldPositions(userId, creds);
+          }
+
+          if (!positions) continue;
+
+          const existing = deps.db.getPositions(userId).filter((p) => p.platform === platform);
+          const currentIds = new Set(positions.map((p) => p.outcomeId));
+
+          for (const position of positions) {
+            deps.db.upsertPosition(userId, position);
+          }
+
+          for (const position of existing) {
+            if (!currentIds.has(position.outcomeId)) {
+              deps.db.deletePosition(position.id);
+            }
+          }
+
+          logger.info(
+            { userId, platform, positions: positions.length, removed: Math.max(0, existing.length - currentIds.size) },
+            'Portfolio sync complete'
+          );
+        } catch (error) {
+          logger.warn({ error, userId, platform }, 'Portfolio sync failed');
+          await credentials.markFailure(userId, platform);
+        }
+      }
+    }
+  }
+
+  function normalizeStopLossPct(value: number | undefined): number | null {
+    if (value === undefined || value === null) return null;
+    if (!Number.isFinite(value)) return null;
+    if (value <= 0) return null;
+    return value > 1 ? value / 100 : value;
+  }
+
+  async function executeStopLoss(
+    user: User,
+    position: Position
+  ): Promise<{ status: 'executed' | 'failed' | 'dry-run' | 'skipped'; output?: string; error?: string }> {
+    if (!deps.credentials) {
+      return { status: 'skipped', error: 'Credentials manager not configured' };
+    }
+
+    if (!Number.isFinite(position.shares) || position.shares <= 0) {
+      return { status: 'skipped', error: 'No position size' };
+    }
+
+    const dryRun = deps.config?.trading?.dryRun !== false;
+    if (dryRun) {
+      return { status: 'dry-run' };
+    }
+
+    const platform = position.platform;
+
+    if (platform === 'polymarket') {
+      const creds = await deps.credentials.getCredentials<PolymarketCredentials>(user.id, 'polymarket');
+      if (!creds) return { status: 'skipped', error: 'Missing Polymarket credentials' };
+      const tradingDir = join(__dirname, '..', '..', 'trading');
+      const tokenId = position.outcomeId;
+      const size = position.shares;
+      const cmd = `cd ${tradingDir} && python3 polymarket.py market_sell ${tokenId} ${size}`;
+      try {
+        const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: buildPolymarketEnv(creds) });
+        await deps.credentials.markSuccess(user.id, 'polymarket');
+        return { status: 'executed', output: output.trim() };
+      } catch (err: unknown) {
+        const error = err as { stderr?: string; message?: string };
+        await deps.credentials.markFailure(user.id, 'polymarket');
+        return { status: 'failed', error: error.stderr || error.message };
+      }
+    }
+
+    if (platform === 'kalshi') {
+      const creds = await deps.credentials.getCredentials<KalshiCredentials>(user.id, 'kalshi');
+      if (!creds) return { status: 'skipped', error: 'Missing Kalshi credentials' };
+      const tradingDir = join(__dirname, '..', '..', 'trading');
+      const ticker = position.marketId;
+      const side = position.side.toLowerCase();
+      const count = Math.round(position.shares);
+      const cmd = `cd ${tradingDir} && python3 kalshi.py market_order ${ticker} ${side} sell ${count}`;
+      try {
+        const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: buildKalshiEnv(creds) });
+        await deps.credentials.markSuccess(user.id, 'kalshi');
+        return { status: 'executed', output: output.trim() };
+      } catch (err: unknown) {
+        const error = err as { stderr?: string; message?: string };
+        await deps.credentials.markFailure(user.id, 'kalshi');
+        return { status: 'failed', error: error.stderr || error.message };
+      }
+    }
+
+    if (platform === 'manifold') {
+      const creds = await deps.credentials.getCredentials<ManifoldCredentials>(user.id, 'manifold');
+      if (!creds) return { status: 'skipped', error: 'Missing Manifold credentials' };
+      const apiKey = creds.apiKey;
+      const body: Record<string, unknown> = {
+        contractId: position.marketId,
+        outcome: position.side,
+        shares: position.shares,
+      };
+      try {
+        const response = await fetch(`https://api.manifold.markets/v0/market/${position.marketId}/sell`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Key ${apiKey}`,
+          },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          await deps.credentials.markFailure(user.id, 'manifold');
+          return { status: 'failed', error: errorText };
+        }
+        await deps.credentials.markSuccess(user.id, 'manifold');
+        const result = await response.json();
+        return { status: 'executed', output: JSON.stringify(result) };
+      } catch (err: unknown) {
+        const error = err as Error;
+        await deps.credentials.markFailure(user.id, 'manifold');
+        return { status: 'failed', error: error.message };
+      }
+    }
+
+    return { status: 'skipped', error: `Unsupported platform: ${platform}` };
+  }
+
+  async function scanStopLosses(): Promise<void> {
+    const users = deps.db.listUsers();
+    if (users.length === 0) return;
+
+    const cooldownMs = deps.config?.trading?.stopLossCooldownMs ?? 10 * 60 * 1000;
+    const now = Date.now();
+
+    for (const user of users) {
+      const stopLossPct = normalizeStopLossPct(user.settings.stopLossPct);
+      if (!stopLossPct) continue;
+
+      const positions = deps.db.getPositions(user.id);
+      if (positions.length === 0) continue;
+
+      for (const position of positions) {
+        if (!position.avgPrice || !position.currentPrice) continue;
+        const threshold = position.avgPrice * (1 - stopLossPct);
+        if (position.currentPrice > threshold) continue;
+
+        const existing = deps.db.getStopLossTrigger(user.id, position.platform, position.outcomeId);
+        if (existing?.cooldownUntil && existing.cooldownUntil.getTime() > now) {
+          continue;
+        }
+
+        const result = await executeStopLoss(user, position);
+
+        const cooldownUntil = new Date(now + cooldownMs);
+        deps.db.upsertStopLossTrigger({
+          userId: user.id,
+          platform: position.platform,
+          outcomeId: position.outcomeId,
+          marketId: position.marketId,
+          status: result.status,
+          triggeredAt: new Date(now),
+          lastPrice: position.currentPrice,
+          lastError: result.error,
+          cooldownUntil,
+        });
+
+        const target = resolveAlertRecipient(user.id);
+        if (target) {
+          const lines = [
+            '🛑 Stop-loss triggered',
+            `${position.marketQuestion || position.marketId} (${position.platform})`,
+            `Side: ${position.side}`,
+            `Price: ${position.currentPrice.toFixed(4)} (avg ${position.avgPrice.toFixed(4)})`,
+            `Threshold: ${threshold.toFixed(4)} (${Math.round(stopLossPct * 100)}%)`,
+            result.status === 'executed' ? `Sold ${position.shares} shares.` : `Status: ${result.status}`,
+          ];
+          if (result.error) {
+            lines.push(`Error: ${result.error}`);
+          }
+          if (result.status === 'dry-run') {
+            lines.push('Dry run enabled - no trade executed.');
+          }
+          await deps.sendMessage({
+            platform: target.platform,
+            chatId: target.chatId,
+            text: lines.join('\n'),
+          });
+        }
+      }
     }
   }
 
@@ -337,6 +1127,7 @@ export function createCronService(deps: CronServiceDeps): CronService {
     timers.set(job.id, timer);
     emitter.emit('event', { type: 'job:scheduled', job } as CronEvent);
     logger.debug({ jobId: job.id, name: job.name, nextRun: new Date(nextRun) }, 'Job scheduled');
+    persistJob(job);
   }
 
   /** Execute a job */
@@ -363,6 +1154,7 @@ export function createCronService(deps: CronServiceDeps): CronService {
 
       emitter.emit('event', { type: 'job:completed', job, durationMs } as CronEvent);
       logger.info({ jobId: job.id, name: job.name, durationMs }, 'Cron job completed');
+      persistJob(job);
 
       if (job.deleteAfterRun && job.schedule.kind === 'at') {
         jobs.delete(job.id);
@@ -381,6 +1173,7 @@ export function createCronService(deps: CronServiceDeps): CronService {
 
       emitter.emit('event', { type: 'job:failed', job, error: errorMsg } as CronEvent);
       logger.error({ jobId: job.id, name: job.name, error: errorMsg }, 'Cron job failed');
+      persistJob(job);
 
       if (job.schedule.kind !== 'at') {
         scheduleJob(job);
@@ -398,16 +1191,70 @@ export function createCronService(deps: CronServiceDeps): CronService {
 
     logger.info('Starting cron service');
 
+    const cronConfig = deps.config?.cron ?? {};
+    if (cronConfig.enabled === false) {
+      logger.info('Cron service disabled by configuration');
+      running = false;
+      return;
+    }
+    const alertScanIntervalMs = cronConfig.alertScanIntervalMs ?? 30000;
+    const digestIntervalMs = cronConfig.digestIntervalMs ?? 5 * 60 * 1000;
+    const portfolioSyncIntervalMs = cronConfig.portfolioSyncIntervalMs ?? 60 * 60 * 1000;
+    const stopLossIntervalMs = cronConfig.stopLossIntervalMs ?? 2 * 60 * 1000;
+
+    if (jobs.size === 0) {
+      loadPersistedJobs();
+    }
+
     // Add default alert scan job if none exists
     if (!Array.from(jobs.values()).some((j) => j.payload.kind === 'alertScan')) {
       emitter.add({
         name: 'Alert Scanner',
         description: 'Check all price alerts every 30 seconds',
         enabled: true,
-        schedule: { kind: 'every', everyMs: 30000 },
+        schedule: { kind: 'every', everyMs: alertScanIntervalMs },
         sessionTarget: 'main',
         wakeMode: 'now',
         payload: { kind: 'alertScan' },
+      });
+    }
+
+    if (!Array.from(jobs.values()).some((j) => j.payload.kind === 'portfolioSync')) {
+      emitter.add({
+        name: 'Portfolio Sync',
+        description: 'Sync portfolio positions from linked trading accounts',
+        enabled: true,
+        schedule: { kind: 'every', everyMs: portfolioSyncIntervalMs },
+        sessionTarget: 'main',
+        wakeMode: 'now',
+        payload: { kind: 'portfolioSync' },
+      });
+    }
+
+    if (!Array.from(jobs.values()).some((j) => j.payload.kind === 'dailyDigest')) {
+      emitter.add({
+        name: 'Daily Digest',
+        description: 'Send daily digest messages to users who enabled it',
+        enabled: true,
+        schedule: { kind: 'every', everyMs: digestIntervalMs },
+        sessionTarget: 'main',
+        wakeMode: 'now',
+        payload: { kind: 'dailyDigest' },
+      });
+    }
+
+    if (
+      stopLossIntervalMs > 0 &&
+      !Array.from(jobs.values()).some((j) => j.payload.kind === 'stopLossScan')
+    ) {
+      emitter.add({
+        name: 'Stop-Loss Scanner',
+        description: 'Monitor positions and execute stop-loss orders',
+        enabled: true,
+        schedule: { kind: 'every', everyMs: stopLossIntervalMs },
+        sessionTarget: 'main',
+        wakeMode: 'now',
+        payload: { kind: 'stopLossScan' },
       });
     }
 
@@ -483,6 +1330,7 @@ export function createCronService(deps: CronServiceDeps): CronService {
       scheduleJob(job);
     }
 
+    persistJob(job);
     return job;
   };
 
@@ -506,6 +1354,7 @@ export function createCronService(deps: CronServiceDeps): CronService {
       scheduleJob(updated);
     }
 
+    persistJob(updated);
     return updated;
   };
 
@@ -520,6 +1369,7 @@ export function createCronService(deps: CronServiceDeps): CronService {
     }
 
     jobs.delete(id);
+    deps.db.deleteCronJob(id);
     logger.info({ jobId: id, name: job.name }, 'Cron job removed');
 
     return true;
@@ -555,7 +1405,7 @@ export interface CronManager {
 export function createCronManager(
   db: Database,
   feeds: FeedManager,
-  sendMessage: (msg: OutgoingMessage) => Promise<void>
+  sendMessage: (msg: OutgoingMessage) => Promise<string | null>
 ): CronManager {
   const service = createCronService({ db, feeds, sendMessage });
 
