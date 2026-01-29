@@ -567,6 +567,66 @@ export interface Config {
     /** Include edge vs fair value (default: true) */
     includeEdge?: boolean;
   };
+  whaleTracking?: {
+    /** Enable whale tracking (default: false) */
+    enabled?: boolean;
+    /** Minimum trade size in USD to track (default: 10000) */
+    minTradeSize?: number;
+    /** Minimum position size in USD to track (default: 50000) */
+    minPositionSize?: number;
+    /** Platforms to track (default: ['polymarket']) */
+    platforms?: Platform[];
+    /** Enable real-time WebSocket monitoring (default: true) */
+    realtime?: boolean;
+    /** Poll interval in ms for REST fallback (default: 30000) */
+    pollIntervalMs?: number;
+  };
+  copyTrading?: {
+    /** Enable copy trading (default: false) */
+    enabled?: boolean;
+    /** Dry run mode - simulate but don't execute (default: true) */
+    dryRun?: boolean;
+    /** Wallet addresses to follow */
+    followedAddresses?: string[];
+    /** Sizing mode: fixed, proportional, or percentage */
+    sizingMode?: 'fixed' | 'proportional' | 'percentage';
+    /** Fixed size in USD per copied trade (default: 100) */
+    fixedSize?: number;
+    /** Proportional multiplier of whale size (default: 0.1) */
+    proportionalMultiplier?: number;
+    /** Percentage of portfolio per trade (default: 1) */
+    portfolioPercentage?: number;
+    /** Max position size in USD (default: 500) */
+    maxPositionSize?: number;
+    /** Delay in ms before copying (default: 5000) */
+    copyDelayMs?: number;
+  };
+  smartRouting?: {
+    /** Enable smart order routing (default: true) */
+    enabled?: boolean;
+    /** Routing mode (default: 'balanced') */
+    mode?: 'best_price' | 'best_liquidity' | 'lowest_fee' | 'balanced';
+    /** Platforms to route across */
+    platforms?: Platform[];
+    /** Max slippage in percent (default: 1) */
+    maxSlippage?: number;
+    /** Prefer maker orders for rebates (default: true) */
+    preferMaker?: boolean;
+    /** Allow splitting orders across platforms (default: false) */
+    allowSplitting?: boolean;
+  };
+  evmDex?: {
+    /** Enable EVM DEX trading (default: false) */
+    enabled?: boolean;
+    /** Default chain (default: 'ethereum') */
+    defaultChain?: 'ethereum' | 'arbitrum' | 'optimism' | 'base' | 'polygon';
+    /** Default slippage in bps (default: 50) */
+    slippageBps?: number;
+    /** MEV protection level (default: 'basic') */
+    mevProtection?: 'none' | 'basic' | 'aggressive';
+    /** Max price impact in percent (default: 3) */
+    maxPriceImpact?: number;
+  };
   memory?: {
     auto?: {
       enabled?: boolean;

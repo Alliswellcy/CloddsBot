@@ -4383,6 +4383,71 @@ function buildTools(): ToolDefinition[] {
         required: ['amount'],
       },
     },
+
+    // ============================================
+    // EVM DEX TRADING TOOLS
+    // ============================================
+
+    {
+      name: 'evm_swap',
+      description: 'Swap tokens on EVM chains (Ethereum, Arbitrum, Optimism, Base, Polygon) using Uniswap V3 or 1inch.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          chain: {
+            type: 'string',
+            description: 'EVM chain to use',
+            enum: ['ethereum', 'arbitrum', 'optimism', 'base', 'polygon'],
+            default: 'ethereum',
+          },
+          input_token: { type: 'string', description: 'Input token symbol (e.g., USDC, WETH) or address' },
+          output_token: { type: 'string', description: 'Output token symbol or address' },
+          amount: { type: 'string', description: 'Amount to swap (in token units, e.g., "100" for 100 USDC)' },
+          slippage_bps: { type: 'number', description: 'Slippage tolerance in basis points (default 50 = 0.5%)' },
+          dex: { type: 'string', description: 'DEX to use', enum: ['uniswap', '1inch', 'auto'], default: 'auto' },
+        },
+        required: ['input_token', 'output_token', 'amount'],
+      },
+    },
+    {
+      name: 'evm_quote',
+      description: 'Get swap quote without executing (compare Uniswap vs 1inch).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          chain: {
+            type: 'string',
+            description: 'EVM chain',
+            enum: ['ethereum', 'arbitrum', 'optimism', 'base', 'polygon'],
+            default: 'ethereum',
+          },
+          input_token: { type: 'string', description: 'Input token symbol or address' },
+          output_token: { type: 'string', description: 'Output token symbol or address' },
+          amount: { type: 'string', description: 'Amount to swap' },
+        },
+        required: ['input_token', 'output_token', 'amount'],
+      },
+    },
+    {
+      name: 'evm_balance',
+      description: 'Get token balances on an EVM chain.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          chain: {
+            type: 'string',
+            description: 'EVM chain',
+            enum: ['ethereum', 'arbitrum', 'optimism', 'base', 'polygon'],
+            default: 'ethereum',
+          },
+          tokens: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Token symbols to check (e.g., ["ETH", "USDC", "WETH"])',
+          },
+        },
+      },
+    },
     {
       name: 'wormhole_quote',
       description: 'Quote a Wormhole transfer (Token Bridge or CCTP).',
@@ -13235,6 +13300,120 @@ async function executeTool(
           }
 
           return JSON.stringify(results);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      // ============================================
+      // EVM DEX TRADING HANDLERS
+      // ============================================
+
+      case 'evm_swap': {
+        const chain = (toolInput.chain as string) || 'ethereum';
+        const inputToken = toolInput.input_token as string;
+        const outputToken = toolInput.output_token as string;
+        const amount = toolInput.amount as string;
+        const slippageBps = (toolInput.slippage_bps as number) || 50;
+        const dex = (toolInput.dex as string) || 'auto';
+
+        try {
+          // Dynamic import to avoid loading if not needed
+          const { executeUniswapSwap, executeOneInchSwap, compareDexRoutes } = await import('../evm');
+
+          if (dex === 'auto') {
+            // Compare routes and use best one
+            const comparison = await compareDexRoutes({
+              chain: chain as any,
+              fromToken: inputToken,
+              toToken: outputToken,
+              amount,
+            });
+
+            if (comparison.best === 'uniswap' && comparison.uniswap) {
+              const result = await executeUniswapSwap({
+                chain: chain as any,
+                inputToken,
+                outputToken,
+                amount,
+                slippageBps,
+              });
+              return JSON.stringify({ ...result, routedVia: 'uniswap', comparison });
+            } else if (comparison.oneinch) {
+              const result = await executeOneInchSwap({
+                chain: chain as any,
+                fromToken: inputToken,
+                toToken: outputToken,
+                amount,
+                slippageBps,
+              });
+              return JSON.stringify({ ...result, routedVia: '1inch', comparison });
+            }
+          } else if (dex === 'uniswap') {
+            const result = await executeUniswapSwap({
+              chain: chain as any,
+              inputToken,
+              outputToken,
+              amount,
+              slippageBps,
+            });
+            return JSON.stringify(result);
+          } else if (dex === '1inch') {
+            const result = await executeOneInchSwap({
+              chain: chain as any,
+              fromToken: inputToken,
+              toToken: outputToken,
+              amount,
+              slippageBps,
+            });
+            return JSON.stringify(result);
+          }
+
+          return JSON.stringify({ error: 'Invalid DEX specified' });
+        } catch (err: unknown) {
+          return JSON.stringify({
+            error: (err as Error).message,
+            hint: 'Set ETHEREUM_PRIVATE_KEY and chain-specific RPC URLs (ETHEREUM_RPC_URL, etc.)',
+          });
+        }
+      }
+
+      case 'evm_quote': {
+        const chain = (toolInput.chain as string) || 'ethereum';
+        const inputToken = toolInput.input_token as string;
+        const outputToken = toolInput.output_token as string;
+        const amount = toolInput.amount as string;
+
+        try {
+          const { compareDexRoutes } = await import('../evm');
+          const comparison = await compareDexRoutes({
+            chain: chain as any,
+            fromToken: inputToken,
+            toToken: outputToken,
+            amount,
+          });
+          return JSON.stringify(comparison);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'evm_balance': {
+        const chain = (toolInput.chain as string) || 'ethereum';
+        const tokens = (toolInput.tokens as string[]) || ['ETH', 'USDC', 'WETH'];
+
+        try {
+          const { getEvmBalance } = await import('../evm');
+          const balances: Record<string, string> = {};
+          for (const token of tokens) {
+            try {
+              const balance = await getEvmBalance(chain as any, token);
+              balances[token] = balance;
+            } catch {
+              balances[token] = 'error';
+            }
+          }
+          return JSON.stringify({ chain, balances });
         } catch (err: unknown) {
           return JSON.stringify({ error: (err as Error).message });
         }

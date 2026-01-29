@@ -37,6 +37,9 @@ import { createMonitoringService, MonitoringService } from '../monitoring';
 import { createEmbeddingsService } from '../embeddings';
 import { createMarketIndexService } from '../market-index';
 import { createOpportunityFinder, type OpportunityFinder } from '../opportunity';
+import { createWhaleTracker, type WhaleTracker } from '../feeds/polymarket/whale-tracker';
+import { createCopyTradingService, type CopyTradingService } from '../trading/copy-trading';
+import { createSmartRouter, type SmartRouter } from '../execution/smart-router';
 import chokidar, { FSWatcher } from 'chokidar';
 import path from 'path';
 import { loadConfig, CONFIG_FILE } from '../utils/config';
@@ -452,6 +455,43 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         includeInternal: config.opportunityFinder?.includeInternal ?? true,
         includeCross: config.opportunityFinder?.includeCross ?? true,
         includeEdge: config.opportunityFinder?.includeEdge ?? true,
+      })
+    : null;
+
+  // Create whale tracker for monitoring large trades
+  let whaleTracker: WhaleTracker | null = config.whaleTracking?.enabled
+    ? createWhaleTracker({
+        minTradeSize: config.whaleTracking?.minTradeSize ?? 10000,
+        minPositionSize: config.whaleTracking?.minPositionSize ?? 50000,
+        enableRealtime: config.whaleTracking?.realtime ?? true,
+      })
+    : null;
+
+  // Create copy trading service
+  let copyTrading: CopyTradingService | null = null;
+  if (config.copyTrading?.enabled && whaleTracker) {
+    // Note: execution service would need to be passed here for real trading
+    // For now we create with null execution (dry run only)
+    copyTrading = createCopyTradingService(whaleTracker, null as any, {
+      followedAddresses: config.copyTrading?.followedAddresses ?? [],
+      sizingMode: config.copyTrading?.sizingMode ?? 'fixed',
+      fixedSize: config.copyTrading?.fixedSize ?? 100,
+      proportionMultiplier: config.copyTrading?.proportionalMultiplier ?? 0.1,
+      portfolioPercentage: config.copyTrading?.portfolioPercentage ?? 1,
+      maxPositionSize: config.copyTrading?.maxPositionSize ?? 500,
+      copyDelayMs: config.copyTrading?.copyDelayMs ?? 5000,
+      dryRun: config.copyTrading?.dryRun ?? true,
+    });
+  }
+
+  // Create smart router for order routing
+  const smartRouter: SmartRouter | null = config.smartRouting?.enabled !== false
+    ? createSmartRouter(feeds, {
+        mode: config.smartRouting?.mode ?? 'balanced',
+        enabledPlatforms: config.smartRouting?.platforms ?? ['polymarket', 'kalshi'],
+        maxSlippage: config.smartRouting?.maxSlippage ?? 1,
+        preferMaker: config.smartRouting?.preferMaker ?? true,
+        allowSplitting: config.smartRouting?.allowSplitting ?? false,
       })
     : null;
 
@@ -1146,6 +1186,18 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       await startCronService();
       startMonitoring();
 
+      // Start whale tracker if enabled
+      if (whaleTracker) {
+        await whaleTracker.start();
+        logger.info('Whale tracker started');
+      }
+
+      // Start copy trading if enabled
+      if (copyTrading) {
+        copyTrading.start();
+        logger.info('Copy trading service started');
+      }
+
       started = true;
       if (!channelRateLimitCleanupInterval) {
         channelRateLimitCleanupInterval = setInterval(() => {
@@ -1227,6 +1279,17 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       providerHealth?.stop();
       monitoring?.stop();
       monitoring = null;
+
+      // Stop copy trading and whale tracker
+      if (copyTrading) {
+        copyTrading.stop();
+        copyTrading = null;
+      }
+      if (whaleTracker) {
+        whaleTracker.stop();
+        whaleTracker = null;
+      }
+
       await channels?.stop();
       await feeds.stop();
       await httpGateway.stop();
