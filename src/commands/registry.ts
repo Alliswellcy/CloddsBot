@@ -1340,6 +1340,218 @@ export function createDefaultCommands(): CommandDefinition[] {
       },
     },
     {
+      name: 'strategy',
+      description: 'Create or manage trading strategies',
+      usage: '/strategy [create|list|delete|templates] [args]',
+      aliases: ['strat'],
+      handler: async (args, ctx) => {
+        const trading = (ctx as any).trading;
+        if (!trading?.builder) {
+          return 'Strategy builder not initialized.';
+        }
+
+        const parts = args.trim().split(/\s+/);
+        const subcommand = parts[0]?.toLowerCase() || 'list';
+        const rest = parts.slice(1).join(' ');
+
+        switch (subcommand) {
+          case 'templates': {
+            const templates = trading.builder.listTemplates();
+            const lines = ['Available Strategy Templates', ''];
+            for (const tmpl of templates) {
+              lines.push(`**${tmpl.name}**`);
+              lines.push(`  ${tmpl.description}`);
+            }
+            lines.push('', 'Use: /strategy create <description>');
+            return lines.join('\n');
+          }
+
+          case 'create': {
+            if (!rest) {
+              return [
+                'Usage: /strategy create <natural language description>',
+                '',
+                'Examples:',
+                '  /strategy create buy the dip on polymarket when price drops 5%',
+                '  /strategy create momentum strategy with 10% take profit',
+                '  /strategy create arbitrage between polymarket and kalshi',
+              ].join('\n');
+            }
+
+            const result = trading.builder.parseNaturalLanguage(rest);
+            if ('error' in result) {
+              return `Error: ${result.error}`;
+            }
+
+            const validation = trading.builder.validate(result);
+            if (!validation.valid) {
+              return `Validation errors:\n${validation.errors.map((e: string) => `- ${e}`).join('\n')}`;
+            }
+
+            // Save the definition
+            const defId = trading.builder.saveDefinition(ctx.session.userId, result);
+
+            // Create and register the strategy
+            const strategy = trading.builder.createStrategy(result);
+            trading.bots.registerStrategy(strategy);
+
+            return [
+              `Strategy Created: ${result.name}`,
+              '',
+              `ID: ${strategy.config.id}`,
+              `Template: ${result.template}`,
+              `Platforms: ${result.platforms.join(', ')}`,
+              '',
+              'Entry conditions:',
+              ...result.entry.map((e: any) => `  - ${e.type}: ${e.value}`),
+              '',
+              'Exit conditions:',
+              ...result.exit.map((e: any) => `  - ${e.type}: ${e.value}`),
+              '',
+              'Risk:',
+              `  - Max position: $${result.risk.maxPositionSize}`,
+              `  - Stop loss: ${result.risk.stopLossPct}%`,
+              `  - Take profit: ${result.risk.takeProfitPct}%`,
+              '',
+              'Mode: DRY RUN (use /bot start to begin)',
+              '',
+              `Use /bot start ${strategy.config.id} to start trading.`,
+            ].join('\n');
+          }
+
+          case 'list': {
+            const definitions = trading.builder.loadDefinitions(ctx.session.userId);
+            if (definitions.length === 0) {
+              return 'No strategies saved. Use /strategy create to create one.';
+            }
+
+            const lines = ['Your Strategies', ''];
+            for (const def of definitions) {
+              lines.push(`**${def.definition.name}** (${def.id})`);
+              lines.push(`  Template: ${def.definition.template} | Platforms: ${def.definition.platforms.join(', ')}`);
+              lines.push(`  Created: ${def.createdAt.toLocaleDateString()}`);
+            }
+            return lines.join('\n');
+          }
+
+          case 'delete': {
+            if (!rest) {
+              return 'Usage: /strategy delete <strategy-id>';
+            }
+            const deleted = trading.builder.deleteDefinition(ctx.session.userId, rest);
+            return deleted ? `Strategy ${rest} deleted.` : `Strategy ${rest} not found.`;
+          }
+
+          default:
+            return [
+              'Usage: /strategy [command]',
+              '',
+              'Commands:',
+              '  create <description> - Create strategy from natural language',
+              '  list                 - List your strategies',
+              '  delete <id>         - Delete a strategy',
+              '  templates           - Show available templates',
+            ].join('\n');
+        }
+      },
+    },
+    {
+      name: 'stream',
+      description: 'Configure trading activity streaming',
+      usage: '/stream [on|off|status|channel] [args]',
+      handler: async (args, ctx) => {
+        const trading = (ctx as any).trading;
+        if (!trading?.stream) {
+          return 'Trading stream not initialized.';
+        }
+
+        const parts = args.trim().split(/\s+/);
+        const subcommand = parts[0]?.toLowerCase() || 'status';
+        const rest = parts.slice(1);
+
+        switch (subcommand) {
+          case 'status': {
+            const config = trading.stream.getConfig();
+            return [
+              'Trading Stream Status',
+              '',
+              `Privacy: ${config.privacy}`,
+              `Channels: ${config.channels.length}`,
+              `Events: ${config.events.join(', ')}`,
+              '',
+              'Privacy settings:',
+              `  Show platforms: ${config.showPlatforms}`,
+              `  Show markets: ${config.showMarkets}`,
+              `  Show exact prices: ${config.showExactPrices}`,
+              `  Show sizes: ${config.showSizes}`,
+              `  Show PnL amounts: ${config.showPnL}`,
+            ].join('\n');
+          }
+
+          case 'on': {
+            // Subscribe to console output
+            trading.stream.addChannel({ type: 'console', id: 'console' });
+            return 'Streaming enabled (console output). Use /stream webhook <url> to add webhook.';
+          }
+
+          case 'off': {
+            trading.stream.removeChannel('console');
+            return 'Streaming disabled.';
+          }
+
+          case 'privacy': {
+            const level = rest[0]?.toLowerCase();
+            if (!level || !['public', 'obscured', 'private'].includes(level)) {
+              return 'Usage: /stream privacy [public|obscured|private]';
+            }
+            trading.stream.configure({ privacy: level });
+            return `Privacy set to: ${level}`;
+          }
+
+          case 'webhook': {
+            const url = rest[0];
+            if (!url || !url.startsWith('http')) {
+              return 'Usage: /stream webhook <url>';
+            }
+            trading.stream.addChannel({ type: 'webhook', id: `wh_${Date.now()}`, webhookUrl: url });
+            return `Webhook added: ${url}`;
+          }
+
+          case 'discord': {
+            const url = rest[0];
+            if (!url || !url.includes('discord')) {
+              return 'Usage: /stream discord <webhook-url>';
+            }
+            trading.stream.addChannel({ type: 'discord', id: `discord_${Date.now()}`, webhookUrl: url });
+            return 'Discord webhook added.';
+          }
+
+          case 'slack': {
+            const url = rest[0];
+            if (!url || !url.includes('slack')) {
+              return 'Usage: /stream slack <webhook-url>';
+            }
+            trading.stream.addChannel({ type: 'slack', id: `slack_${Date.now()}`, webhookUrl: url });
+            return 'Slack webhook added.';
+          }
+
+          default:
+            return [
+              'Usage: /stream [command]',
+              '',
+              'Commands:',
+              '  status              - Show stream configuration',
+              '  on                  - Enable console streaming',
+              '  off                 - Disable streaming',
+              '  privacy <level>     - Set privacy (public/obscured/private)',
+              '  webhook <url>       - Add webhook endpoint',
+              '  discord <url>       - Add Discord webhook',
+              '  slack <url>         - Add Slack webhook',
+            ].join('\n');
+        }
+      },
+    },
+    {
       name: 'trades',
       description: 'View trade history and stats',
       usage: '/trades [stats|export|recent] [platform] [limit=20]',

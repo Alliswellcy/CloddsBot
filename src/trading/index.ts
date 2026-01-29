@@ -36,6 +36,9 @@ export * from './logger';
 export * from './bots/index';
 export * from '../execution/index';
 export * from './risk';
+export * from './state';
+export * from './stream';
+export * from './builder';
 
 import {
   createTradeLogger,
