@@ -1208,5 +1208,233 @@ export function createDefaultCommands(): CommandDefinition[] {
         return lines.join('\n');
       },
     },
+    // ==========================================================================
+    // Trading Bot Commands
+    // ==========================================================================
+    {
+      name: 'bot',
+      description: 'Manage trading bots (start/stop/status/list)',
+      usage: '/bot [start|stop|pause|resume|status] <strategy-id>',
+      aliases: ['bots', 'strategy'],
+      handler: async (args, ctx) => {
+        // Get trading system from context if available
+        const trading = (ctx as any).trading;
+        if (!trading?.bots) {
+          return 'Trading system not initialized. Configure trading in clodds.json.';
+        }
+
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        const subcommand = parts[0]?.toLowerCase() || 'list';
+        const strategyId = parts[1];
+
+        switch (subcommand) {
+          case 'list': {
+            const statuses = trading.bots.getAllBotStatuses();
+            if (statuses.length === 0) {
+              return [
+                'Trading Bots',
+                'No strategies registered.',
+                '',
+                'Register strategies programmatically:',
+                '  trading.bots.registerStrategy(createMeanReversionStrategy())',
+              ].join('\n');
+            }
+
+            const lines = ['Trading Bots', ''];
+            for (const status of statuses) {
+              const statusEmoji =
+                status.status === 'running' ? '🟢' :
+                status.status === 'paused' ? '🟡' :
+                status.status === 'error' ? '🔴' : '⚪';
+              lines.push(`${statusEmoji} ${status.name} (${status.id})`);
+              lines.push(`   Status: ${status.status}`);
+              lines.push(`   Trades: ${status.tradesCount} | Win rate: ${status.winRate.toFixed(1)}%`);
+              lines.push(`   PnL: $${status.totalPnL.toFixed(2)}`);
+            }
+            return lines.join('\n');
+          }
+
+          case 'start': {
+            if (!strategyId) {
+              return 'Usage: /bot start <strategy-id>';
+            }
+            const started = await trading.bots.startBot(strategyId);
+            return started
+              ? `Bot ${strategyId} started successfully.`
+              : `Failed to start bot ${strategyId}. Check if strategy is registered.`;
+          }
+
+          case 'stop': {
+            if (!strategyId) {
+              return 'Usage: /bot stop <strategy-id>';
+            }
+            await trading.bots.stopBot(strategyId);
+            return `Bot ${strategyId} stopped.`;
+          }
+
+          case 'pause': {
+            if (!strategyId) {
+              return 'Usage: /bot pause <strategy-id>';
+            }
+            trading.bots.pauseBot(strategyId);
+            return `Bot ${strategyId} paused.`;
+          }
+
+          case 'resume': {
+            if (!strategyId) {
+              return 'Usage: /bot resume <strategy-id>';
+            }
+            trading.bots.resumeBot(strategyId);
+            return `Bot ${strategyId} resumed.`;
+          }
+
+          case 'status': {
+            if (!strategyId) {
+              return 'Usage: /bot status <strategy-id>';
+            }
+            const status = trading.bots.getBotStatus(strategyId);
+            if (!status) {
+              return `Strategy ${strategyId} not found.`;
+            }
+
+            const lines = [
+              `Bot: ${status.name} (${status.id})`,
+              '',
+              `Status: ${status.status}`,
+              `Started: ${status.startedAt?.toISOString() || 'never'}`,
+              `Last check: ${status.lastCheck?.toISOString() || 'never'}`,
+              '',
+              'Performance:',
+              `  Trades: ${status.tradesCount}`,
+              `  Win rate: ${status.winRate.toFixed(1)}%`,
+              `  Total PnL: $${status.totalPnL.toFixed(2)}`,
+            ];
+
+            if (status.lastSignal) {
+              lines.push('', `Last signal: ${status.lastSignal.type} ${status.lastSignal.outcome}`);
+              if (status.lastSignal.reason) {
+                lines.push(`  Reason: ${status.lastSignal.reason}`);
+              }
+            }
+
+            if (status.lastError) {
+              lines.push('', `Last error: ${status.lastError}`);
+            }
+
+            return lines.join('\n');
+          }
+
+          default:
+            return [
+              'Usage: /bot [command] [strategy-id]',
+              '',
+              'Commands:',
+              '  list     - Show all registered bots',
+              '  start    - Start a bot',
+              '  stop     - Stop a bot',
+              '  pause    - Pause a running bot',
+              '  resume   - Resume a paused bot',
+              '  status   - Show detailed bot status',
+            ].join('\n');
+        }
+      },
+    },
+    {
+      name: 'trades',
+      description: 'View trade history and stats',
+      usage: '/trades [stats|export|recent] [platform] [limit=20]',
+      handler: async (args, ctx) => {
+        const trading = (ctx as any).trading;
+        if (!trading?.logger) {
+          return 'Trading system not initialized.';
+        }
+
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        const subcommand = parts[0]?.toLowerCase() || 'recent';
+
+        let platform: string | undefined;
+        let limit = 20;
+
+        for (const part of parts.slice(1)) {
+          const lower = part.toLowerCase();
+          if (lower.startsWith('limit=')) {
+            limit = Math.min(100, parseInt(lower.slice(6), 10) || 20);
+          } else if (isPlatformName(lower)) {
+            platform = lower;
+          }
+        }
+
+        switch (subcommand) {
+          case 'stats': {
+            const filter = platform ? { platform: platform as Platform } : {};
+            const stats = trading.logger.getStats(filter);
+
+            return [
+              `Trade Statistics${platform ? ` (${platform})` : ''}`,
+              '',
+              `Total trades: ${stats.totalTrades}`,
+              `Win rate: ${stats.winRate.toFixed(1)}%`,
+              `Winning: ${stats.winningTrades} | Losing: ${stats.losingTrades}`,
+              '',
+              `Total PnL: $${stats.totalPnL.toFixed(2)}`,
+              `Avg PnL: $${stats.avgPnL.toFixed(2)}`,
+              `Avg Win: $${stats.avgWin.toFixed(2)} | Avg Loss: $${stats.avgLoss.toFixed(2)}`,
+              `Largest win: $${stats.largestWin.toFixed(2)}`,
+              `Largest loss: $${stats.largestLoss.toFixed(2)}`,
+              '',
+              `Profit factor: ${stats.profitFactor === Infinity ? '∞' : stats.profitFactor.toFixed(2)}`,
+              `Total volume: $${stats.totalVolume.toFixed(2)}`,
+              `Total fees: $${stats.totalFees.toFixed(2)}`,
+            ].join('\n');
+          }
+
+          case 'daily': {
+            const dailyPnL = trading.logger.getDailyPnL(30);
+            if (dailyPnL.length === 0) {
+              return 'No daily PnL data yet.';
+            }
+
+            const lines = ['Daily PnL (last 30 days)', ''];
+            for (const day of dailyPnL.slice(0, 14)) {
+              const prefix = day.pnl >= 0 ? '+' : '';
+              lines.push(`${day.date}: ${prefix}$${day.pnl.toFixed(2)} (${day.trades} trades)`);
+            }
+            return lines.join('\n');
+          }
+
+          case 'export': {
+            const filter = platform ? { platform: platform as Platform } : {};
+            const csv = trading.logger.exportCsv(filter);
+            return `Exported ${csv.split('\n').length - 1} trades to CSV format.\n\n${csv.slice(0, 1000)}${csv.length > 1000 ? '\n...(truncated)' : ''}`;
+          }
+
+          case 'recent':
+          default: {
+            const filter: any = { limit };
+            if (platform) filter.platform = platform;
+
+            const trades = trading.logger.getTrades(filter);
+            if (trades.length === 0) {
+              return 'No trades recorded yet.';
+            }
+
+            const lines = [`Recent Trades (${trades.length})`, ''];
+            for (const trade of trades.slice(0, 10)) {
+              const pnlStr = trade.realizedPnL !== undefined
+                ? ` PnL: ${trade.realizedPnL >= 0 ? '+' : ''}$${trade.realizedPnL.toFixed(2)}`
+                : '';
+              lines.push(`- ${trade.side.toUpperCase()} ${trade.outcome} @ ${trade.price.toFixed(2)}`);
+              lines.push(`  ${trade.platform} | ${trade.status} | ${trade.filled}/${trade.size} shares${pnlStr}`);
+            }
+
+            if (trades.length > 10) {
+              lines.push(`\n...and ${trades.length - 10} more.`);
+            }
+
+            return lines.join('\n');
+          }
+        }
+      },
+    },
   ];
 }
