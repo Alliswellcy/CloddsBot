@@ -5,7 +5,7 @@
 <h1 align="center">Clodds</h1>
 
 <p align="center">
-  <strong>Your AI-powered prediction market trading assistant</strong>
+  <strong>The AI-powered prediction market platform you run yourself</strong>
 </p>
 
 <p align="center">
@@ -18,122 +18,278 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> •
-  <a href="#features">Features</a> •
-  <a href="#platforms">Platforms</a> •
-  <a href="#commands">Commands</a> •
+  <a href="#everything-we-built">Everything We Built</a> •
   <a href="#screenshots">Screenshots</a> •
+  <a href="#channels">Channels</a> •
+  <a href="#commands">Commands</a> •
   <a href="./docs/USER_GUIDE.md">Docs</a>
 </p>
 
 ---
 
-**Clodds** is an agentic AI assistant that helps you find arbitrage opportunities, execute trades, and manage your portfolio across 9 prediction market platforms. Chat naturally via Telegram, Discord, Slack, or 14+ other channels.
+**Clodds** is a personal AI assistant for prediction market trading. Run it on your own machine, chat via any of **22 messaging platforms**, find arbitrage across **9 prediction markets**, execute trades, and manage your portfolio — all through natural conversation.
 
-Built on Claude, with cross-platform arbitrage detection based on [arXiv:2508.03474](https://arxiv.org/abs/2508.03474) ("Unravelling the Probabilistic Forest"), which found **$40M+ in realized arbitrage** on Polymarket.
+Built on Claude with cross-platform arbitrage detection based on [arXiv:2508.03474](https://arxiv.org/abs/2508.03474) which found **$40M+ in realized arbitrage** on Polymarket.
 
 ---
 
 ## Quick Start
-
-**Install and run in 60 seconds:**
 
 ```bash
 git clone https://github.com/alsk1992/CloddsBot.git
 cd CloddsBot
 npm install
 cp .env.example .env
-# Add your ANTHROPIC_API_KEY to .env
+# Add ANTHROPIC_API_KEY to .env
 npm run build && npm start
 ```
 
-Open `http://localhost:18789/webchat` or connect via Telegram.
+Open `http://localhost:18789/webchat` — no account needed.
+
+For Telegram: add `TELEGRAM_BOT_TOKEN` to `.env` and message your bot.
 
 ---
 
-## Features
+## Everything We Built
 
-### Trading & Arbitrage
+### At a Glance
 
-- **Cross-platform arbitrage detection** — Find price differences across Polymarket, Kalshi, Betfair, and more
-- **Combinatorial arbitrage** — Detect conditional dependencies (Trump wins → Republican wins)
-- **Internal arbitrage** — Find YES + NO < $1 opportunities within single markets
-- **Order execution** — Place limit and market orders on 5 platforms
-- **Portfolio tracking** — Real-time positions, P&L, and performance metrics
-- **Kelly criterion sizing** — Optimal position sizing with fractional Kelly safety
-- **Risk management** — Daily loss limits, max drawdown, position limits, kill switch
-
-### AI Capabilities
-
-- **Multi-agent system** — Specialized agents for trading, research, and alerts
-- **6 LLM providers** — Claude (default), GPT-4, Gemini, Groq, Together, Fireworks
-- **19+ tools** — Browser automation, web search, SQL, Git, Docker, and more
-- **Semantic memory** — Vector embeddings with hybrid BM25 search
-- **Natural language** — Chat naturally, no command memorization required
-
-### Messaging Channels
-
-- **14+ platforms** — Telegram, Discord, Slack, WhatsApp, Teams, Matrix, Signal, IRC, and more
-- **Real-time sync** — Conversations persist across devices
-- **Rich media** — Images, files, code blocks with syntax highlighting
+| Category | What's Included |
+|----------|-----------------|
+| **Messaging** | 22 platforms (Telegram, Discord, WhatsApp, Slack, Teams, Signal, Matrix, iMessage, LINE, Nostr, and more) |
+| **Prediction Markets** | 9 platforms (Polymarket, Kalshi, Betfair, Smarkets, Drift, Manifold, Metaculus, PredictIt) |
+| **Trading** | Order execution on 5 platforms, portfolio tracking, P&L, trade logging |
+| **Arbitrage** | Cross-platform detection, combinatorial analysis, semantic matching, real-time scanning |
+| **AI** | 6 LLM providers, 4 specialized agents, semantic memory, 21 tools |
+| **Solana DeFi** | Jupiter, Raydium, Orca, Meteora, Pump.fun integration |
+| **Payments** | x402 protocol for machine-to-machine USDC payments (Base + Solana) |
+| **Bridging** | Wormhole cross-chain token transfers |
+| **Automation** | Trading bots, cron jobs, webhooks, skills system |
 
 ---
 
-## Platforms
+## Messaging Channels (22)
 
-### Prediction Markets (9)
+Connect via any platform you already use:
 
-| Platform | Data Feed | Trading | Portfolio | Type |
-|----------|:---------:|:-------:|:---------:|------|
+**Chat Platforms**
+- Telegram
+- Discord
+- Slack
+- WhatsApp
+- Microsoft Teams
+- Matrix
+- Signal
+- Google Chat
+- iMessage (via BlueBubbles)
+- LINE
+- Mattermost
+- Nextcloud Talk
+- Zalo
+
+**Decentralized**
+- Nostr
+- Tlon/Urbit
+
+**Streaming & Voice**
+- Twitch
+- Voice (audio/VoIP)
+
+**Built-in**
+- WebChat (browser)
+- IRC
+
+**Features across all channels:**
+- Real-time sync across devices
+- Message editing and deletion
+- Rich text, images, files
+- Reactions and polls
+- Offline message queuing
+
+---
+
+## Prediction Markets (9)
+
+### Full Trading Support
+
+| Platform | Feed | Trading | Portfolio | Type |
+|----------|:----:|:-------:|:---------:|------|
 | **Polymarket** | WebSocket | ✓ | ✓ | Crypto (USDC) |
 | **Kalshi** | WebSocket | ✓ | ✓ | US Regulated |
 | **Betfair** | WebSocket | ✓ | ✓ | Sports Exchange |
 | **Smarkets** | WebSocket | ✓ | ✓ | Sports (2% fees) |
 | **Drift** | REST | ✓ | ✓ | Solana DEX |
-| **Manifold** | WebSocket | — | Partial | Play Money |
-| **Metaculus** | REST | — | — | Forecasting |
-| **PredictIt** | REST | — | — | US Politics |
 
-### Crypto Prices (10 assets)
+### Data Feeds Only
 
-Real-time via Binance WebSocket: BTC, ETH, SOL, XRP, DOGE, ADA, AVAX, MATIC, DOT, LINK
+| Platform | Feed | Type |
+|----------|:----:|------|
+| **Manifold** | WebSocket | Play Money |
+| **Metaculus** | REST | Forecasting |
+| **PredictIt** | REST | US Politics |
 
-### Messaging Channels (14+)
+### Trading Features
+- Limit, market, GTC, FOK orders
+- Real-time orderbook data
+- Position tracking with cost basis
+- P&L calculation (realized + unrealized)
+- Trade history with fill prices
+- Portfolio snapshots over time
 
-Telegram • Discord • Slack • WhatsApp • Microsoft Teams • Matrix • Signal • IRC • Nostr • WebChat • Twitch • BlueBubbles • Zalo • Mattermost
+---
+
+## Crypto & DeFi
+
+### Real-time Prices (10 assets)
+BTC • ETH • SOL • XRP • DOGE • ADA • AVAX • MATIC • DOT • LINK
+
+Via Binance WebSocket with Coinbase/CoinGecko fallback.
+
+### Solana DEX Integration (5 protocols)
+
+| Protocol | Features |
+|----------|----------|
+| **Jupiter** | DEX aggregator, best route finding |
+| **Raydium** | AMM swaps, pool discovery |
+| **Orca** | Whirlpool concentrated liquidity |
+| **Meteora** | DLMM dynamic pools |
+| **Pump.fun** | Token launch protocol |
+
+### Wormhole Bridging
+Cross-chain transfers between:
+- Ethereum ↔ Solana
+- Polygon ↔ Base
+- Avalanche ↔ Optimism
+- Auto-route selection
+- USDC and token wrapping
+
+### x402 Payments
+Machine-to-machine crypto payments:
+- **Networks**: Base, Base Sepolia, Solana, Solana Devnet
+- **Asset**: USDC
+- **Features**: Auto-approval, fee-free via Coinbase facilitator
+- Full client and server middleware
+
+---
+
+## AI System
+
+### LLM Providers (6)
+
+| Provider | Models | Use Case |
+|----------|--------|----------|
+| **Anthropic** | Claude Opus, Sonnet, Haiku | Primary (best for trading) |
+| **OpenAI** | GPT-4, GPT-4o | Fallback |
+| **Google** | Gemini Pro, Flash | Multimodal |
+| **Groq** | Llama, Mixtral | High-speed inference |
+| **Together** | Open models | Cost-effective |
+| **Fireworks** | Various | Fast inference |
+| **Ollama** | Local models | Privacy-first |
+
+### Agents (4)
+
+| Agent | Purpose |
+|-------|---------|
+| **Main** | General conversation, task routing |
+| **Trading** | Order execution, portfolio management |
+| **Research** | Market analysis, news synthesis |
+| **Alerts** | Price monitoring, notifications |
+
+### Tools (21)
+
+**Development**
+- `browser` — Puppeteer web automation
+- `canvas` — Image manipulation
+- `docker` — Container management
+- `exec` — Shell commands (sandboxed)
+- `files` — File system operations
+- `git` — Version control
+- `nodes` — Node.js subprocess execution
+
+**Communication**
+- `email` — SMTP sending
+- `sms` — Twilio SMS
+- `messages` — Cross-platform messaging
+- `webhooks` — HTTP callbacks
+- `web-fetch` — HTTP requests with caching
+- `web-search` — Search engine queries
+
+**Data**
+- `sql` — Direct database queries
+- `image` — Vision analysis
+- `transcription` — Audio to text
+
+### Memory System
+- **Semantic search** — Vector embeddings (LanceDB)
+- **Hybrid search** — BM25 + semantic
+- **Context compression** — Auto-summarize old messages
+- **User profiles** — Preferences, trading rules
+- **Facts & notes** — Persistent knowledge
+
+---
+
+## Arbitrage Detection
+
+Based on [arXiv:2508.03474](https://arxiv.org/abs/2508.03474) — "Unravelling the Probabilistic Forest"
+
+### Opportunity Types
+
+**1. Internal Arbitrage**
+```
+YES: 45c + NO: 52c = 97c
+Buy both → guaranteed $1 payout
+Profit: 3c per dollar
+```
+
+**2. Cross-Platform Arbitrage**
+```
+Polymarket: Trump YES @ 52c
+Kalshi: Trump YES @ 55c
+Buy low, sell high → 3c profit
+```
+
+**3. Combinatorial Arbitrage**
+```
+"Trump wins" (55c) > "Republican wins" (52c)
+Violation: P(Trump) must be ≤ P(Republican)
+Sell Trump, Buy Republican → guaranteed profit
+```
+
+**4. Edge vs Fair Value**
+```
+Market price: 45%
+538 model: 52%
+Edge: 7% (buy YES)
+```
+
+### Detection Features
+- **Semantic matching** — Find equivalent markets across platforms using embeddings
+- **Liquidity scoring** — Factor in orderbook depth and slippage
+- **Kelly sizing** — Optimal position sizing with fractional safety
+- **Real-time scanning** — WebSocket price subscriptions
+- **Heuristic reduction** — O(2^n+m) → O(n·k) via topic clustering
+- **Win rate tracking** — Performance analytics by platform pair
 
 ---
 
 ## Screenshots
 
 ### Arbitrage Scanner
-
-Find cross-platform opportunities with one command.
-
 <img src="./assets/screenshots/arbitrage.png" alt="Arbitrage Scanner" width="700">
 
 ### Portfolio Dashboard
-
-Track all your positions and P&L in real-time.
-
-<img src="./assets/screenshots/portfolio.png" alt="Portfolio Dashboard" width="700">
+<img src="./assets/screenshots/portfolio.png" alt="Portfolio" width="700">
 
 ### Chat Interfaces
-
 <table>
 <tr>
 <td width="40%">
-
-**Telegram**
-
+<strong>Telegram</strong>
 <img src="./assets/screenshots/telegram.png" alt="Telegram" width="280">
-
 </td>
 <td width="60%">
-
-**WebChat**
-
+<strong>WebChat</strong>
 <img src="./assets/screenshots/webchat.png" alt="WebChat" width="400">
-
 </td>
 </tr>
 </table>
@@ -143,10 +299,9 @@ Track all your positions and P&L in real-time.
 ## Commands
 
 ### Opportunity Finding
-
 ```
 /opportunity scan [query]        Find arbitrage opportunities
-/opportunity combinatorial       Scan for conditional dependencies
+/opportunity combinatorial       Scan conditional dependencies
 /opportunity active              Show active opportunities
 /opportunity stats               Performance statistics
 /opportunity link <a> <b>        Link equivalent markets
@@ -154,72 +309,160 @@ Track all your positions and P&L in real-time.
 ```
 
 ### Trading
-
 ```
 /buy <platform> <market> <side> <size> @ <price>
 /sell <platform> <market> <side> <size> @ <price>
 /portfolio                       Show positions and P&L
 /trades stats                    Trade statistics
-/trades recent                   Recent trade history
+/trades recent                   Recent history
 ```
 
-### Bots & Safety
-
+### Bots & Automation
 ```
 /bot list                        List trading bots
 /bot start <id>                  Start a bot
 /bot stop <id>                   Stop a bot
-/safety status                   Safety controls status
-/safety kill                     Emergency stop all trading
+/safety status                   View safety controls
+/safety kill                     Emergency stop all
+```
+
+### Market Research
+```
+/markets <query>                 Search all markets
+/compare <query>                 Compare prices across platforms
+/news <topic>                    Get relevant news
+```
+
+### Memory & Preferences
+```
+/remember <type> <key>=<value>   Store preference/fact/note
+/memory                          View stored memories
+/forget <key>                    Delete memory
 ```
 
 ### General
-
 ```
 /help                            List all commands
-/markets <query>                 Search markets
 /model <name>                    Change AI model
 /new                             Reset conversation
-/remember <key> <value>          Store a preference
-/memory                          View stored memories
+/status                          Check context usage
 ```
+
+---
+
+## Trading Bots
+
+### Built-in Strategies
+
+| Strategy | Description |
+|----------|-------------|
+| **Mean Reversion** | Buy dips, sell rallies based on deviation from moving average |
+| **Momentum** | Follow price trends with configurable lookback |
+| **Arbitrage** | Auto-execute cross-platform opportunities |
+
+### Bot Features
+- Configurable intervals and position sizes
+- Kelly criterion or fixed percentage sizing
+- Stop-loss and take-profit exits
+- Portfolio-aware execution
+- Signal logging and backtesting
+- Live trading with safety limits
+
+---
+
+## Safety & Risk Management
+
+### Trading Safety
+- **Daily loss limit** — Stop after max loss (default: $500)
+- **Max drawdown** — Halt at portfolio drawdown (default: 20%)
+- **Position limits** — Cap single position (default: 25%)
+- **Kill switch** — `/safety kill` stops everything
+- **Dry run mode** — Test without real money
+
+### Security
+- **Sandboxed execution** — Shell commands need approval
+- **Encrypted credentials** — AES-256-GCM at rest
+- **Rate limiting** — Per-platform throttling
+- **Audit logging** — All trades logged
+
+---
+
+## Skills System
+
+### Bundled Skills (13)
+- `alerts` — Price and event alerts
+- `edge` — Edge detection and analysis
+- `markets` — Market search and discovery
+- `news` — News aggregation
+- `portfolio` — Portfolio management
+- `portfolio-sync` — Multi-platform sync
+- `research` — Market research automation
+- `trading-kalshi` — Kalshi trading
+- `trading-manifold` — Manifold trading
+- `trading-polymarket` — Polymarket trading
+- And more...
+
+### Extensibility
+- Install custom skills
+- Per-skill configuration
+- Event-driven architecture
+- Dynamic command registration
+
+---
+
+## Extensions (7)
+
+| Extension | Purpose |
+|-----------|---------|
+| `copilot-proxy` | GitHub Copilot integration |
+| `diagnostics-otel` | OpenTelemetry observability |
+| `google-auth` | Google OAuth |
+| `llm-task` | LLM task orchestration |
+| `lobster` | Advanced tracing |
+| `memory-lancedb` | Vector database for memory |
+| `qwen-portal` | Alibaba Qwen models |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                           GATEWAY                                │
-│         HTTP Server • WebSocket • Auth • Rate Limiting           │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        ▼                       ▼                       ▼
-┌───────────────┐       ┌───────────────┐       ┌───────────────┐
-│   CHANNELS    │       │    AGENTS     │       │    FEEDS      │
-│               │       │               │       │               │
-│ • Telegram    │       │ • Main        │       │ • Polymarket  │
-│ • Discord     │       │ • Trading     │       │ • Kalshi      │
-│ • Slack       │       │ • Research    │       │ • Betfair     │
-│ • WhatsApp    │       │ • Alerts      │       │ • Crypto      │
-│ • Teams       │       │               │       │               │
-│ • Matrix      │       │ Tools (19+)   │       │ Arbitrage     │
-│ • Signal      │       │ Skills        │       │ Detector      │
-│ • WebChat     │       │ Memory        │       │               │
-└───────────────┘       └───────────────┘       └───────────────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        ▼                       ▼                       ▼
-┌───────────────┐       ┌───────────────┐       ┌───────────────┐
-│   PORTFOLIO   │       │  EXECUTION    │       │  OPPORTUNITY  │
-│   Tracking    │       │   Engine      │       │    Finder     │
-│               │       │               │       │               │
-│ • Positions   │       │ • Polymarket  │       │ • Semantic    │
-│ • P&L         │       │ • Kalshi      │       │   Matching    │
-│ • History     │       │ • Betfair     │       │ • Scoring     │
-│ • Snapshots   │       │ • Smarkets    │       │ • Analytics   │
-└───────────────┘       └───────────────┘       └───────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                            GATEWAY                                   │
+│       HTTP • WebSocket • Auth • Rate Limiting • 1000 connections     │
+└─────────────────────────────────┬───────────────────────────────────┘
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        ▼                         ▼                         ▼
+┌───────────────┐         ┌───────────────┐         ┌───────────────┐
+│   CHANNELS    │         │    AGENTS     │         │    FEEDS      │
+│   (22)        │         │    (4)        │         │    (9+)       │
+├───────────────┤         ├───────────────┤         ├───────────────┤
+│ Telegram      │         │ Main          │         │ Polymarket    │
+│ Discord       │         │ Trading       │         │ Kalshi        │
+│ WhatsApp      │         │ Research      │         │ Betfair       │
+│ Slack         │         │ Alerts        │         │ Manifold      │
+│ Teams         │         │               │         │ Crypto (10)   │
+│ Matrix        │         │ Tools (21)    │         │               │
+│ Signal        │         │ Skills (13)   │         │ Arbitrage     │
+│ +15 more      │         │ Memory        │         │ Detector      │
+└───────────────┘         └───────────────┘         └───────────────┘
+        │                         │                         │
+        └─────────────────────────┼─────────────────────────┘
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        ▼                         ▼                         ▼
+┌───────────────┐         ┌───────────────┐         ┌───────────────┐
+│   TRADING     │         │   SOLANA      │         │   PAYMENTS    │
+│               │         │   DeFi        │         │   (x402)      │
+├───────────────┤         ├───────────────┤         ├───────────────┤
+│ Execution     │         │ Jupiter       │         │ Base USDC     │
+│ Portfolio     │         │ Raydium       │         │ Solana USDC   │
+│ Trade Logger  │         │ Orca          │         │ Auto-approve  │
+│ Bots          │         │ Meteora       │         │               │
+│ Risk Manager  │         │ Pump.fun      │         │ Wormhole      │
+│ Backtesting   │         │               │         │ Bridge        │
+└───────────────┘         └───────────────┘         └───────────────┘
 ```
 
 ---
@@ -227,34 +470,34 @@ Track all your positions and P&L in real-time.
 ## Configuration
 
 ### Environment Variables
-
 ```bash
 # Required
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Channels (enable one or more)
+# Channels (pick any)
 TELEGRAM_BOT_TOKEN=...
 DISCORD_BOT_TOKEN=...
 SLACK_BOT_TOKEN=...
+SLACK_APP_TOKEN=...
 WHATSAPP_SESSION_PATH=...
 
-# Trading (optional)
+# Trading
 POLYMARKET_API_KEY=...
 POLYMARKET_API_SECRET=...
 POLYMARKET_FUNDER_ADDRESS=...
 KALSHI_API_KEY=...
-KALSHI_API_SECRET=...
 BETFAIR_APP_KEY=...
-BETFAIR_SESSION_TOKEN=...
+
+# Solana
+SOLANA_RPC_URL=...
+SOLANA_PRIVATE_KEY=...
 
 # Features
 MARKET_INDEX_ENABLED=true
 OPPORTUNITY_FINDER_ENABLED=true
-MEMORY_ENABLED=true
 ```
 
 ### Config File (clodds.json)
-
 ```json
 {
   "gateway": {
@@ -262,75 +505,51 @@ MEMORY_ENABLED=true
     "host": "127.0.0.1"
   },
   "agent": {
-    "model": "claude-sonnet-4-20250514",
-    "maxTokens": 8192
+    "model": "claude-sonnet-4-20250514"
   },
   "opportunityFinder": {
     "enabled": true,
     "minEdge": 0.5,
-    "minLiquidity": 100,
     "platforms": ["polymarket", "kalshi", "betfair"],
-    "semanticMatching": true,
-    "realtime": false
+    "semanticMatching": true
   },
   "safety": {
     "dailyLossLimit": 500,
     "maxDrawdownPct": 20,
-    "maxPositionPct": 25,
-    "cooldownMs": 3600000
+    "maxPositionPct": 25
   },
   "trading": {
-    "dryRun": true,
-    "autoLog": true
+    "dryRun": true
   }
 }
 ```
 
 ---
 
-## Safety & Security
-
-### Trading Safety
-
-- **Daily loss limit** — Stop trading after reaching max daily loss (default: $500)
-- **Max drawdown** — Halt on portfolio drawdown from peak (default: 20%)
-- **Position limits** — Cap single position size (default: 25% of portfolio)
-- **Kill switch** — Emergency stop via `/safety kill`
-- **Dry run mode** — Test strategies without real money
-
-### Security Defaults
-
-- **Sandboxed execution** — Shell commands require approval
-- **Credential encryption** — API keys encrypted at rest (AES-256-GCM)
-- **Rate limiting** — Per-platform request throttling
-- **Audit logging** — All trades and commands logged
-
----
-
 ## Channel Setup
 
 ### Telegram
-
 1. Create bot via [@BotFather](https://t.me/botfather)
 2. Add `TELEGRAM_BOT_TOKEN` to `.env`
-3. Message your bot to start
+3. Message your bot
 
 ### Discord
-
-1. Create app at [Discord Developer Portal](https://discord.com/developers/applications)
+1. Create app at [Discord Developer Portal](https://discord.com/developers)
 2. Enable Message Content Intent
 3. Add `DISCORD_BOT_TOKEN` to `.env`
 4. Invite bot to server
 
 ### Slack
-
 1. Create app at [Slack API](https://api.slack.com/apps)
 2. Enable Socket Mode
-3. Add `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` to `.env`
+3. Add `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`
+
+### WhatsApp
+1. Use BlueBubbles or Baileys for connection
+2. Configure session path in `.env`
 
 ### WebChat
-
-Built-in at `http://localhost:18789/webchat` — no setup required.
+Built-in at `http://localhost:18789/webchat` — no setup needed.
 
 ---
 
@@ -338,93 +557,49 @@ Built-in at `http://localhost:18789/webchat` — no setup required.
 
 | Guide | Description |
 |-------|-------------|
-| [User Guide](./docs/USER_GUIDE.md) | Day-to-day usage, commands, workflows |
-| [Opportunity Finder](./docs/OPPORTUNITY_FINDER.md) | Arbitrage detection, scoring, analytics |
-| [Trading System](./docs/TRADING.md) | Execution, bots, strategies, safety |
-| [API Reference](./docs/API.md) | HTTP endpoints, webhooks |
-| [Deployment](./docs/DEPLOYMENT_GUIDE.md) | Production setup, Docker, monitoring |
+| [User Guide](./docs/USER_GUIDE.md) | Daily usage, commands |
+| [Opportunity Finder](./docs/OPPORTUNITY_FINDER.md) | Arbitrage detection |
+| [Trading System](./docs/TRADING.md) | Execution, bots, safety |
+| [API Reference](./docs/API.md) | HTTP endpoints |
+| [Deployment](./docs/DEPLOYMENT_GUIDE.md) | Production setup |
 
 ---
 
 ## Development
 
 ```bash
-# Development mode (hot reload)
-npm run dev
-
-# Run tests
-npm test
-
-# Type checking
-npm run typecheck
-
-# Linting
-npm run lint
-
-# Build
-npm run build
+npm run dev          # Hot reload
+npm test             # Run tests
+npm run typecheck    # Type check
+npm run lint         # Lint
+npm run build        # Build
 ```
 
 ### Docker
-
 ```bash
 docker compose up --build
 ```
 
-### Regenerate Screenshots
-
-```bash
-node scripts/capture-screenshots.js
-```
-
 ---
 
-## Arbitrage Detection
+## Summary
 
-Based on [arXiv:2508.03474](https://arxiv.org/abs/2508.03474) — "Unravelling the Probabilistic Forest: Arbitrage in Prediction Markets"
-
-The paper found **$40M+ in realized arbitrage profits** on Polymarket through:
-
-### Market Rebalancing
-When YES + NO prices don't sum to $1:
-```
-YES: 45c + NO: 52c = 97c
-Buy both → guaranteed $1 payout
-Profit: 3c per dollar
-```
-
-### Combinatorial Arbitrage
-Conditional dependencies between markets:
-```
-"Trump wins" (55c) > "Republican wins" (52c)
-Violation: P(Trump) must be ≤ P(Republican)
-Strategy: Sell Trump, Buy Republican
-```
-
-### Heuristic Reduction
-Naive analysis requires O(2^n+m) comparisons. We reduce via:
-- **Timeliness** — Compare markets with similar end dates
-- **Topical clustering** — Group by topic (elections, crypto, fed)
-- **Logical relationships** — implies, inverse, mutually_exclusive
-
----
-
-## Contributing
-
-Contributions welcome! Please read our contributing guidelines before submitting PRs.
-
-```bash
-git checkout -b feature/your-feature
-npm test
-git commit -m "Add your feature"
-git push origin feature/your-feature
-```
+| Category | Count |
+|----------|------:|
+| Messaging Channels | **22** |
+| Prediction Markets | **9** |
+| AI Tools | **21** |
+| Skills | **13** |
+| LLM Providers | **6** |
+| Solana DEX Protocols | **5** |
+| Trading Strategies | **3** |
+| Extensions | **7** |
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](./LICENSE)
+MIT — see [LICENSE](./LICENSE)
 
 ---
 
