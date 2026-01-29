@@ -50,6 +50,70 @@ For Telegram: add `TELEGRAM_BOT_TOKEN` to `.env` and message your bot.
 
 ---
 
+## CLI Commands
+
+After installing, all commands start with `clodds`:
+
+```bash
+# Core
+clodds start                    # Start the gateway
+clodds repl                     # Interactive local REPL
+clodds doctor                   # Run system diagnostics
+clodds status                   # Show system status
+clodds endpoints                # Show webhook endpoints
+
+# User Management
+clodds pairing list <channel>   # List pending pairing requests
+clodds pairing approve <ch> <c> # Approve a pairing request
+clodds pairing users <channel>  # List paired users
+clodds pairing add <ch> <user>  # Add user to allowlist
+
+# Configuration
+clodds config get [key]         # Get config value
+clodds config set <key> <val>   # Set config value
+clodds config path              # Show config file path
+
+# Skills & Extensions
+clodds skills list              # List installed skills
+clodds skills search <query>    # Search skill registry
+clodds skills install <slug>    # Install a skill
+clodds skills update [slug]     # Update skills
+
+# Sessions & Memory
+clodds session list             # List active sessions
+clodds session clear [id]       # Clear session(s)
+clodds memory list <userId>     # View user memories
+clodds memory clear <userId>    # Clear memories
+
+# Automation
+clodds cron list                # List scheduled jobs
+clodds cron show <id>           # Show job details
+clodds cron enable <id>         # Enable a job
+clodds cron disable <id>        # Disable a job
+
+# MCP Servers
+clodds mcp list                 # List MCP servers
+clodds mcp add <name> <cmd>     # Add MCP server
+clodds mcp test <name>          # Test connection
+
+# Permissions (sandboxed execution)
+clodds permissions list         # Show permission rules
+clodds permissions allow <pat>  # Add allow pattern
+clodds permissions pending      # Show pending requests
+
+# Usage Tracking
+clodds usage summary            # Token usage summary
+clodds usage by-model           # Usage by model
+clodds usage by-user            # Usage by user
+
+# Account
+clodds login                    # Authenticate
+clodds logout                   # Sign out
+clodds version                  # Show version
+```
+
+---
+
 ## Everything We Built
 
 ### At a Glance
@@ -296,7 +360,9 @@ Edge: 7% (buy YES)
 
 ---
 
-## Commands
+## Chat Commands
+
+These commands work inside any chat interface (Telegram, Discord, WebChat, etc.):
 
 ### Opportunity Finding
 ```
