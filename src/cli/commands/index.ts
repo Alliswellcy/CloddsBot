@@ -802,29 +802,188 @@ export function createMemoryCommands(program: Command): void {
     .command('memory')
     .description('Manage memory');
 
+  const withDb = async <T,>(fn: (db: ReturnType<typeof createDatabase>) => T | Promise<T>) => {
+    const db = createDatabase();
+    createMigrationRunner(db).migrate();
+    try {
+      return await fn(db);
+    } finally {
+      db.close();
+    }
+  };
+
   memory
     .command('list <userId>')
     .description('List memories for a user')
-    .option('-t, --type <type>', 'Filter by type (fact, preference, note)')
-    .action(async (userId: string, options: { type?: string }) => {
-      console.log(`\nMemories for ${userId}:`);
-      console.log('(Memory listing would show stored facts, preferences, notes)');
+    .option('-t, --type <type>', 'Filter by type (fact, preference, note, summary, context, profile)')
+    .option('-c, --channel <channel>', 'Filter by channel', 'cli')
+    .option('-l, --limit <n>', 'Limit results', '50')
+    .action(async (userId: string, options: { type?: string; channel?: string; limit?: string }) => {
+      await withDb((db) => {
+        const limit = parseInt(options.limit || '50', 10);
+        let query = 'SELECT * FROM user_memory WHERE userId = ?';
+        const params: (string | number)[] = [userId];
+
+        if (options.channel) {
+          query += ' AND channel = ?';
+          params.push(options.channel);
+        }
+        if (options.type) {
+          query += ' AND type = ?';
+          params.push(options.type);
+        }
+        query += ' ORDER BY updatedAt DESC LIMIT ?';
+        params.push(limit);
+
+        try {
+          const rows = db.query<{
+            id: string;
+            userId: string;
+            channel: string;
+            type: string;
+            key: string;
+            value: string;
+            createdAt: string;
+            updatedAt: string;
+            expiresAt: string | null;
+          }>(query, params);
+
+          if (rows.length === 0) {
+            console.log(`\nNo memories found for user: ${userId}`);
+            if (options.type) console.log(`  (filtered by type: ${options.type})`);
+            return;
+          }
+
+          console.log(`\nMemories for ${userId} (${rows.length}):\n`);
+          console.log('Type\t\tKey\t\t\tValue\t\t\t\tUpdated');
+          console.log('─'.repeat(90));
+
+          for (const row of rows) {
+            const key = row.key.length > 20 ? row.key.slice(0, 17) + '...' : row.key.padEnd(20);
+            const value = row.value.length > 30 ? row.value.slice(0, 27) + '...' : row.value.padEnd(30);
+            const updated = row.updatedAt.slice(0, 16).replace('T', ' ');
+            console.log(`${row.type.padEnd(12)}\t${key}\t${value}\t${updated}`);
+          }
+        } catch (e) {
+          // Table might not exist yet
+          console.log(`\nNo memories found for user: ${userId}`);
+          console.log('(Memory table not initialized - run the gateway first)');
+        }
+      });
     });
 
   memory
     .command('clear <userId>')
     .description('Clear all memories for a user')
-    .action(async (userId: string) => {
-      console.log(`Cleared memories for ${userId}`);
+    .option('-c, --channel <channel>', 'Clear only for specific channel')
+    .option('-t, --type <type>', 'Clear only specific type')
+    .option('-y, --yes', 'Skip confirmation')
+    .action(async (userId: string, options: { channel?: string; type?: string; yes?: boolean }) => {
+      await withDb((db) => {
+        let query = 'DELETE FROM user_memory WHERE userId = ?';
+        const params: string[] = [userId];
+        let desc = `all memories for ${userId}`;
+
+        if (options.channel) {
+          query += ' AND channel = ?';
+          params.push(options.channel);
+          desc += ` in channel ${options.channel}`;
+        }
+        if (options.type) {
+          query += ' AND type = ?';
+          params.push(options.type);
+          desc += ` of type ${options.type}`;
+        }
+
+        if (!options.yes) {
+          console.log(`About to delete ${desc}`);
+          console.log('Run with --yes to confirm');
+          return;
+        }
+
+        try {
+          // Count before delete
+          const countBefore = db.query<{ count: number }>('SELECT COUNT(*) as count FROM user_memory WHERE userId = ?', [userId]);
+          db.run(query, params);
+          const countAfter = db.query<{ count: number }>('SELECT COUNT(*) as count FROM user_memory WHERE userId = ?', [userId]);
+          const deleted = (countBefore[0]?.count || 0) - (countAfter[0]?.count || 0);
+          console.log(`Cleared ${deleted} memories for ${userId}`);
+        } catch (e) {
+          console.log('No memories to clear (table not initialized)');
+        }
+      });
     });
 
   memory
     .command('export <userId>')
     .description('Export memories to JSON')
     .option('-o, --output <file>', 'Output file')
-    .action(async (userId: string, options: { output?: string }) => {
-      const output = options.output || `${userId}-memories.json`;
-      console.log(`Exported memories to ${output}`);
+    .option('-c, --channel <channel>', 'Export only for specific channel')
+    .action(async (userId: string, options: { output?: string; channel?: string }) => {
+      await withDb((db) => {
+        let query = 'SELECT * FROM user_memory WHERE userId = ?';
+        const params: string[] = [userId];
+
+        if (options.channel) {
+          query += ' AND channel = ?';
+          params.push(options.channel);
+        }
+        query += ' ORDER BY type, key';
+
+        try {
+          const rows = db.query<Record<string, unknown>>(query, params);
+          const output = options.output || `${userId}-memories.json`;
+
+          if (rows.length === 0) {
+            console.log(`No memories to export for ${userId}`);
+            return;
+          }
+
+          writeFileSync(output, JSON.stringify(rows, null, 2));
+          console.log(`Exported ${rows.length} memories to ${output}`);
+        } catch (e) {
+          console.log('No memories to export (table not initialized)');
+        }
+      });
+    });
+
+  memory
+    .command('search <userId> <query>')
+    .description('Search memories by content')
+    .option('-c, --channel <channel>', 'Search only in specific channel')
+    .action(async (userId: string, query: string, options: { channel?: string }) => {
+      await withDb((db) => {
+        let sql = 'SELECT * FROM user_memory WHERE userId = ? AND (key LIKE ? OR value LIKE ?)';
+        const searchPattern = `%${query}%`;
+        const params: string[] = [userId, searchPattern, searchPattern];
+
+        if (options.channel) {
+          sql += ' AND channel = ?';
+          params.push(options.channel);
+        }
+        sql += ' ORDER BY updatedAt DESC LIMIT 20';
+
+        try {
+          const rows = db.query<{
+            type: string;
+            key: string;
+            value: string;
+            updatedAt: string;
+          }>(sql, params);
+
+          if (rows.length === 0) {
+            console.log(`\nNo memories matching "${query}" for ${userId}`);
+            return;
+          }
+
+          console.log(`\nSearch results for "${query}" (${rows.length}):\n`);
+          for (const row of rows) {
+            console.log(`[${row.type}] ${row.key}: ${row.value.slice(0, 60)}${row.value.length > 60 ? '...' : ''}`);
+          }
+        } catch (e) {
+          console.log('Memory table not initialized');
+        }
+      });
     });
 }
 
@@ -1097,23 +1256,197 @@ export function createMcpCommands(program: Command): void {
   mcp
     .command('add <name> <command>')
     .description('Add an MCP server')
-    .option('-a, --args <args>', 'Command arguments')
-    .action(async (name: string, command: string, options: { args?: string }) => {
-      console.log(`Adding MCP server: ${name} -> ${command}`);
+    .option('-a, --args <args>', 'Command arguments (comma-separated)')
+    .option('-e, --env <env>', 'Environment variables (KEY=VALUE,KEY2=VALUE2)')
+    .option('--global', 'Add to global config instead of project')
+    .action(async (name: string, command: string, options: { args?: string; env?: string; global?: boolean }) => {
+      const configPath = options.global
+        ? join(homedir(), '.config', 'clodds', 'mcp.json')
+        : join(process.cwd(), '.mcp.json');
+
+      // Ensure directory exists for global config
+      if (options.global) {
+        const configDir = join(homedir(), '.config', 'clodds');
+        if (!existsSync(configDir)) {
+          mkdirSync(configDir, { recursive: true });
+        }
+      }
+
+      // Load or create config
+      let config: { mcpServers?: Record<string, unknown> } = { mcpServers: {} };
+      if (existsSync(configPath)) {
+        try {
+          config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        } catch (e) {
+          console.error(`Error reading ${configPath}: ${e}`);
+          return;
+        }
+      }
+
+      if (!config.mcpServers) {
+        config.mcpServers = {};
+      }
+
+      // Check if already exists
+      if (config.mcpServers[name]) {
+        console.log(`MCP server "${name}" already exists. Use 'mcp remove' first to replace.`);
+        return;
+      }
+
+      // Build server config
+      const serverConfig: {
+        command: string;
+        args?: string[];
+        env?: Record<string, string>;
+      } = { command };
+
+      if (options.args) {
+        serverConfig.args = options.args.split(',').map(a => a.trim());
+      }
+
+      if (options.env) {
+        serverConfig.env = {};
+        for (const pair of options.env.split(',')) {
+          const [key, ...valueParts] = pair.split('=');
+          if (key && valueParts.length > 0) {
+            serverConfig.env[key.trim()] = valueParts.join('=').trim();
+          }
+        }
+      }
+
+      config.mcpServers[name] = serverConfig;
+
+      // Write config
+      writeFileSync(configPath, JSON.stringify(config, null, 2));
+      console.log(`Added MCP server "${name}" to ${configPath}`);
+      console.log(`  Command: ${command}`);
+      if (serverConfig.args) console.log(`  Args: ${serverConfig.args.join(' ')}`);
+      if (serverConfig.env) console.log(`  Env: ${Object.keys(serverConfig.env).join(', ')}`);
     });
 
   mcp
     .command('remove <name>')
     .description('Remove an MCP server')
-    .action(async (name: string) => {
-      console.log(`Removing MCP server: ${name}`);
+    .option('--global', 'Remove from global config instead of project')
+    .action(async (name: string, options: { global?: boolean }) => {
+      const configPath = options.global
+        ? join(homedir(), '.config', 'clodds', 'mcp.json')
+        : join(process.cwd(), '.mcp.json');
+
+      if (!existsSync(configPath)) {
+        console.log(`No MCP config found at ${configPath}`);
+        return;
+      }
+
+      let config: { mcpServers?: Record<string, unknown> };
+      try {
+        config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      } catch (e) {
+        console.error(`Error reading ${configPath}: ${e}`);
+        return;
+      }
+
+      if (!config.mcpServers || !config.mcpServers[name]) {
+        console.log(`MCP server "${name}" not found in ${configPath}`);
+        return;
+      }
+
+      delete config.mcpServers[name];
+      writeFileSync(configPath, JSON.stringify(config, null, 2));
+      console.log(`Removed MCP server "${name}" from ${configPath}`);
     });
 
   mcp
     .command('test <name>')
     .description('Test connection to MCP server')
-    .action(async (name: string) => {
-      console.log(`Testing MCP server: ${name}...`);
+    .option('--global', 'Look in global config instead of project')
+    .option('--timeout <ms>', 'Timeout in milliseconds', '5000')
+    .action(async (name: string, options: { global?: boolean; timeout?: string }) => {
+      const configPaths = options.global
+        ? [join(homedir(), '.config', 'clodds', 'mcp.json')]
+        : [join(process.cwd(), '.mcp.json'), join(homedir(), '.config', 'clodds', 'mcp.json')];
+
+      let serverConfig: { command?: string; args?: string[]; env?: Record<string, string> } | null = null;
+      let foundPath = '';
+
+      for (const configPath of configPaths) {
+        if (existsSync(configPath)) {
+          try {
+            const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+            if (config.mcpServers?.[name]) {
+              serverConfig = config.mcpServers[name];
+              foundPath = configPath;
+              break;
+            }
+          } catch {}
+        }
+      }
+
+      if (!serverConfig || !serverConfig.command) {
+        console.log(`MCP server "${name}" not found`);
+        return;
+      }
+
+      console.log(`Testing MCP server "${name}" from ${foundPath}...`);
+      console.log(`  Command: ${serverConfig.command} ${(serverConfig.args || []).join(' ')}`);
+
+      // Try to spawn the process and check if it starts
+      const { spawn } = require('child_process');
+      const timeout = parseInt(options.timeout || '5000', 10);
+
+      try {
+        const proc = spawn(serverConfig.command, serverConfig.args || [], {
+          env: { ...process.env, ...serverConfig.env },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+
+        let output = '';
+        let errorOutput = '';
+
+        proc.stdout.on('data', (data: Buffer) => {
+          output += data.toString();
+        });
+
+        proc.stderr.on('data', (data: Buffer) => {
+          errorOutput += data.toString();
+        });
+
+        const result = await Promise.race([
+          new Promise<'started'>((resolve) => {
+            // If process emits any data or stays alive for a bit, consider it started
+            setTimeout(() => resolve('started'), 1000);
+          }),
+          new Promise<'error'>((_, reject) => {
+            proc.on('error', (err: Error) => reject(err));
+          }),
+          new Promise<'exited'>((resolve) => {
+            proc.on('exit', (code: number) => {
+              if (code !== 0) resolve('exited');
+            });
+          }),
+          new Promise<'timeout'>((resolve) => {
+            setTimeout(() => resolve('timeout'), timeout);
+          }),
+        ]);
+
+        // Kill the process after test
+        proc.kill();
+
+        if (result === 'started' || result === 'timeout') {
+          console.log(`\n✅ MCP server "${name}" started successfully`);
+          if (output) console.log(`  Output: ${output.slice(0, 200)}`);
+        } else {
+          console.log(`\n❌ MCP server "${name}" failed to start`);
+          if (errorOutput) console.log(`  Error: ${errorOutput.slice(0, 200)}`);
+        }
+      } catch (e) {
+        const err = e as Error;
+        console.log(`\n❌ Failed to start MCP server "${name}"`);
+        console.log(`  Error: ${err.message}`);
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          console.log(`  Command not found: ${serverConfig.command}`);
+        }
+      }
     });
 }
 
@@ -1389,40 +1722,258 @@ export function createUsageCommands(program: Command): void {
     .command('usage')
     .description('View usage statistics');
 
+  const withDb = async <T,>(fn: (db: ReturnType<typeof createDatabase>) => T | Promise<T>) => {
+    const db = createDatabase();
+    createMigrationRunner(db).migrate();
+    try {
+      return await fn(db);
+    } finally {
+      db.close();
+    }
+  };
+
+  const formatCost = (cost: number) => cost < 0.01 ? `$${cost.toFixed(6)}` : `$${cost.toFixed(4)}`;
+
   usage
     .command('summary')
     .description('Show usage summary')
     .option('-d, --days <days>', 'Number of days', '7')
     .action(async (options: { days?: string }) => {
-      console.log(`\nUsage summary (last ${options.days} days):\n`);
-      console.log('  Total requests: 0');
-      console.log('  Total tokens: 0');
-      console.log('  Total cost: $0.00');
+      await withDb((db) => {
+        const days = parseInt(options.days || '7', 10);
+        const since = new Date();
+        since.setDate(since.getDate() - days);
+        const sinceStr = since.toISOString();
+
+        try {
+          const results = db.query<{ requests: number; input_tokens: number; output_tokens: number; cost: number }>(`
+            SELECT
+              COUNT(*) as requests,
+              COALESCE(SUM(input_tokens), 0) as input_tokens,
+              COALESCE(SUM(output_tokens), 0) as output_tokens,
+              COALESCE(SUM(estimated_cost), 0) as cost
+            FROM usage_records
+            WHERE timestamp >= ?
+          `, [sinceStr]);
+
+          const result = results[0];
+          if (!result || result.requests === 0) {
+            console.log(`\nUsage summary (last ${days} days):\n`);
+            console.log('  No usage data recorded');
+            console.log('\n  Usage is tracked when the gateway is running.');
+            return;
+          }
+
+          const totalTokens = result.input_tokens + result.output_tokens;
+
+          console.log(`\nUsage summary (last ${days} days):\n`);
+          console.log(`  Total requests:    ${result.requests.toLocaleString()}`);
+          console.log(`  Input tokens:      ${result.input_tokens.toLocaleString()}`);
+          console.log(`  Output tokens:     ${result.output_tokens.toLocaleString()}`);
+          console.log(`  Total tokens:      ${totalTokens.toLocaleString()}`);
+          console.log(`  Estimated cost:    ${formatCost(result.cost)}`);
+        } catch (e) {
+          console.log('\nUsage table not initialized - run the gateway first');
+        }
+      });
     });
 
   usage
     .command('by-model')
     .description('Show usage by model')
-    .action(async () => {
-      console.log('\nUsage by model:\n');
-      console.log('  (No usage data yet)');
+    .option('-d, --days <days>', 'Number of days', '7')
+    .action(async (options: { days?: string }) => {
+      await withDb((db) => {
+        const days = parseInt(options.days || '7', 10);
+        const since = new Date();
+        since.setDate(since.getDate() - days);
+        const sinceStr = since.toISOString();
+
+        try {
+          const rows = db.query<{
+            model: string;
+            requests: number;
+            input_tokens: number;
+            output_tokens: number;
+            cost: number;
+          }>(`
+            SELECT
+              model,
+              COUNT(*) as requests,
+              SUM(input_tokens) as input_tokens,
+              SUM(output_tokens) as output_tokens,
+              SUM(estimated_cost) as cost
+            FROM usage_records
+            WHERE timestamp >= ?
+            GROUP BY model
+            ORDER BY cost DESC
+          `, [sinceStr]);
+
+          if (rows.length === 0) {
+            console.log('\nUsage by model:\n');
+            console.log('  No usage data recorded');
+            return;
+          }
+
+          console.log(`\nUsage by model (last ${days} days):\n`);
+          console.log('Model\t\t\t\t\tRequests\tTokens\t\tCost');
+          console.log('─'.repeat(85));
+
+          for (const row of rows) {
+            const model = row.model.length > 30 ? row.model.slice(0, 27) + '...' : row.model.padEnd(30);
+            const tokens = (row.input_tokens + row.output_tokens).toLocaleString();
+            console.log(`${model}\t${row.requests}\t\t${tokens.padEnd(12)}\t${formatCost(row.cost)}`);
+          }
+        } catch (e) {
+          console.log('\nUsage table not initialized - run the gateway first');
+        }
+      });
     });
 
   usage
     .command('by-user')
     .description('Show usage by user')
-    .action(async () => {
-      console.log('\nUsage by user:\n');
-      console.log('  (No usage data yet)');
+    .option('-d, --days <days>', 'Number of days', '7')
+    .option('-l, --limit <n>', 'Limit results', '20')
+    .action(async (options: { days?: string; limit?: string }) => {
+      await withDb((db) => {
+        const days = parseInt(options.days || '7', 10);
+        const limit = parseInt(options.limit || '20', 10);
+        const since = new Date();
+        since.setDate(since.getDate() - days);
+        const sinceStr = since.toISOString();
+
+        try {
+          const rows = db.query<{
+            user_id: string;
+            requests: number;
+            input_tokens: number;
+            output_tokens: number;
+            cost: number;
+          }>(`
+            SELECT
+              user_id,
+              COUNT(*) as requests,
+              SUM(input_tokens) as input_tokens,
+              SUM(output_tokens) as output_tokens,
+              SUM(estimated_cost) as cost
+            FROM usage_records
+            WHERE timestamp >= ?
+            GROUP BY user_id
+            ORDER BY cost DESC
+            LIMIT ?
+          `, [sinceStr, limit]);
+
+          if (rows.length === 0) {
+            console.log('\nUsage by user:\n');
+            console.log('  No usage data recorded');
+            return;
+          }
+
+          console.log(`\nUsage by user (last ${days} days, top ${limit}):\n`);
+          console.log('User ID\t\t\t\t\tRequests\tTokens\t\tCost');
+          console.log('─'.repeat(85));
+
+          for (const row of rows) {
+            const userId = row.user_id.length > 28 ? row.user_id.slice(0, 25) + '...' : row.user_id.padEnd(28);
+            const tokens = (row.input_tokens + row.output_tokens).toLocaleString();
+            console.log(`${userId}\t${row.requests}\t\t${tokens.padEnd(12)}\t${formatCost(row.cost)}`);
+          }
+        } catch (e) {
+          console.log('\nUsage table not initialized - run the gateway first');
+        }
+      });
     });
 
   usage
     .command('export')
     .description('Export usage data')
     .option('-o, --output <file>', 'Output file')
-    .action(async (options: { output?: string }) => {
-      const output = options.output || 'usage-export.json';
-      console.log(`Exported usage data to ${output}`);
+    .option('-d, --days <days>', 'Number of days to export', '30')
+    .option('--csv', 'Export as CSV instead of JSON')
+    .action(async (options: { output?: string; days?: string; csv?: boolean }) => {
+      await withDb((db) => {
+        const days = parseInt(options.days || '30', 10);
+        const since = new Date();
+        since.setDate(since.getDate() - days);
+        const sinceStr = since.toISOString();
+
+        try {
+          const rows = db.query<Record<string, unknown>>(`
+            SELECT
+              id, session_id, user_id, model,
+              input_tokens, output_tokens, total_tokens,
+              estimated_cost, timestamp
+            FROM usage_records
+            WHERE timestamp >= ?
+            ORDER BY timestamp DESC
+          `, [sinceStr]);
+
+          if (rows.length === 0) {
+            console.log('No usage data to export');
+            return;
+          }
+
+          const ext = options.csv ? 'csv' : 'json';
+          const output = options.output || `usage-export-${new Date().toISOString().slice(0, 10)}.${ext}`;
+
+          if (options.csv) {
+            const headers = ['id', 'session_id', 'user_id', 'model', 'input_tokens', 'output_tokens', 'total_tokens', 'estimated_cost', 'timestamp'];
+            const csvContent = [
+              headers.join(','),
+              ...rows.map(row => headers.map(h => {
+                const val = row[h];
+                if (typeof val === 'string' && val.includes(',')) return `"${val}"`;
+                return val;
+              }).join(','))
+            ].join('\n');
+            writeFileSync(output, csvContent);
+          } else {
+            writeFileSync(output, JSON.stringify(rows, null, 2));
+          }
+
+          console.log(`Exported ${rows.length} usage records to ${output}`);
+        } catch (e) {
+          console.log('Usage table not initialized - run the gateway first');
+        }
+      });
+    });
+
+  usage
+    .command('today')
+    .description('Show today\'s usage')
+    .action(async () => {
+      await withDb((db) => {
+        const today = new Date().toISOString().slice(0, 10);
+
+        try {
+          const results = db.query<{ requests: number; input_tokens: number; output_tokens: number; cost: number }>(`
+            SELECT
+              COUNT(*) as requests,
+              COALESCE(SUM(input_tokens), 0) as input_tokens,
+              COALESCE(SUM(output_tokens), 0) as output_tokens,
+              COALESCE(SUM(estimated_cost), 0) as cost
+            FROM usage_records
+            WHERE timestamp >= ?
+          `, [today]);
+
+          const result = results[0];
+          if (!result || result.requests === 0) {
+            console.log(`\nToday's usage (${today}):\n`);
+            console.log('  No usage yet today');
+            return;
+          }
+
+          console.log(`\nToday's usage (${today}):\n`);
+          console.log(`  Requests:      ${result.requests.toLocaleString()}`);
+          console.log(`  Input tokens:  ${result.input_tokens.toLocaleString()}`);
+          console.log(`  Output tokens: ${result.output_tokens.toLocaleString()}`);
+          console.log(`  Total tokens:  ${(result.input_tokens + result.output_tokens).toLocaleString()}`);
+          console.log(`  Cost:          ${formatCost(result.cost)}`);
+        } catch (e) {
+          console.log('Usage table not initialized - run the gateway first');
+        }
+      });
     });
 }
 
