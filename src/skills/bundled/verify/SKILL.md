@@ -94,7 +94,7 @@ const txHash = await client.giveFeedback(1234, 85, 'Great trading signals');
 ```typescript
 import { createERC8004Client, buildAgentCard } from 'clodds/identity';
 
-const client = createERC8004Client('base-sepolia', process.env.PRIVATE_KEY);
+const client = createERC8004Client('base', process.env.PRIVATE_KEY);
 
 // Build agent card
 const card = buildAgentCard({
@@ -124,19 +124,23 @@ Same on all EVM chains (CREATE2 deterministic):
 | Reputation Registry | `0xB5048e3ef1DA4E04deB6f7d0423D06F63869e322` |
 | Validation Registry | `0x662b40A526cb4017d947e71eAF6753BF3eeE66d8` |
 
-**Live on:** Ethereum Sepolia, Base Sepolia, Optimism Sepolia
+**Live on:** Ethereum, Base, Optimism, Arbitrum, Polygon (and testnets)
 
 ---
 
 ## Supported Networks
 
-| Network | Status |
-|---------|--------|
-| Base Sepolia | Live |
-| Ethereum Sepolia | Live |
-| Optimism Sepolia | Live |
-| Base Mainnet | Pending |
-| Ethereum Mainnet | Pending |
+| Network | Status | Default |
+|---------|--------|---------|
+| Base | Live | ✓ |
+| Ethereum | Live | |
+| Optimism | Live | |
+| Arbitrum | Live | |
+| Polygon | Live | |
+| Sepolia (testnet) | Live | |
+| Base Sepolia | Live | |
+
+Mainnet launched **January 29, 2026**. 19,000+ agents already registered.
 
 ---
 

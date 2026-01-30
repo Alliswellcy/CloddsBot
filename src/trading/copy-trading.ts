@@ -129,7 +129,7 @@ const DEFAULT_CONFIG: Required<CopyTradingConfig> = {
   // ERC-8004 Identity Verification
   requireVerifiedIdentity: false,
   minReputationScore: 0,
-  identityNetwork: 'base-sepolia',
+  identityNetwork: 'base',  // Mainnet (live Jan 29, 2026)
 };
 
 // =============================================================================

@@ -23,16 +23,16 @@ export const ERC8004_CONTRACTS = {
 
 // Supported networks
 export const ERC8004_NETWORKS: Record<string, { chainId: number; rpc: string; name: string }> = {
-  // Testnets (live)
-  'sepolia': { chainId: 11155111, rpc: 'https://rpc.sepolia.org', name: 'Ethereum Sepolia' },
-  'base-sepolia': { chainId: 84532, rpc: 'https://sepolia.base.org', name: 'Base Sepolia' },
-  'optimism-sepolia': { chainId: 11155420, rpc: 'https://sepolia.optimism.io', name: 'Optimism Sepolia' },
-  // Mainnets (pending deployment)
+  // Mainnets (live as of Jan 29, 2026)
   'ethereum': { chainId: 1, rpc: 'https://eth.llamarpc.com', name: 'Ethereum' },
   'base': { chainId: 8453, rpc: 'https://mainnet.base.org', name: 'Base' },
   'optimism': { chainId: 10, rpc: 'https://mainnet.optimism.io', name: 'Optimism' },
   'arbitrum': { chainId: 42161, rpc: 'https://arb1.arbitrum.io/rpc', name: 'Arbitrum' },
   'polygon': { chainId: 137, rpc: 'https://polygon-rpc.com', name: 'Polygon' },
+  // Testnets
+  'sepolia': { chainId: 11155111, rpc: 'https://rpc.sepolia.org', name: 'Ethereum Sepolia' },
+  'base-sepolia': { chainId: 84532, rpc: 'https://sepolia.base.org', name: 'Base Sepolia' },
+  'optimism-sepolia': { chainId: 11155420, rpc: 'https://sepolia.optimism.io', name: 'Optimism Sepolia' },
 };
 
 // =============================================================================
@@ -145,7 +145,7 @@ export interface ERC8004Client {
 }
 
 export function createERC8004Client(
-  network: keyof typeof ERC8004_NETWORKS = 'base-sepolia',
+  network: keyof typeof ERC8004_NETWORKS = 'base',
   privateKey?: string
 ): ERC8004Client {
   const networkConfig = ERC8004_NETWORKS[network];
@@ -456,7 +456,7 @@ export function buildAgentCard(options: {
  */
 export async function verifyAgent(
   agentId: number,
-  network: keyof typeof ERC8004_NETWORKS = 'base-sepolia'
+  network: keyof typeof ERC8004_NETWORKS = 'base'
 ): Promise<VerificationResult> {
   const client = createERC8004Client(network);
   return client.verify(agentId);
@@ -467,7 +467,7 @@ export async function verifyAgent(
  */
 export async function hasIdentity(
   address: string,
-  network: keyof typeof ERC8004_NETWORKS = 'base-sepolia'
+  network: keyof typeof ERC8004_NETWORKS = 'base'
 ): Promise<boolean> {
   const client = createERC8004Client(network);
   const result = await client.verify(address);
