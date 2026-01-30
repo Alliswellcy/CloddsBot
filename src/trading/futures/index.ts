@@ -107,6 +107,96 @@ export interface FuturesMarket {
   volume24h: number;
 }
 
+// Additional comprehensive types for full API coverage
+export interface FuturesTrade {
+  id: string;
+  exchange: FuturesExchange;
+  symbol: string;
+  orderId: string;
+  side: OrderSide;
+  price: number;
+  quantity: number;
+  realizedPnl: number;
+  commission: number;
+  commissionAsset: string;
+  timestamp: number;
+  isMaker: boolean;
+}
+
+export interface FuturesKline {
+  openTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  closeTime: number;
+  quoteVolume: number;
+  trades: number;
+  takerBuyVolume: number;
+  takerBuyQuoteVolume: number;
+}
+
+export interface FuturesOrderBook {
+  exchange: FuturesExchange;
+  symbol: string;
+  lastUpdateId: number;
+  bids: Array<[number, number]>; // [price, quantity]
+  asks: Array<[number, number]>;
+  timestamp: number;
+}
+
+export interface FuturesIncome {
+  symbol: string;
+  incomeType: 'REALIZED_PNL' | 'FUNDING_FEE' | 'COMMISSION' | 'TRANSFER' | 'OTHER';
+  income: number;
+  asset: string;
+  timestamp: number;
+  tradeId?: string;
+}
+
+export interface FuturesLeverageBracket {
+  symbol: string;
+  brackets: Array<{
+    bracket: number;
+    initialLeverage: number;
+    notionalCap: number;
+    notionalFloor: number;
+    maintMarginRatio: number;
+  }>;
+}
+
+export interface FuturesAccountInfo {
+  exchange: FuturesExchange;
+  totalWalletBalance: number;
+  totalUnrealizedProfit: number;
+  totalMarginBalance: number;
+  totalPositionInitialMargin: number;
+  totalOpenOrderInitialMargin: number;
+  availableBalance: number;
+  maxWithdrawAmount: number;
+  canTrade: boolean;
+  canDeposit: boolean;
+  canWithdraw: boolean;
+  positions: FuturesPosition[];
+}
+
+export interface FuturesRiskLimit {
+  symbol: string;
+  maxLeverage: number;
+  maintenanceMarginRate: number;
+  riskLimitValue: number;
+}
+
+export interface FuturesFundingHistory {
+  symbol: string;
+  fundingRate: number;
+  fundingTime: number;
+  markPrice?: number;
+}
+
+export type KlineInterval = '1m' | '3m' | '5m' | '15m' | '30m' | '1h' | '2h' | '4h' | '6h' | '8h' | '12h' | '1d' | '3d' | '1w' | '1M';
+
 export interface FuturesConfig {
   exchange: FuturesExchange;
   credentials: FuturesCredentials;
@@ -261,7 +351,7 @@ class BinanceFuturesClient {
   }
 
   private async request(
-    method: 'GET' | 'POST' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     endpoint: string,
     params: Record<string, string | number> = {},
     signed = false
@@ -576,6 +666,439 @@ class BinanceFuturesClient {
       timestamp: o.time,
     }));
   }
+
+  // =========== ADDITIONAL COMPREHENSIVE METHODS ===========
+
+  async getAccountInfo(): Promise<FuturesAccountInfo> {
+    const data = await this.request('GET', '/fapi/v2/account', {}, true) as {
+      totalWalletBalance: string;
+      totalUnrealizedProfit: string;
+      totalMarginBalance: string;
+      totalPositionInitialMargin: string;
+      totalOpenOrderInitialMargin: string;
+      availableBalance: string;
+      maxWithdrawAmount: string;
+      canTrade: boolean;
+      canDeposit: boolean;
+      canWithdraw: boolean;
+      positions: Array<{
+        symbol: string;
+        positionAmt: string;
+        entryPrice: string;
+        markPrice: string;
+        unRealizedProfit: string;
+        liquidationPrice: string;
+        leverage: string;
+        marginType: string;
+        isolatedMargin: string;
+      }>;
+    };
+
+    const positions = data.positions
+      .filter(p => parseFloat(p.positionAmt) !== 0)
+      .map(p => {
+        const size = parseFloat(p.positionAmt);
+        const entryPrice = parseFloat(p.entryPrice);
+        const markPrice = parseFloat(p.markPrice);
+        const pnl = parseFloat(p.unRealizedProfit);
+        return {
+          exchange: 'binance' as FuturesExchange,
+          symbol: p.symbol,
+          side: size > 0 ? 'LONG' : 'SHORT' as PositionSide,
+          size: Math.abs(size),
+          entryPrice,
+          markPrice,
+          liquidationPrice: parseFloat(p.liquidationPrice),
+          leverage: parseInt(p.leverage),
+          marginType: p.marginType.toUpperCase() as MarginType,
+          unrealizedPnl: pnl,
+          unrealizedPnlPct: Math.abs(size) * entryPrice > 0 ? (pnl / (Math.abs(size) * entryPrice)) * 100 : 0,
+          margin: parseFloat(p.isolatedMargin) || 0,
+          timestamp: Date.now(),
+        };
+      });
+
+    return {
+      exchange: 'binance',
+      totalWalletBalance: parseFloat(data.totalWalletBalance),
+      totalUnrealizedProfit: parseFloat(data.totalUnrealizedProfit),
+      totalMarginBalance: parseFloat(data.totalMarginBalance),
+      totalPositionInitialMargin: parseFloat(data.totalPositionInitialMargin),
+      totalOpenOrderInitialMargin: parseFloat(data.totalOpenOrderInitialMargin),
+      availableBalance: parseFloat(data.availableBalance),
+      maxWithdrawAmount: parseFloat(data.maxWithdrawAmount),
+      canTrade: data.canTrade,
+      canDeposit: data.canDeposit,
+      canWithdraw: data.canWithdraw,
+      positions,
+    };
+  }
+
+  async getTradeHistory(symbol: string, limit = 500): Promise<FuturesTrade[]> {
+    const data = await this.request('GET', '/fapi/v1/userTrades', { symbol, limit }, true) as Array<{
+      id: number;
+      symbol: string;
+      orderId: number;
+      side: string;
+      price: string;
+      qty: string;
+      realizedPnl: string;
+      commission: string;
+      commissionAsset: string;
+      time: number;
+      maker: boolean;
+    }>;
+
+    return data.map(t => ({
+      id: String(t.id),
+      exchange: 'binance' as FuturesExchange,
+      symbol: t.symbol,
+      orderId: String(t.orderId),
+      side: t.side as OrderSide,
+      price: parseFloat(t.price),
+      quantity: parseFloat(t.qty),
+      realizedPnl: parseFloat(t.realizedPnl),
+      commission: parseFloat(t.commission),
+      commissionAsset: t.commissionAsset,
+      timestamp: t.time,
+      isMaker: t.maker,
+    }));
+  }
+
+  async getOrderHistory(symbol?: string, limit = 500): Promise<FuturesOrder[]> {
+    const params: Record<string, string | number> = { limit };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/fapi/v1/allOrders', params, true) as Array<{
+      orderId: number;
+      symbol: string;
+      side: string;
+      type: string;
+      origQty: string;
+      executedQty: string;
+      price: string;
+      avgPrice: string;
+      status: string;
+      time: number;
+      reduceOnly: boolean;
+    }>;
+
+    return data.map(o => ({
+      id: String(o.orderId),
+      exchange: 'binance' as FuturesExchange,
+      symbol: o.symbol,
+      side: o.side as OrderSide,
+      type: o.type as OrderType,
+      size: parseFloat(o.origQty),
+      price: parseFloat(o.price),
+      leverage: 1,
+      reduceOnly: o.reduceOnly,
+      status: o.status as FuturesOrder['status'],
+      filledSize: parseFloat(o.executedQty),
+      avgFillPrice: parseFloat(o.avgPrice),
+      timestamp: o.time,
+    }));
+  }
+
+  async getKlines(symbol: string, interval: KlineInterval, limit = 500): Promise<FuturesKline[]> {
+    const data = await this.request('GET', '/fapi/v1/klines', { symbol, interval, limit }) as Array<[
+      number, string, string, string, string, string, number, string, number, string, string, string
+    ]>;
+
+    return data.map(k => ({
+      openTime: k[0],
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5]),
+      closeTime: k[6],
+      quoteVolume: parseFloat(k[7]),
+      trades: k[8],
+      takerBuyVolume: parseFloat(k[9]),
+      takerBuyQuoteVolume: parseFloat(k[10]),
+    }));
+  }
+
+  async getOrderBook(symbol: string, limit = 100): Promise<FuturesOrderBook> {
+    const data = await this.request('GET', '/fapi/v1/depth', { symbol, limit }) as {
+      lastUpdateId: number;
+      bids: Array<[string, string]>;
+      asks: Array<[string, string]>;
+    };
+
+    return {
+      exchange: 'binance',
+      symbol,
+      lastUpdateId: data.lastUpdateId,
+      bids: data.bids.map(([p, q]) => [parseFloat(p), parseFloat(q)]),
+      asks: data.asks.map(([p, q]) => [parseFloat(p), parseFloat(q)]),
+      timestamp: Date.now(),
+    };
+  }
+
+  async getIncomeHistory(symbol?: string, incomeType?: string, limit = 1000): Promise<FuturesIncome[]> {
+    const params: Record<string, string | number> = { limit };
+    if (symbol) params.symbol = symbol;
+    if (incomeType) params.incomeType = incomeType;
+
+    const data = await this.request('GET', '/fapi/v1/income', params, true) as Array<{
+      symbol: string;
+      incomeType: string;
+      income: string;
+      asset: string;
+      time: number;
+      tradeId?: string;
+    }>;
+
+    return data.map(i => ({
+      symbol: i.symbol,
+      incomeType: i.incomeType as FuturesIncome['incomeType'],
+      income: parseFloat(i.income),
+      asset: i.asset,
+      timestamp: i.time,
+      tradeId: i.tradeId,
+    }));
+  }
+
+  async getLeverageBrackets(symbol?: string): Promise<FuturesLeverageBracket[]> {
+    const params: Record<string, string> = {};
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/fapi/v1/leverageBracket', params, true) as Array<{
+      symbol: string;
+      brackets: Array<{
+        bracket: number;
+        initialLeverage: number;
+        notionalCap: number;
+        notionalFloor: number;
+        maintMarginRatio: number;
+      }>;
+    }>;
+
+    return data.map(lb => ({
+      symbol: lb.symbol,
+      brackets: lb.brackets,
+    }));
+  }
+
+  async getPositionMarginHistory(symbol: string, limit = 500): Promise<Array<{
+    symbol: string;
+    type: number;
+    amount: number;
+    asset: string;
+    timestamp: number;
+    positionSide: string;
+  }>> {
+    const data = await this.request('GET', '/fapi/v1/positionMargin/history', { symbol, limit }, true) as Array<{
+      symbol: string;
+      type: number;
+      deltaAmount: string;
+      asset: string;
+      time: number;
+      positionSide: string;
+    }>;
+
+    return data.map(h => ({
+      symbol: h.symbol,
+      type: h.type,
+      amount: parseFloat(h.deltaAmount),
+      asset: h.asset,
+      timestamp: h.time,
+      positionSide: h.positionSide,
+    }));
+  }
+
+  async modifyPositionMargin(symbol: string, amount: number, type: 1 | 2): Promise<void> {
+    // type: 1 = add, 2 = reduce
+    await this.request('POST', '/fapi/v1/positionMargin', { symbol, amount, type }, true);
+  }
+
+  async placeBatchOrders(orders: FuturesOrderRequest[]): Promise<FuturesOrder[]> {
+    if (this.dryRun) {
+      return orders.map(o => this.createDryRunOrder(o));
+    }
+
+    const batchOrders = orders.map(order => ({
+      symbol: order.symbol,
+      side: order.side,
+      type: order.type,
+      quantity: String(order.size),
+      price: order.price ? String(order.price) : undefined,
+      stopPrice: order.stopPrice ? String(order.stopPrice) : undefined,
+      reduceOnly: order.reduceOnly ? 'true' : undefined,
+      timeInForce: order.type === 'LIMIT' ? 'GTC' : undefined,
+    }));
+
+    const result = await this.request('POST', '/fapi/v1/batchOrders', {
+      batchOrders: JSON.stringify(batchOrders),
+    }, true) as Array<{
+      orderId: number;
+      symbol: string;
+      side: string;
+      type: string;
+      origQty: string;
+      executedQty: string;
+      avgPrice: string;
+      status: string;
+      updateTime: number;
+    }>;
+
+    return result.map((r, i) => ({
+      id: String(r.orderId),
+      exchange: 'binance' as FuturesExchange,
+      symbol: r.symbol,
+      side: r.side as OrderSide,
+      type: r.type as OrderType,
+      size: parseFloat(r.origQty),
+      leverage: orders[i].leverage || 1,
+      reduceOnly: orders[i].reduceOnly || false,
+      status: r.status as FuturesOrder['status'],
+      filledSize: parseFloat(r.executedQty),
+      avgFillPrice: parseFloat(r.avgPrice),
+      timestamp: r.updateTime,
+    }));
+  }
+
+  async cancelAllOrders(symbol: string): Promise<void> {
+    await this.request('DELETE', '/fapi/v1/allOpenOrders', { symbol }, true);
+  }
+
+  async getTickerPrice(symbol?: string): Promise<Array<{ symbol: string; price: number; timestamp: number }>> {
+    const params: Record<string, string> = {};
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/fapi/v2/ticker/price', params) as Array<{
+      symbol: string;
+      price: string;
+      time: number;
+    }> | { symbol: string; price: string; time: number };
+
+    const tickers = Array.isArray(data) ? data : [data];
+    return tickers.map(t => ({
+      symbol: t.symbol,
+      price: parseFloat(t.price),
+      timestamp: t.time,
+    }));
+  }
+
+  async getFundingHistory(symbol: string, limit = 100): Promise<FuturesFundingHistory[]> {
+    const data = await this.request('GET', '/fapi/v1/fundingRate', { symbol, limit }) as Array<{
+      symbol: string;
+      fundingRate: string;
+      fundingTime: number;
+      markPrice?: string;
+    }>;
+
+    return data.map(f => ({
+      symbol: f.symbol,
+      fundingRate: parseFloat(f.fundingRate) * 100,
+      fundingTime: f.fundingTime,
+      markPrice: f.markPrice ? parseFloat(f.markPrice) : undefined,
+    }));
+  }
+
+  async setPositionMode(dualSidePosition: boolean): Promise<void> {
+    await this.request('POST', '/fapi/v1/positionSide/dual', { dualSidePosition: String(dualSidePosition) }, true);
+  }
+
+  async getPositionMode(): Promise<boolean> {
+    const data = await this.request('GET', '/fapi/v1/positionSide/dual', {}, true) as { dualSidePosition: boolean };
+    return data.dualSidePosition;
+  }
+
+  async modifyOrder(symbol: string, orderId: string, quantity?: number, price?: number): Promise<FuturesOrder> {
+    const params: Record<string, string | number> = { symbol, orderId };
+    if (quantity) params.quantity = quantity;
+    if (price) params.price = price;
+
+    const result = await this.request('PUT', '/fapi/v1/order', params, true) as {
+      orderId: number;
+      symbol: string;
+      side: string;
+      type: string;
+      origQty: string;
+      executedQty: string;
+      avgPrice: string;
+      status: string;
+      updateTime: number;
+    };
+
+    return {
+      id: String(result.orderId),
+      exchange: 'binance',
+      symbol: result.symbol,
+      side: result.side as OrderSide,
+      type: result.type as OrderType,
+      size: parseFloat(result.origQty),
+      leverage: 1,
+      reduceOnly: false,
+      status: result.status as FuturesOrder['status'],
+      filledSize: parseFloat(result.executedQty),
+      avgFillPrice: parseFloat(result.avgPrice),
+      timestamp: result.updateTime,
+    };
+  }
+
+  async getForceOrders(symbol?: string, limit = 50): Promise<Array<{
+    orderId: string;
+    symbol: string;
+    side: OrderSide;
+    price: number;
+    quantity: number;
+    status: string;
+    timestamp: number;
+  }>> {
+    const params: Record<string, string | number> = { limit };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/fapi/v1/forceOrders', params, true) as Array<{
+      orderId: number;
+      symbol: string;
+      side: string;
+      price: string;
+      origQty: string;
+      status: string;
+      time: number;
+    }>;
+
+    return data.map(o => ({
+      orderId: String(o.orderId),
+      symbol: o.symbol,
+      side: o.side as OrderSide,
+      price: parseFloat(o.price),
+      quantity: parseFloat(o.origQty),
+      status: o.status,
+      timestamp: o.time,
+    }));
+  }
+
+  async getCommissionRate(symbol: string): Promise<{ symbol: string; makerCommission: number; takerCommission: number }> {
+    const data = await this.request('GET', '/fapi/v1/commissionRate', { symbol }, true) as {
+      symbol: string;
+      makerCommissionRate: string;
+      takerCommissionRate: string;
+    };
+
+    return {
+      symbol: data.symbol,
+      makerCommission: parseFloat(data.makerCommissionRate) * 100,
+      takerCommission: parseFloat(data.takerCommissionRate) * 100,
+    };
+  }
+
+  async createListenKey(): Promise<string> {
+    const data = await this.request('POST', '/fapi/v1/listenKey', {}, true) as { listenKey: string };
+    return data.listenKey;
+  }
+
+  async keepAliveListenKey(): Promise<void> {
+    await this.request('PUT', '/fapi/v1/listenKey', {}, true);
+  }
+
+  async deleteListenKey(): Promise<void> {
+    await this.request('DELETE', '/fapi/v1/listenKey', {}, true);
+  }
 }
 
 // =============================================================================
@@ -606,7 +1129,7 @@ class BybitFuturesClient {
   private async request(
     method: 'GET' | 'POST',
     endpoint: string,
-    params: Record<string, string | number | boolean> = {}
+    params: Record<string, unknown> = {}
   ): Promise<unknown> {
     const timestamp = Date.now();
 
@@ -930,6 +1453,381 @@ class BybitFuturesClient {
       'Rejected': 'REJECTED',
     };
     return statusMap[status] || 'NEW';
+  }
+
+  // =========== ADDITIONAL COMPREHENSIVE METHODS ===========
+
+  async getAccountInfo(): Promise<FuturesAccountInfo> {
+    const data = await this.request('GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' }) as {
+      list: Array<{
+        totalEquity: string;
+        totalWalletBalance: string;
+        totalMarginBalance: string;
+        totalAvailableBalance: string;
+        totalPerpUPL: string;
+        totalInitialMargin: string;
+        totalMaintenanceMargin: string;
+        coin: Array<{
+          coin: string;
+          availableToWithdraw: string;
+          walletBalance: string;
+          unrealisedPnl: string;
+        }>;
+      }>;
+    };
+
+    const account = data.list[0];
+    const positions = await this.getPositions();
+
+    return {
+      exchange: 'bybit',
+      totalWalletBalance: parseFloat(account?.totalWalletBalance || '0'),
+      totalUnrealizedProfit: parseFloat(account?.totalPerpUPL || '0'),
+      totalMarginBalance: parseFloat(account?.totalMarginBalance || '0'),
+      totalPositionInitialMargin: parseFloat(account?.totalInitialMargin || '0'),
+      totalOpenOrderInitialMargin: 0,
+      availableBalance: parseFloat(account?.totalAvailableBalance || '0'),
+      maxWithdrawAmount: parseFloat(account?.totalAvailableBalance || '0'),
+      canTrade: true,
+      canDeposit: true,
+      canWithdraw: true,
+      positions,
+    };
+  }
+
+  async getTradeHistory(symbol?: string, limit = 100): Promise<FuturesTrade[]> {
+    const params: Record<string, string | number> = { category: 'linear', limit };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/v5/execution/list', params) as {
+      list: Array<{
+        execId: string;
+        symbol: string;
+        orderId: string;
+        side: string;
+        execPrice: string;
+        execQty: string;
+        closedPnl: string;
+        execFee: string;
+        feeCurrency: string;
+        execTime: string;
+        isMaker: boolean;
+      }>;
+    };
+
+    return data.list.map(t => ({
+      id: t.execId,
+      exchange: 'bybit' as FuturesExchange,
+      symbol: t.symbol,
+      orderId: t.orderId,
+      side: t.side === 'Buy' ? 'BUY' : 'SELL' as OrderSide,
+      price: parseFloat(t.execPrice),
+      quantity: parseFloat(t.execQty),
+      realizedPnl: parseFloat(t.closedPnl),
+      commission: parseFloat(t.execFee),
+      commissionAsset: t.feeCurrency,
+      timestamp: parseInt(t.execTime),
+      isMaker: t.isMaker,
+    }));
+  }
+
+  async getOrderHistory(symbol?: string, limit = 50): Promise<FuturesOrder[]> {
+    const params: Record<string, string | number> = { category: 'linear', limit };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/v5/order/history', params) as {
+      list: Array<{
+        orderId: string;
+        symbol: string;
+        side: string;
+        orderType: string;
+        qty: string;
+        cumExecQty: string;
+        price: string;
+        avgPrice: string;
+        orderStatus: string;
+        createdTime: string;
+        reduceOnly: boolean;
+      }>;
+    };
+
+    return data.list.map(o => ({
+      id: o.orderId,
+      exchange: 'bybit' as FuturesExchange,
+      symbol: o.symbol,
+      side: o.side === 'Buy' ? 'BUY' : 'SELL' as OrderSide,
+      type: o.orderType === 'Market' ? 'MARKET' : 'LIMIT' as OrderType,
+      size: parseFloat(o.qty),
+      price: parseFloat(o.price),
+      leverage: 1,
+      reduceOnly: o.reduceOnly,
+      status: this.mapBybitStatus(o.orderStatus),
+      filledSize: parseFloat(o.cumExecQty),
+      avgFillPrice: parseFloat(o.avgPrice),
+      timestamp: parseInt(o.createdTime),
+    }));
+  }
+
+  async getKlines(symbol: string, interval: string, limit = 200): Promise<FuturesKline[]> {
+    const data = await this.request('GET', '/v5/market/kline', {
+      category: 'linear',
+      symbol,
+      interval,
+      limit,
+    }) as {
+      list: Array<[string, string, string, string, string, string, string]>;
+    };
+
+    return data.list.map(k => ({
+      openTime: parseInt(k[0]),
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5]),
+      closeTime: parseInt(k[0]) + 60000,
+      quoteVolume: parseFloat(k[6]),
+      trades: 0,
+      takerBuyVolume: 0,
+      takerBuyQuoteVolume: 0,
+    }));
+  }
+
+  async getOrderBook(symbol: string, limit = 50): Promise<FuturesOrderBook> {
+    const data = await this.request('GET', '/v5/market/orderbook', {
+      category: 'linear',
+      symbol,
+      limit,
+    }) as {
+      s: string;
+      u: number;
+      b: Array<[string, string]>;
+      a: Array<[string, string]>;
+      ts: number;
+    };
+
+    return {
+      exchange: 'bybit',
+      symbol,
+      lastUpdateId: data.u,
+      bids: data.b.map(([p, q]) => [parseFloat(p), parseFloat(q)]),
+      asks: data.a.map(([p, q]) => [parseFloat(p), parseFloat(q)]),
+      timestamp: data.ts,
+    };
+  }
+
+  async getIncomeHistory(symbol?: string, limit = 100): Promise<FuturesIncome[]> {
+    const params: Record<string, string | number> = { category: 'linear', limit };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/v5/position/closed-pnl', params) as {
+      list: Array<{
+        symbol: string;
+        closedPnl: string;
+        updatedTime: string;
+        orderId: string;
+      }>;
+    };
+
+    return data.list.map(i => ({
+      symbol: i.symbol,
+      incomeType: 'REALIZED_PNL' as const,
+      income: parseFloat(i.closedPnl),
+      asset: 'USDT',
+      timestamp: parseInt(i.updatedTime),
+      tradeId: i.orderId,
+    }));
+  }
+
+  async getRiskLimit(symbol: string): Promise<FuturesRiskLimit[]> {
+    const data = await this.request('GET', '/v5/market/risk-limit', {
+      category: 'linear',
+      symbol,
+    }) as {
+      list: Array<{
+        id: number;
+        symbol: string;
+        maxLeverage: string;
+        maintainMargin: string;
+        riskLimitValue: string;
+      }>;
+    };
+
+    return data.list.map(r => ({
+      symbol: r.symbol,
+      maxLeverage: parseInt(r.maxLeverage),
+      maintenanceMarginRate: parseFloat(r.maintainMargin),
+      riskLimitValue: parseFloat(r.riskLimitValue),
+    }));
+  }
+
+  async setRiskLimit(symbol: string, riskId: number): Promise<void> {
+    await this.request('POST', '/v5/position/set-risk-limit', {
+      category: 'linear',
+      symbol,
+      riskId,
+    });
+  }
+
+  async amendOrder(symbol: string, orderId: string, qty?: number, price?: number): Promise<FuturesOrder> {
+    const params: Record<string, string | number> = { category: 'linear', symbol, orderId };
+    if (qty) params.qty = String(qty);
+    if (price) params.price = String(price);
+
+    const result = await this.request('POST', '/v5/order/amend', params) as { orderId: string };
+
+    return {
+      id: result.orderId,
+      exchange: 'bybit',
+      symbol,
+      side: 'BUY',
+      type: 'LIMIT',
+      size: qty || 0,
+      price,
+      leverage: 1,
+      reduceOnly: false,
+      status: 'NEW',
+      filledSize: 0,
+      avgFillPrice: 0,
+      timestamp: Date.now(),
+    };
+  }
+
+  async cancelAllOrders(symbol?: string): Promise<void> {
+    const params: Record<string, string> = { category: 'linear' };
+    if (symbol) params.symbol = symbol;
+    await this.request('POST', '/v5/order/cancel-all', params);
+  }
+
+  async placeBatchOrders(orders: FuturesOrderRequest[]): Promise<FuturesOrder[]> {
+    if (this.dryRun) {
+      return orders.map(o => this.createDryRunOrder(o));
+    }
+
+    const request = orders.map(order => ({
+      symbol: order.symbol,
+      side: order.side === 'BUY' ? 'Buy' : 'Sell',
+      orderType: order.type === 'MARKET' ? 'Market' : 'Limit',
+      qty: String(order.size),
+      price: order.price ? String(order.price) : undefined,
+      reduceOnly: order.reduceOnly,
+    }));
+
+    const result = await this.request('POST', '/v5/order/create-batch', {
+      category: 'linear',
+      request,
+    }) as {
+      list: Array<{ orderId: string; symbol: string }>;
+    };
+
+    return result.list.map((r, i) => ({
+      id: r.orderId,
+      exchange: 'bybit' as FuturesExchange,
+      symbol: r.symbol,
+      side: orders[i].side,
+      type: orders[i].type,
+      size: orders[i].size,
+      price: orders[i].price,
+      leverage: orders[i].leverage || 1,
+      reduceOnly: orders[i].reduceOnly || false,
+      status: 'NEW' as const,
+      filledSize: 0,
+      avgFillPrice: 0,
+      timestamp: Date.now(),
+    }));
+  }
+
+  async getTickerPrice(symbol?: string): Promise<Array<{ symbol: string; price: number; timestamp: number }>> {
+    const params: Record<string, string> = { category: 'linear' };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/v5/market/tickers', params) as {
+      list: Array<{ symbol: string; lastPrice: string; }>;
+    };
+
+    return data.list.map(t => ({
+      symbol: t.symbol,
+      price: parseFloat(t.lastPrice),
+      timestamp: Date.now(),
+    }));
+  }
+
+  async getFundingHistory(symbol: string, limit = 100): Promise<FuturesFundingHistory[]> {
+    const data = await this.request('GET', '/v5/market/funding/history', {
+      category: 'linear',
+      symbol,
+      limit,
+    }) as {
+      list: Array<{
+        symbol: string;
+        fundingRate: string;
+        fundingRateTimestamp: string;
+      }>;
+    };
+
+    return data.list.map(f => ({
+      symbol: f.symbol,
+      fundingRate: parseFloat(f.fundingRate) * 100,
+      fundingTime: parseInt(f.fundingRateTimestamp),
+    }));
+  }
+
+  async setPositionMode(mode: 'MergedSingle' | 'BothSide'): Promise<void> {
+    await this.request('POST', '/v5/position/switch-mode', {
+      category: 'linear',
+      mode,
+    });
+  }
+
+  async setIsolatedMargin(symbol: string, tradeMode: 0 | 1): Promise<void> {
+    // 0 = cross, 1 = isolated
+    await this.request('POST', '/v5/position/switch-isolated', {
+      category: 'linear',
+      symbol,
+      tradeMode,
+      buyLeverage: '10',
+      sellLeverage: '10',
+    });
+  }
+
+  async modifyPositionMargin(symbol: string, margin: number): Promise<void> {
+    await this.request('POST', '/v5/position/add-margin', {
+      category: 'linear',
+      symbol,
+      margin: String(margin),
+    });
+  }
+
+  async getRecentTrades(symbol: string, limit = 60): Promise<Array<{
+    price: number;
+    size: number;
+    side: string;
+    timestamp: number;
+  }>> {
+    const data = await this.request('GET', '/v5/market/recent-trade', {
+      category: 'linear',
+      symbol,
+      limit,
+    }) as {
+      list: Array<{
+        price: string;
+        size: string;
+        side: string;
+        time: string;
+      }>;
+    };
+
+    return data.list.map(t => ({
+      price: parseFloat(t.price),
+      size: parseFloat(t.size),
+      side: t.side,
+      timestamp: parseInt(t.time),
+    }));
+  }
+
+  async getServerTime(): Promise<number> {
+    const data = await this.request('GET', '/v5/market/time', {}) as { timeSecond: string; timeNano: string };
+    return parseInt(data.timeSecond) * 1000;
   }
 }
 
@@ -1309,6 +2207,402 @@ class HyperliquidClient {
       timestamp: o.timestamp,
     }));
   }
+
+  // =========== ADDITIONAL COMPREHENSIVE METHODS ===========
+
+  async getAccountInfo(): Promise<FuturesAccountInfo> {
+    const data = await this.request('/info', {
+      type: 'clearinghouseState',
+      user: this.walletAddress,
+    }) as {
+      marginSummary: { accountValue: string; totalMarginUsed: string; totalNtlPos: string; totalRawUsd: string };
+      assetPositions: Array<{
+        position: {
+          coin: string;
+          szi: string;
+          entryPx: string;
+          liquidationPx: string;
+          unrealizedPnl: string;
+          leverage: { value: string; type: string };
+        };
+      }>;
+    };
+
+    const positions = data.assetPositions
+      .filter(ap => parseFloat(ap.position.szi) !== 0)
+      .map(ap => {
+        const p = ap.position;
+        const size = parseFloat(p.szi);
+        return {
+          exchange: 'hyperliquid' as FuturesExchange,
+          symbol: p.coin,
+          side: size > 0 ? 'LONG' : 'SHORT' as PositionSide,
+          size: Math.abs(size),
+          entryPrice: parseFloat(p.entryPx),
+          markPrice: parseFloat(p.entryPx),
+          liquidationPrice: parseFloat(p.liquidationPx || '0'),
+          leverage: parseInt(p.leverage.value),
+          marginType: p.leverage.type === 'cross' ? 'CROSS' : 'ISOLATED' as MarginType,
+          unrealizedPnl: parseFloat(p.unrealizedPnl),
+          unrealizedPnlPct: 0,
+          margin: 0,
+          timestamp: Date.now(),
+        };
+      });
+
+    return {
+      exchange: 'hyperliquid',
+      totalWalletBalance: parseFloat(data.marginSummary.accountValue),
+      totalUnrealizedProfit: 0,
+      totalMarginBalance: parseFloat(data.marginSummary.accountValue),
+      totalPositionInitialMargin: parseFloat(data.marginSummary.totalMarginUsed),
+      totalOpenOrderInitialMargin: 0,
+      availableBalance: parseFloat(data.marginSummary.accountValue) - parseFloat(data.marginSummary.totalMarginUsed),
+      maxWithdrawAmount: parseFloat(data.marginSummary.totalRawUsd),
+      canTrade: true,
+      canDeposit: true,
+      canWithdraw: true,
+      positions,
+    };
+  }
+
+  async getTradeHistory(limit = 500): Promise<FuturesTrade[]> {
+    const data = await this.request('/info', {
+      type: 'userFills',
+      user: this.walletAddress,
+    }) as Array<{
+      coin: string;
+      px: string;
+      sz: string;
+      side: string;
+      time: number;
+      closedPnl: string;
+      fee: string;
+      oid: number;
+      tid: number;
+    }>;
+
+    return data.slice(0, limit).map(t => ({
+      id: String(t.tid),
+      exchange: 'hyperliquid' as FuturesExchange,
+      symbol: t.coin,
+      orderId: String(t.oid),
+      side: t.side === 'B' ? 'BUY' : 'SELL' as OrderSide,
+      price: parseFloat(t.px),
+      quantity: parseFloat(t.sz),
+      realizedPnl: parseFloat(t.closedPnl),
+      commission: parseFloat(t.fee),
+      commissionAsset: 'USDC',
+      timestamp: t.time,
+      isMaker: false,
+    }));
+  }
+
+  async getOrderHistory(): Promise<FuturesOrder[]> {
+    const data = await this.request('/info', {
+      type: 'historicalOrders',
+      user: this.walletAddress,
+    }) as Array<{
+      order: {
+        coin: string;
+        side: string;
+        limitPx: string;
+        sz: string;
+        oid: number;
+        timestamp: number;
+        reduceOnly: boolean;
+      };
+      status: string;
+      statusTimestamp: number;
+    }>;
+
+    return data.map(o => ({
+      id: String(o.order.oid),
+      exchange: 'hyperliquid' as FuturesExchange,
+      symbol: o.order.coin,
+      side: o.order.side === 'B' ? 'BUY' : 'SELL' as OrderSide,
+      type: 'LIMIT' as OrderType,
+      size: parseFloat(o.order.sz),
+      price: parseFloat(o.order.limitPx),
+      leverage: 1,
+      reduceOnly: o.order.reduceOnly,
+      status: o.status === 'filled' ? 'FILLED' : o.status === 'canceled' ? 'CANCELED' : 'NEW' as FuturesOrder['status'],
+      filledSize: o.status === 'filled' ? parseFloat(o.order.sz) : 0,
+      avgFillPrice: parseFloat(o.order.limitPx),
+      timestamp: o.statusTimestamp,
+    }));
+  }
+
+  async getOrderBook(symbol: string): Promise<FuturesOrderBook> {
+    const data = await this.request('/info', {
+      type: 'l2Book',
+      coin: symbol,
+    }) as {
+      coin: string;
+      time: number;
+      levels: Array<Array<{ px: string; sz: string; n: number }>>;
+    };
+
+    return {
+      exchange: 'hyperliquid',
+      symbol,
+      lastUpdateId: data.time,
+      bids: data.levels[0]?.map(l => [parseFloat(l.px), parseFloat(l.sz)]) || [],
+      asks: data.levels[1]?.map(l => [parseFloat(l.px), parseFloat(l.sz)]) || [],
+      timestamp: data.time,
+    };
+  }
+
+  async getKlines(symbol: string, interval: string, startTime?: number, endTime?: number): Promise<FuturesKline[]> {
+    const data = await this.request('/info', {
+      type: 'candleSnapshot',
+      coin: symbol,
+      interval,
+      startTime: startTime || Date.now() - 86400000,
+      endTime: endTime || Date.now(),
+    }) as Array<{
+      t: number;
+      o: string;
+      h: string;
+      l: string;
+      c: string;
+      v: string;
+    }>;
+
+    return data.map(k => ({
+      openTime: k.t,
+      open: parseFloat(k.o),
+      high: parseFloat(k.h),
+      low: parseFloat(k.l),
+      close: parseFloat(k.c),
+      volume: parseFloat(k.v),
+      closeTime: k.t + 60000,
+      quoteVolume: 0,
+      trades: 0,
+      takerBuyVolume: 0,
+      takerBuyQuoteVolume: 0,
+    }));
+  }
+
+  async getUserFees(): Promise<{ maker: number; taker: number }> {
+    const data = await this.request('/info', {
+      type: 'userFees',
+      user: this.walletAddress,
+    }) as { dailyUserVlm: string; feeSchedule: { taker: string; maker: string } };
+
+    return {
+      maker: parseFloat(data.feeSchedule.maker) * 100,
+      taker: parseFloat(data.feeSchedule.taker) * 100,
+    };
+  }
+
+  async getRateLimit(): Promise<{ used: number; limit: number }> {
+    const data = await this.request('/info', {
+      type: 'userRateLimit',
+      user: this.walletAddress,
+    }) as { cumVlm: string; nRequestsUsed: number; nRequestsCap: number };
+
+    return {
+      used: data.nRequestsUsed,
+      limit: data.nRequestsCap,
+    };
+  }
+
+  async getOrderStatus(orderId: number): Promise<{ status: string; filled: number }> {
+    const data = await this.request('/info', {
+      type: 'orderStatus',
+      user: this.walletAddress,
+      oid: orderId,
+    }) as { order?: { status: string; filledSz: string } };
+
+    return {
+      status: data.order?.status || 'unknown',
+      filled: parseFloat(data.order?.filledSz || '0'),
+    };
+  }
+
+  async cancelByClientOrderId(symbol: string, cloid: string): Promise<void> {
+    await this.ensureAssetIndex();
+    const assetIndex = this.getAssetIndex(symbol);
+    const nonce = Date.now();
+
+    const action = {
+      type: 'cancelByCloid',
+      cancels: [{ asset: assetIndex, cloid }],
+    };
+
+    const signature = this.signL1Action(action, nonce);
+
+    await this.request('/exchange', {
+      action,
+      nonce,
+      signature: { r: signature.r, s: signature.s, v: signature.v },
+      vaultAddress: null,
+    });
+  }
+
+  async modifyOrder(symbol: string, orderId: number, price: number, size: number, isBuy: boolean): Promise<FuturesOrder> {
+    await this.ensureAssetIndex();
+    const assetIndex = this.getAssetIndex(symbol);
+    const nonce = Date.now();
+
+    const action = {
+      type: 'batchModify',
+      modifies: [{
+        oid: orderId,
+        order: {
+          a: assetIndex,
+          b: isBuy,
+          p: String(price),
+          s: String(size),
+          r: false,
+          t: { limit: { tif: 'Gtc' } },
+        },
+      }],
+    };
+
+    const signature = this.signL1Action(action, nonce);
+
+    await this.request('/exchange', {
+      action,
+      nonce,
+      signature: { r: signature.r, s: signature.s, v: signature.v },
+      vaultAddress: null,
+    });
+
+    return {
+      id: String(orderId),
+      exchange: 'hyperliquid',
+      symbol,
+      side: isBuy ? 'BUY' : 'SELL',
+      type: 'LIMIT',
+      size,
+      price,
+      leverage: 1,
+      reduceOnly: false,
+      status: 'NEW',
+      filledSize: 0,
+      avgFillPrice: 0,
+      timestamp: Date.now(),
+    };
+  }
+
+  async updateIsolatedMargin(symbol: string, marginDelta: number): Promise<void> {
+    await this.ensureAssetIndex();
+    const assetIndex = this.getAssetIndex(symbol);
+    const nonce = Date.now();
+
+    const action = {
+      type: 'updateIsolatedMargin',
+      asset: assetIndex,
+      isBuy: true,
+      ntli: marginDelta,
+    };
+
+    const signature = this.signL1Action(action, nonce);
+
+    await this.request('/exchange', {
+      action,
+      nonce,
+      signature: { r: signature.r, s: signature.s, v: signature.v },
+      vaultAddress: null,
+    });
+  }
+
+  async transferUsd(amount: number, toPerp: boolean): Promise<void> {
+    const nonce = Date.now();
+
+    const action = {
+      type: 'usdTransfer',
+      amount: String(amount),
+      toPerp,
+    };
+
+    const signature = this.signL1Action(action, nonce);
+
+    await this.request('/exchange', {
+      action,
+      nonce,
+      signature: { r: signature.r, s: signature.s, v: signature.v },
+      vaultAddress: null,
+    });
+  }
+
+  async getSubAccounts(): Promise<Array<{ name: string; subAccountUser: string; master: string }>> {
+    const data = await this.request('/info', {
+      type: 'subAccounts',
+      user: this.walletAddress,
+    }) as Array<{ name: string; subAccountUser: string; master: string }>;
+
+    return data;
+  }
+
+  async placeTwapOrder(
+    symbol: string,
+    isBuy: boolean,
+    size: number,
+    durationMinutes: number,
+    randomize: boolean = true
+  ): Promise<{ status: string; twapId?: number }> {
+    await this.ensureAssetIndex();
+    const assetIndex = this.getAssetIndex(symbol);
+    const nonce = Date.now();
+
+    const action = {
+      type: 'twapOrder',
+      twap: {
+        a: assetIndex,
+        b: isBuy,
+        s: String(size),
+        r: false,
+        m: durationMinutes,
+        t: randomize,
+      },
+    };
+
+    const signature = this.signL1Action(action, nonce);
+
+    const result = await this.request('/exchange', {
+      action,
+      nonce,
+      signature: { r: signature.r, s: signature.s, v: signature.v },
+      vaultAddress: null,
+    }) as { status: string; response?: { data?: { running?: { state?: { twapId: number } } } } };
+
+    return {
+      status: result.status,
+      twapId: result.response?.data?.running?.state?.twapId,
+    };
+  }
+
+  async cancelTwapOrder(symbol: string, twapId: number): Promise<void> {
+    await this.ensureAssetIndex();
+    const assetIndex = this.getAssetIndex(symbol);
+    const nonce = Date.now();
+
+    const action = {
+      type: 'twapCancel',
+      a: assetIndex,
+      t: twapId,
+    };
+
+    const signature = this.signL1Action(action, nonce);
+
+    await this.request('/exchange', {
+      action,
+      nonce,
+      signature: { r: signature.r, s: signature.s, v: signature.v },
+      vaultAddress: null,
+    });
+  }
+
+  async getMeta(): Promise<{
+    universe: Array<{ name: string; szDecimals: number; maxLeverage: number }>;
+  }> {
+    return this.request('/info', { type: 'meta' }) as Promise<{
+      universe: Array<{ name: string; szDecimals: number; maxLeverage: number }>;
+    }>;
+  }
 }
 
 // =============================================================================
@@ -1335,7 +2629,7 @@ class MexcFuturesClient {
   private async request(
     method: 'GET' | 'POST' | 'DELETE',
     endpoint: string,
-    params: Record<string, string | number | boolean> = {},
+    params: Record<string, unknown> = {},
     signed = false
   ): Promise<unknown> {
     const timestamp = String(Date.now());
@@ -1346,6 +2640,7 @@ class MexcFuturesClient {
 
     if (method === 'GET') {
       queryString = Object.entries(params)
+        .filter(([, v]) => v !== undefined && typeof v !== 'object')
         .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
         .join('&');
       if (queryString) url.search = queryString;
@@ -1677,6 +2972,388 @@ class MexcFuturesClient {
       5: 'PARTIALLY_FILLED',
     };
     return statusMap[state] || 'NEW';
+  }
+
+  // =========== ADDITIONAL COMPREHENSIVE METHODS ===========
+
+  async getAccountInfo(): Promise<FuturesAccountInfo> {
+    const assets = await this.getBalance();
+    const positions = await this.getPositions();
+
+    return {
+      exchange: 'mexc',
+      totalWalletBalance: assets.total,
+      totalUnrealizedProfit: assets.unrealizedPnl,
+      totalMarginBalance: assets.marginBalance,
+      totalPositionInitialMargin: 0,
+      totalOpenOrderInitialMargin: 0,
+      availableBalance: assets.available,
+      maxWithdrawAmount: assets.available,
+      canTrade: true,
+      canDeposit: true,
+      canWithdraw: true,
+      positions,
+    };
+  }
+
+  async getTradeHistory(symbol?: string, limit = 100): Promise<FuturesTrade[]> {
+    const params: Record<string, string | number> = { page_num: 1, page_size: limit };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/api/v1/private/order/list/order_deals', params, true) as Array<{
+      id: string;
+      symbol: string;
+      orderId: string;
+      side: number;
+      price: string;
+      vol: string;
+      profit: string;
+      fee: string;
+      feeCurrency: string;
+      timestamp: number;
+      maker: boolean;
+    }>;
+
+    return data.map(t => ({
+      id: t.id,
+      exchange: 'mexc' as FuturesExchange,
+      symbol: t.symbol,
+      orderId: t.orderId,
+      side: (t.side === 1 || t.side === 4) ? 'BUY' : 'SELL' as OrderSide,
+      price: parseFloat(t.price),
+      quantity: parseFloat(t.vol),
+      realizedPnl: parseFloat(t.profit),
+      commission: parseFloat(t.fee),
+      commissionAsset: t.feeCurrency,
+      timestamp: t.timestamp,
+      isMaker: t.maker,
+    }));
+  }
+
+  async getOrderHistory(symbol?: string, limit = 100): Promise<FuturesOrder[]> {
+    const params: Record<string, string | number> = { page_num: 1, page_size: limit };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/api/v1/private/order/list/history_orders', params, true) as Array<{
+      orderId: string;
+      symbol: string;
+      side: number;
+      type: number;
+      vol: string;
+      dealVol: string;
+      price: string;
+      dealAvgPrice: string;
+      state: number;
+      createTime: number;
+    }>;
+
+    return data.map(o => ({
+      id: o.orderId,
+      exchange: 'mexc' as FuturesExchange,
+      symbol: o.symbol,
+      side: (o.side === 1 || o.side === 4) ? 'BUY' : 'SELL' as OrderSide,
+      type: o.type === 5 ? 'MARKET' : 'LIMIT' as OrderType,
+      size: parseFloat(o.vol),
+      price: parseFloat(o.price),
+      leverage: 1,
+      reduceOnly: o.side === 2 || o.side === 4,
+      status: this.mapMexcStatus(o.state),
+      filledSize: parseFloat(o.dealVol),
+      avgFillPrice: parseFloat(o.dealAvgPrice),
+      timestamp: o.createTime,
+    }));
+  }
+
+  async getKlines(symbol: string, interval: string, limit = 100): Promise<FuturesKline[]> {
+    const data = await this.request('GET', `/api/v1/contract/kline/${symbol}`, {
+      interval,
+      limit,
+    }) as {
+      time: Array<number>;
+      open: Array<number>;
+      high: Array<number>;
+      low: Array<number>;
+      close: Array<number>;
+      vol: Array<number>;
+    };
+
+    return data.time.map((t, i) => ({
+      openTime: t * 1000,
+      open: data.open[i],
+      high: data.high[i],
+      low: data.low[i],
+      close: data.close[i],
+      volume: data.vol[i],
+      closeTime: (t + 60) * 1000,
+      quoteVolume: 0,
+      trades: 0,
+      takerBuyVolume: 0,
+      takerBuyQuoteVolume: 0,
+    }));
+  }
+
+  async getOrderBook(symbol: string, limit = 100): Promise<FuturesOrderBook> {
+    const data = await this.request('GET', `/api/v1/contract/depth/${symbol}`, { limit }) as {
+      asks: Array<[number, number, number]>;
+      bids: Array<[number, number, number]>;
+      version: number;
+      timestamp: number;
+    };
+
+    return {
+      exchange: 'mexc',
+      symbol,
+      lastUpdateId: data.version,
+      bids: data.bids.map(([price, qty]) => [price, qty]),
+      asks: data.asks.map(([price, qty]) => [price, qty]),
+      timestamp: data.timestamp,
+    };
+  }
+
+  async getPositionHistory(symbol?: string, limit = 100): Promise<Array<{
+    symbol: string;
+    side: PositionSide;
+    entryPrice: number;
+    closePrice: number;
+    size: number;
+    realizedPnl: number;
+    openTime: number;
+    closeTime: number;
+  }>> {
+    const params: Record<string, string | number> = { page_num: 1, page_size: limit };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/api/v1/private/position/list/history_positions', params, true) as Array<{
+      symbol: string;
+      positionType: number;
+      openAvgPrice: string;
+      closeAvgPrice: string;
+      holdVol: string;
+      realised: string;
+      openTime: number;
+      closeTime: number;
+    }>;
+
+    return data.map(p => ({
+      symbol: p.symbol,
+      side: p.positionType === 1 ? 'LONG' : 'SHORT' as PositionSide,
+      entryPrice: parseFloat(p.openAvgPrice),
+      closePrice: parseFloat(p.closeAvgPrice),
+      size: parseFloat(p.holdVol),
+      realizedPnl: parseFloat(p.realised),
+      openTime: p.openTime,
+      closeTime: p.closeTime,
+    }));
+  }
+
+  async getFundingHistory(symbol?: string, limit = 100): Promise<FuturesFundingHistory[]> {
+    const params: Record<string, string | number> = { page_num: 1, page_size: limit };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/api/v1/private/position/funding_records', params, true) as Array<{
+      symbol: string;
+      fundingRate: string;
+      settleTime: number;
+    }>;
+
+    return data.map(f => ({
+      symbol: f.symbol,
+      fundingRate: parseFloat(f.fundingRate) * 100,
+      fundingTime: f.settleTime,
+    }));
+  }
+
+  async modifyPositionMargin(symbol: string, amount: number, positionType: 1 | 2): Promise<void> {
+    await this.request('POST', '/api/v1/private/position/change_margin', {
+      symbol,
+      amount,
+      type: amount > 0 ? 'ADD' : 'SUB',
+      positionType, // 1=long, 2=short
+    }, true);
+  }
+
+  async getPositionMode(): Promise<'one_way' | 'hedge'> {
+    const data = await this.request('GET', '/api/v1/private/position/position_mode', {}, true) as { positionMode: number };
+    return data.positionMode === 1 ? 'hedge' : 'one_way';
+  }
+
+  async setPositionMode(hedgeMode: boolean): Promise<void> {
+    await this.request('POST', '/api/v1/private/position/change_position_mode', {
+      positionMode: hedgeMode ? 1 : 2,
+    }, true);
+  }
+
+  async placeBatchOrders(orders: FuturesOrderRequest[]): Promise<FuturesOrder[]> {
+    if (this.dryRun) {
+      return orders.map(o => this.createDryRunOrder(o));
+    }
+
+    const batchOrders = orders.map(order => ({
+      symbol: order.symbol,
+      side: order.side === 'BUY' ? (order.reduceOnly ? 4 : 1) : (order.reduceOnly ? 2 : 3),
+      type: order.type === 'MARKET' ? 5 : 1,
+      vol: order.size,
+      price: order.price,
+      openType: 1,
+    }));
+
+    const result = await this.request('POST', '/api/v1/private/order/submit_batch', {
+      orders: batchOrders,
+    }, true) as Array<{ orderId: string }>;
+
+    return result.map((r, i) => ({
+      id: r.orderId,
+      exchange: 'mexc' as FuturesExchange,
+      symbol: orders[i].symbol,
+      side: orders[i].side,
+      type: orders[i].type,
+      size: orders[i].size,
+      price: orders[i].price,
+      leverage: orders[i].leverage || 1,
+      reduceOnly: orders[i].reduceOnly || false,
+      status: 'NEW' as const,
+      filledSize: 0,
+      avgFillPrice: 0,
+      timestamp: Date.now(),
+    }));
+  }
+
+  async cancelAllOrders(symbol: string): Promise<void> {
+    await this.request('POST', '/api/v1/private/order/cancel_all', { symbol }, true);
+  }
+
+  async getTickerPrice(symbol?: string): Promise<Array<{ symbol: string; price: number; timestamp: number }>> {
+    const data = await this.request('GET', '/api/v1/contract/ticker') as Array<{
+      symbol: string;
+      lastPrice: number;
+      timestamp: number;
+    }>;
+
+    const filtered = symbol ? data.filter(t => t.symbol === symbol) : data;
+    return filtered.map(t => ({
+      symbol: t.symbol,
+      price: t.lastPrice,
+      timestamp: t.timestamp,
+    }));
+  }
+
+  async getRecentTrades(symbol: string, limit = 100): Promise<Array<{
+    price: number;
+    size: number;
+    side: string;
+    timestamp: number;
+  }>> {
+    const data = await this.request('GET', `/api/v1/contract/deals/${symbol}`, { limit }) as Array<{
+      p: number;
+      v: number;
+      T: number;
+      t: number;
+    }>;
+
+    return data.map(t => ({
+      price: t.p,
+      size: t.v,
+      side: t.T === 1 ? 'buy' : 'sell',
+      timestamp: t.t,
+    }));
+  }
+
+  async getRiskLimits(): Promise<FuturesRiskLimit[]> {
+    const data = await this.request('GET', '/api/v1/private/account/risk_limit', {}, true) as Array<{
+      symbol: string;
+      maxLeverage: number;
+      maintainMargin: string;
+      riskLimitValue: string;
+    }>;
+
+    return data.map(r => ({
+      symbol: r.symbol,
+      maxLeverage: r.maxLeverage,
+      maintenanceMarginRate: parseFloat(r.maintainMargin),
+      riskLimitValue: parseFloat(r.riskLimitValue),
+    }));
+  }
+
+  async getTieredFeeRate(): Promise<{ makerFee: number; takerFee: number; level: number }> {
+    const data = await this.request('GET', '/api/v1/private/account/tiered_fee_rate', {}, true) as {
+      makerFeeRate: string;
+      takerFeeRate: string;
+      level: number;
+    };
+
+    return {
+      makerFee: parseFloat(data.makerFeeRate) * 100,
+      takerFee: parseFloat(data.takerFeeRate) * 100,
+      level: data.level,
+    };
+  }
+
+  async placeTriggerOrder(
+    symbol: string,
+    side: OrderSide,
+    size: number,
+    triggerPrice: number,
+    triggerType: 'ge' | 'le',
+    price?: number
+  ): Promise<string> {
+    const result = await this.request('POST', '/api/v1/private/planorder/place', {
+      symbol,
+      side: side === 'BUY' ? 1 : 3,
+      vol: size,
+      triggerPrice,
+      triggerType: triggerType === 'ge' ? 1 : 2,
+      executePriceType: price ? 1 : 2, // 1=limit, 2=market
+      price: price || 0,
+      openType: 1,
+    }, true) as { orderId: string };
+
+    return result.orderId;
+  }
+
+  async cancelTriggerOrder(symbol: string, orderId: string): Promise<void> {
+    await this.request('POST', '/api/v1/private/planorder/cancel', {
+      symbol,
+      orderId,
+    }, true);
+  }
+
+  async cancelAllTriggerOrders(symbol: string): Promise<void> {
+    await this.request('POST', '/api/v1/private/planorder/cancel_all', { symbol }, true);
+  }
+
+  async getTriggerOrders(symbol?: string): Promise<Array<{
+    orderId: string;
+    symbol: string;
+    side: OrderSide;
+    size: number;
+    triggerPrice: number;
+    status: string;
+  }>> {
+    const params: Record<string, string | number> = { states: 'NOT_TRIGGERED', page_num: 1, page_size: 100 };
+    if (symbol) params.symbol = symbol;
+
+    const data = await this.request('GET', '/api/v1/private/planorder/list/orders', params, true) as Array<{
+      id: string;
+      symbol: string;
+      side: number;
+      vol: string;
+      triggerPrice: string;
+      state: string;
+    }>;
+
+    return data.map(o => ({
+      orderId: o.id,
+      symbol: o.symbol,
+      side: (o.side === 1 || o.side === 4) ? 'BUY' : 'SELL' as OrderSide,
+      size: parseFloat(o.vol),
+      triggerPrice: parseFloat(o.triggerPrice),
+      status: o.state,
+    }));
+  }
+
+  async getServerTime(): Promise<number> {
+    const data = await this.request('GET', '/api/v1/contract/ping') as { serverTime: number };
+    return data.serverTime;
   }
 }
 
