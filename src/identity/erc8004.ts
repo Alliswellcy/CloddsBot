@@ -183,7 +183,7 @@ export function createERC8004Client(
       });
 
       if (!response.ok) return null;
-      return await response.json();
+      return (await response.json()) as AgentCard;
     } catch (error) {
       logger.debug({ error, tokenURI }, 'Failed to fetch agent card');
       return null;
