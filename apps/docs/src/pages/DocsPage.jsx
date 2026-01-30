@@ -73,11 +73,28 @@ const navigation = [
     ],
   },
   {
+    title: 'Authentication',
+    items: [
+      { id: 'auth-oauth', name: 'OAuth (Anthropic/OpenAI)' },
+      { id: 'auth-copilot', name: 'GitHub Copilot' },
+      { id: 'auth-google', name: 'Google/Gemini' },
+      { id: 'auth-qwen', name: 'Qwen/DashScope' },
+    ],
+  },
+  {
+    title: 'Observability',
+    items: [
+      { id: 'telemetry-overview', name: 'OpenTelemetry' },
+      { id: 'telemetry-metrics', name: 'Metrics & Prometheus' },
+      { id: 'telemetry-tracing', name: 'Distributed Tracing' },
+    ],
+  },
+  {
     title: 'Automation',
     items: [
       { id: 'cron-jobs', name: 'Cron Jobs' },
       { id: 'webhooks', name: 'Webhooks' },
-      { id: 'extensions', name: 'Extensions (8)' },
+      { id: 'extensions', name: 'Extensions (10)' },
     ],
   },
   {
@@ -1487,7 +1504,7 @@ X402_DRY_RUN=false             # Set true for testing`}
           </Section>
 
           {/* Extensions */}
-          <Section id="extensions" title="Extensions (8)">
+          <Section id="extensions" title="Extensions (10)">
             <Table
               headers={['Extension', 'Purpose']}
               rows={[
@@ -1499,8 +1516,341 @@ X402_DRY_RUN=false             # Set true for testing`}
                 ['memory-lancedb', 'Vector database for semantic memory'],
                 ['llm-task', 'LLM task orchestration'],
                 ['open-prose', 'Document editing operations'],
+                ['task-runner', 'AI-powered task planning and execution'],
+                ['base-adapter', 'Production-grade channel adapters'],
               ]}
             />
+          </Section>
+
+          {/* Authentication - OAuth */}
+          <Section id="auth-oauth" title="OAuth Authentication">
+            <p className="text-slate-400 mb-4">Unified OAuth 2.0 authentication for AI providers with Authorization Code + PKCE and Device Code flows.</p>
+
+            <Subsection title="Supported Providers">
+              <Table
+                headers={['Provider', 'Auth Code', 'Device Code', 'Refresh']}
+                rows={[
+                  ['Anthropic', '✅', '✅', '✅'],
+                  ['OpenAI', '✅', '✅', '✅'],
+                  ['Google', '✅', '✅', '✅'],
+                  ['GitHub', '✅', '✅', '❌'],
+                  ['Azure AD', '✅', '✅', '✅'],
+                ]}
+              />
+            </Subsection>
+
+            <Subsection title="CLI Commands">
+              <CodeBlock>
+{`# Interactive OAuth login
+clodds auth login anthropic
+clodds auth login openai
+clodds auth login google
+
+# Check authentication status
+clodds auth status
+
+# Revoke tokens
+clodds auth logout
+clodds auth logout anthropic`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Programmatic Usage">
+              <CodeBlock title="TypeScript">
+{`import { OAuthClient, interactiveOAuth } from 'clodds/auth';
+
+// Interactive authentication (CLI)
+const tokens = await interactiveOAuth({
+  provider: 'anthropic',
+  clientId: 'your-client-id',
+  scopes: ['api:read', 'api:write'],
+});
+
+// Get access token (auto-refreshes if expired)
+const client = new OAuthClient({ provider: 'anthropic', clientId: '...' });
+const accessToken = await client.getAccessToken();
+
+// Revoke tokens
+await client.revokeTokens();`}
+              </CodeBlock>
+            </Subsection>
+
+            <Alert type="info">Tokens are stored securely at <code>~/.clodds/tokens/&lt;provider&gt;.json</code> with 0600 permissions.</Alert>
+          </Section>
+
+          {/* Authentication - Copilot */}
+          <Section id="auth-copilot" title="GitHub Copilot Authentication">
+            <p className="text-slate-400 mb-4">Use GitHub Copilot API for code completions and chat.</p>
+
+            <Subsection title="Setup">
+              <CodeBlock>
+{`# Authenticate with GitHub Copilot
+clodds auth copilot
+
+# Follow the device code flow
+# Visit https://github.com/login/device
+# Enter the code shown in terminal`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Programmatic Usage">
+              <CodeBlock title="TypeScript">
+{`import { CopilotAuthClient, CopilotCompletionClient } from 'clodds/auth';
+
+const auth = new CopilotAuthClient();
+const copilot = new CopilotCompletionClient(auth);
+
+// Code completion
+const completion = await copilot.complete('function add(a, b) {');
+
+// Chat completion
+const response = await copilot.chat([
+  { role: 'user', content: 'Explain this code...' }
+], { model: 'gpt-4o' });`}
+              </CodeBlock>
+            </Subsection>
+          </Section>
+
+          {/* Authentication - Google */}
+          <Section id="auth-google" title="Google/Gemini Authentication">
+            <p className="text-slate-400 mb-4">Multiple authentication methods for Google AI services.</p>
+
+            <Subsection title="API Key (Simplest)">
+              <CodeBlock title=".env">
+{`GOOGLE_API_KEY=your-api-key
+# Or
+GEMINI_API_KEY=your-api-key`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="OAuth (User Auth)">
+              <CodeBlock>
+{`clodds auth login google`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Service Account (Server-to-Server)">
+              <CodeBlock title="TypeScript">
+{`import { GoogleAuthClient } from 'clodds/auth';
+
+const client = new GoogleAuthClient({
+  serviceAccountPath: '/path/to/service-account.json',
+});
+
+// Access token is automatically obtained via JWT
+const headers = await client.getGeminiHeaders();`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Gemini Client">
+              <CodeBlock title="TypeScript">
+{`import { GeminiClient } from 'clodds/auth';
+
+const gemini = new GeminiClient();
+const response = await gemini.generateContent('gemini-pro', 'Hello!');`}
+              </CodeBlock>
+            </Subsection>
+          </Section>
+
+          {/* Authentication - Qwen */}
+          <Section id="auth-qwen" title="Qwen/DashScope Authentication">
+            <p className="text-slate-400 mb-4">Alibaba Cloud AI services authentication.</p>
+
+            <Subsection title="API Key">
+              <CodeBlock title=".env">
+{`DASHSCOPE_API_KEY=your-key
+# Or
+QWEN_API_KEY=your-key`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Alibaba Cloud Credentials">
+              <CodeBlock title="TypeScript">
+{`import { QwenAuthClient, QwenClient } from 'clodds/auth';
+
+// API key auth
+const auth = new QwenAuthClient({ apiKey: 'your-key' });
+
+// Or Alibaba Cloud credentials
+const auth = new QwenAuthClient({
+  accessKeyId: 'your-access-key',
+  accessKeySecret: 'your-secret',
+});
+
+// Sign API requests
+const signedParams = auth.signAliyunRequest('GET', url, params);
+
+// Use Qwen client
+const qwen = new QwenClient();
+const response = await qwen.generate('qwen-turbo', 'Hello!');
+const embeddings = await qwen.embed('text-embedding-v2', ['text1', 'text2']);`}
+              </CodeBlock>
+            </Subsection>
+          </Section>
+
+          {/* Telemetry - Overview */}
+          <Section id="telemetry-overview" title="OpenTelemetry Integration">
+            <p className="text-slate-400 mb-4">Comprehensive observability with distributed tracing and metrics.</p>
+
+            <Subsection title="Configuration">
+              <CodeBlock title="clodds.json">
+{`{
+  "telemetry": {
+    "enabled": true,
+    "serviceName": "clodds",
+    "serviceVersion": "0.1.0",
+    "environment": "production",
+    "otlpEndpoint": "http://localhost:4318",
+    "jaegerEndpoint": "http://localhost:14268",
+    "zipkinEndpoint": "http://localhost:9411",
+    "metricsPort": 9090,
+    "sampleRate": 1.0
+  }
+}`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Supported Exporters">
+              <Table
+                headers={['Exporter', 'Endpoint Config', 'Compatible With']}
+                rows={[
+                  ['OTLP', 'otlpEndpoint', 'OpenTelemetry Collector, Grafana Tempo, Honeycomb'],
+                  ['Jaeger', 'jaegerEndpoint', 'Jaeger all-in-one'],
+                  ['Zipkin', 'zipkinEndpoint', 'Zipkin server'],
+                  ['Prometheus', 'metricsPort', 'Prometheus scraping'],
+                ]}
+              />
+            </Subsection>
+          </Section>
+
+          {/* Telemetry - Metrics */}
+          <Section id="telemetry-metrics" title="Metrics & Prometheus">
+            <p className="text-slate-400 mb-4">Prometheus-compatible metrics for monitoring LLM usage and system health.</p>
+
+            <Subsection title="Built-in LLM Metrics">
+              <Table
+                headers={['Metric', 'Type', 'Description']}
+                rows={[
+                  ['llm_requests_total', 'Counter', 'LLM requests by provider/model/status'],
+                  ['llm_request_duration_ms', 'Histogram', 'Request latency distribution'],
+                  ['llm_tokens_input_total', 'Counter', 'Input tokens used'],
+                  ['llm_tokens_output_total', 'Counter', 'Output tokens used'],
+                  ['llm_tokens_by_user', 'Counter', 'Tokens by user ID'],
+                ]}
+              />
+            </Subsection>
+
+            <Subsection title="Custom Metrics">
+              <CodeBlock title="TypeScript">
+{`import { getTelemetry } from 'clodds/telemetry';
+
+const telemetry = getTelemetry();
+
+// Counter
+telemetry.recordCounter('api_requests_total', 1, {
+  endpoint: '/markets',
+  method: 'GET',
+});
+
+// Gauge
+telemetry.recordGauge('active_connections', 42, {
+  channel: 'telegram',
+});
+
+// Histogram
+telemetry.recordHistogram('request_duration_ms', 150, {
+  endpoint: '/api/search',
+});`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Prometheus Endpoint">
+              <p className="text-slate-400">Access metrics at <code className="text-cyan-400">http://localhost:9090/metrics</code></p>
+              <CodeBlock title="prometheus.yml">
+{`scrape_configs:
+  - job_name: 'clodds'
+    static_configs:
+      - targets: ['localhost:9090']`}
+              </CodeBlock>
+            </Subsection>
+          </Section>
+
+          {/* Telemetry - Tracing */}
+          <Section id="telemetry-tracing" title="Distributed Tracing">
+            <p className="text-slate-400 mb-4">Track requests across services with OpenTelemetry tracing.</p>
+
+            <Subsection title="Basic Tracing">
+              <CodeBlock title="TypeScript">
+{`import { initTelemetry, getTelemetry } from 'clodds/telemetry';
+
+// Initialize
+const telemetry = initTelemetry({ enabled: true, serviceName: 'clodds' });
+
+// Create trace
+const span = telemetry.startTrace('my-operation', {
+  'custom.attribute': 'value'
+});
+
+// Add events
+telemetry.addEvent(span, 'checkpoint-reached', { step: 1 });
+
+// End span
+telemetry.endSpan(span, 'ok'); // or 'error'`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="LLM Instrumentation">
+              <CodeBlock title="TypeScript">
+{`import { createLLMInstrumentation } from 'clodds/telemetry';
+
+const llmInstr = createLLMInstrumentation();
+
+// Trace completion
+const { result, span } = await llmInstr.traceCompletion(
+  'anthropic',          // provider
+  'claude-3-5-sonnet',  // model
+  async () => {
+    return await client.complete({ messages });
+  },
+  { inputTokens: 100, promptLength: 500, userId: 'user-123' }
+);
+
+// Record token usage
+llmInstr.recordTokenUsage('anthropic', 'claude-3-5-sonnet', 100, 500);
+
+// Trace tool calls
+const toolSpan = llmInstr.traceToolCall(parentSpan, 'search_markets');
+// ... execute tool ...
+telemetry.endSpan(toolSpan, 'ok');`}
+              </CodeBlock>
+            </Subsection>
+
+            <Subsection title="Docker Compose Example">
+              <CodeBlock title="docker-compose.yml">
+{`version: '3'
+services:
+  clodds:
+    build: .
+    environment:
+      - TELEMETRY_ENABLED=true
+      - TELEMETRY_OTLP_ENDPOINT=http://collector:4318
+
+  collector:
+    image: otel/opentelemetry-collector:latest
+    ports:
+      - "4318:4318"
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"`}
+              </CodeBlock>
+            </Subsection>
           </Section>
 
           {/* Deployment Options */}
