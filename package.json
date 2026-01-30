@@ -1,7 +1,7 @@
 {
   "name": "clodds",
   "version": "0.1.0",
-  "description": "Open-source AI assistant for prediction markets. Claude + Odds. Free for everyone.",
+  "description": "AI trading terminal for 700+ markets. Prediction markets, crypto, futures up to 200x. 22 chat channels, arbitrage, whale tracking, copy trading, MEV protection. Built on Claude.",
   "main": "dist/index.js",
   "bin": {
     "clodds": "./dist/cli/index.js"
@@ -17,16 +17,35 @@
     "ci": "npm run typecheck && npm run test && npm run build"
   },
   "keywords": [
+    "trading",
     "prediction-markets",
     "polymarket",
     "kalshi",
-    "manifold",
-    "metaculus",
-    "trading",
-    "ai-assistant",
+    "betfair",
+    "crypto",
+    "defi",
+    "futures",
+    "binance",
+    "solana",
+    "ethereum",
+    "arbitrage",
+    "whale-tracking",
+    "copy-trading",
+    "mev-protection",
+    "ai",
     "claude",
-    "telegram-bot"
+    "telegram-bot",
+    "discord-bot",
+    "trading-bot"
   ],
+  "author": "alsk1992",
+  "homepage": "https://clodds.vercel.app",
+  "bugs": {
+    "url": "https://github.com/alsk1992/CloddsBot/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
