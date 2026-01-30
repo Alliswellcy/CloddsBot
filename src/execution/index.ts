@@ -806,9 +806,6 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
 // Export types
 export type { PolymarketApiKeyAuth, KalshiApiKeyAuth };
 
-// Export utility functions
-export { checkPolymarketNegRisk, getPolymarketExchange };
-
 // Exchange addresses
 export const POLYMARKET_EXCHANGES = {
   CTF: POLY_CTF_EXCHANGE,

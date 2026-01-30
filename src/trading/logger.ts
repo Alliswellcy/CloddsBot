@@ -24,7 +24,7 @@ export interface Trade {
   marketQuestion?: string;
   outcome: string;
   side: 'buy' | 'sell';
-  orderType: 'limit' | 'market' | 'maker';
+  orderType: 'limit' | 'market' | 'maker' | 'protected';
   price: number;
   size: number;
   filled: number;

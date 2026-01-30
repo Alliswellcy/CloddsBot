@@ -332,7 +332,11 @@ export function createOpportunityFinder(
   embeddings?: EmbeddingsService,
   config: OpportunityFinderConfig = {}
 ): OpportunityFinder {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
+  // Filter out undefined values to preserve defaults
+  const definedConfig = Object.fromEntries(
+    Object.entries(config).filter(([_, v]) => v !== undefined)
+  ) as OpportunityFinderConfig;
+  const cfg = { ...DEFAULT_CONFIG, ...definedConfig };
   const emitter = new EventEmitter() as OpportunityFinder;
 
   // Initialize sub-components

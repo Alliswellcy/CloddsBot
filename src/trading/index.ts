@@ -329,7 +329,7 @@ function wrapExecutionWithLogging(
   const wrapMethod = <T extends (...args: any[]) => Promise<OrderResult>>(
     method: T,
     side: 'buy' | 'sell',
-    orderType: 'limit' | 'market' | 'maker'
+    orderType: 'limit' | 'market' | 'maker' | 'protected'
   ): T => {
     return (async (...args: Parameters<T>) => {
       const request = args[0] as OrderRequest;
@@ -376,6 +376,9 @@ function wrapExecutionWithLogging(
     getOpenOrders: execution.getOpenOrders.bind(execution),
     getOrder: execution.getOrder.bind(execution),
     estimateFill: execution.estimateFill.bind(execution),
+    protectedBuy: wrapMethod(execution.protectedBuy.bind(execution), 'buy', 'protected'),
+    protectedSell: wrapMethod(execution.protectedSell.bind(execution), 'sell', 'protected'),
+    estimateSlippage: execution.estimateSlippage.bind(execution),
   };
 }
 
