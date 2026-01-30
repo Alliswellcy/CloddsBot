@@ -16,7 +16,7 @@ import { EventEmitter } from 'events';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync, lstatSync } from 'fs';
 import { join, dirname, resolve, normalize, isAbsolute } from 'path';
 import { homedir } from 'os';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger';
 
@@ -323,9 +323,9 @@ export function resolveCommandPath(command: string): string | null {
     return existsSync(command) ? command : null;
   }
 
-  // Try to resolve using 'which'
+  // Try to resolve using 'which' - use execFileSync to prevent command injection
   try {
-    const result = execSync(`which ${command}`, { encoding: 'utf8', timeout: 5000 });
+    const result = execFileSync('which', [command], { encoding: 'utf8', timeout: 5000 });
     return result.trim() || null;
   } catch {
     return null;

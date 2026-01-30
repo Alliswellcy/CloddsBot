@@ -4,7 +4,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { spawn, spawnSync, ChildProcess, execSync } from 'child_process';
+import { spawn, spawnSync, ChildProcess, execSync, execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
@@ -14081,7 +14081,7 @@ async function executeTool(
         writeFileSync(tempFile, code);
 
         try {
-          const output = execSync(`python3 ${tempFile}`, {
+          const output = execFileSync('python3', [tempFile], {
             timeout,
             encoding: 'utf-8',
             env: process.env,

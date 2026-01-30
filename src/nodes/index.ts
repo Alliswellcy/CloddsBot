@@ -354,7 +354,7 @@ function createNotificationService(): NotificationService {
     async send(title, body, opts = {}) {
       try {
         if (os === 'darwin') {
-          // macOS: osascript
+          // macOS: osascript - use execFileSync with -e flag to prevent shell injection
           let script = `display notification "${escapeAppleScript(body)}" with title "${escapeAppleScript(title)}"`;
           if (opts.subtitle) {
             script = `display notification "${escapeAppleScript(body)}" with title "${escapeAppleScript(title)}" subtitle "${escapeAppleScript(opts.subtitle)}"`;
@@ -362,7 +362,7 @@ function createNotificationService(): NotificationService {
           if (opts.sound) {
             script += ' sound name "default"';
           }
-          execSync(`osascript -e '${script}'`, { timeout: 5000 });
+          execFileSync('osascript', ['-e', script], { timeout: 5000 });
         } else if (os === 'linux' && hasNotifySend) {
           // Use execFileSync with array args to prevent command injection
           execFileSync('notify-send', [title, body], { timeout: 5000 });
@@ -409,7 +409,9 @@ function createSystemService(): SystemService {
         throw new Error('AppleScript only available on macOS');
       }
 
-      const output = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
+      // WARNING: This executes arbitrary AppleScript. Only use with trusted input.
+      // Using execFileSync to prevent shell injection, but AppleScript itself can be dangerous.
+      const output = execFileSync('osascript', ['-e', script], {
         encoding: 'utf-8',
         timeout: 30000,
       });
@@ -457,9 +459,23 @@ function createSystemService(): SystemService {
 
     async setClipboard(text) {
       if (os === 'darwin') {
-        execSync(`echo "${text.replace(/"/g, '\\"')}" | pbcopy`, { timeout: 5000 });
+        // Use spawn with stdin to avoid command injection
+        const proc = spawn('pbcopy', [], { timeout: 5000 });
+        proc.stdin.write(text);
+        proc.stdin.end();
+        await new Promise<void>((resolve, reject) => {
+          proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`pbcopy failed with code ${code}`)));
+          proc.on('error', reject);
+        });
       } else if (os === 'linux' && commandExists('xclip')) {
-        execSync(`echo "${text.replace(/"/g, '\\"')}" | xclip -selection clipboard`, { timeout: 5000 });
+        // Use spawn with stdin to avoid command injection
+        const proc = spawn('xclip', ['-selection', 'clipboard'], { timeout: 5000 });
+        proc.stdin.write(text);
+        proc.stdin.end();
+        await new Promise<void>((resolve, reject) => {
+          proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`xclip failed with code ${code}`)));
+          proc.on('error', reject);
+        });
       } else {
         throw new Error('Clipboard not available');
       }
@@ -500,7 +516,8 @@ export function createNodeHost(): NodeHost {
 
 function commandExists(cmd: string): boolean {
   try {
-    execSync(`which ${cmd}`, { stdio: 'ignore' });
+    // Use execFileSync with array args to prevent command injection
+    execFileSync('which', [cmd], { stdio: 'ignore' });
     return true;
   } catch {
     return false;

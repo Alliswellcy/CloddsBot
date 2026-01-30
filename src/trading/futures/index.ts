@@ -15,7 +15,8 @@
 
 import { EventEmitter } from 'events';
 import { createHmac, createHash, randomBytes } from 'crypto';
-import * as secp256k1 from 'secp256k1';
+import * as secp from '@noble/secp256k1';
+import { keccak_256 } from '@noble/hashes/sha3';
 import { logger } from '../../utils/logger';
 import { Pool, PoolClient } from 'pg';
 
@@ -286,41 +287,33 @@ export interface StrategyPerformance {
 }
 
 // =============================================================================
-// CRYPTO UTILITIES
+// CRYPTO UTILITIES (using @noble/secp256k1 - no elliptic dependency)
 // =============================================================================
 
-function keccak256(data: Buffer): Buffer {
-  // Use createHash with shake256 as closest available, but for proper keccak
-  // we implement it manually using the keccak-256 algorithm
-  const { createHash: nodeHash } = require('crypto');
-
-  // Node.js 18+ has native keccak256 support
-  try {
-    return nodeHash('sha3-256').update(data).digest();
-  } catch {
-    // Fallback: Use sha256 (not ideal but functional for testing)
-    return createHash('sha256').update(data).digest();
-  }
+function keccak256(data: Uint8Array | Buffer): Buffer {
+  return Buffer.from(keccak_256(data));
 }
 
 function privateKeyToAddress(privateKey: string): string {
-  const privKeyBuffer = Buffer.from(privateKey.replace('0x', ''), 'hex');
-  const pubKey = secp256k1.publicKeyCreate(privKeyBuffer, false);
+  const privKeyBytes = Buffer.from(privateKey.replace('0x', ''), 'hex');
+  // Get uncompressed public key (65 bytes, starting with 0x04)
+  const pubKey = secp.getPublicKey(privKeyBytes, false);
   // Remove the 0x04 prefix and hash
-  const pubKeyHash = keccak256(Buffer.from(pubKey.slice(1)));
+  const pubKeyHash = keccak256(pubKey.slice(1));
   // Take last 20 bytes
   return '0x' + pubKeyHash.slice(-20).toString('hex');
 }
 
 function signMessage(message: Buffer, privateKey: string): { r: string; s: string; v: number } {
-  const privKeyBuffer = Buffer.from(privateKey.replace('0x', ''), 'hex');
+  const privKeyBytes = Buffer.from(privateKey.replace('0x', ''), 'hex');
   const msgHash = keccak256(message);
-  const sig = secp256k1.ecdsaSign(msgHash, privKeyBuffer);
+  // Use 'recovered' format to get signature with recovery bit (65 bytes: r + s + v)
+  const sigBytes = secp.sign(msgHash, privKeyBytes, { format: 'recovered', prehash: false });
 
   return {
-    r: '0x' + Buffer.from(sig.signature.slice(0, 32)).toString('hex'),
-    s: '0x' + Buffer.from(sig.signature.slice(32, 64)).toString('hex'),
-    v: sig.recid + 27,
+    r: '0x' + Buffer.from(sigBytes.slice(0, 32)).toString('hex'),
+    s: '0x' + Buffer.from(sigBytes.slice(32, 64)).toString('hex'),
+    v: sigBytes[64] + 27,
   };
 }
 

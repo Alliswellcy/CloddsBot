@@ -67,13 +67,15 @@ Instead, please report them via one of these methods:
 
 ### npm Dependencies
 
-Some transitive dependencies have known vulnerabilities that cannot be fixed without breaking changes:
+All npm vulnerabilities have been fixed using npm overrides:
+- **bigint-buffer** → @vekexasia/bigint-buffer2 (secure fork)
+- **elliptic** → Replaced with @noble/secp256k1 (modern, audited)
+- **axios** → Forced to ^1.7.4
+- **undici** → Forced to ^6.23.0
+- **nanoid** → Forced to ^3.3.8
+- **@cosmjs/**** → Forced to ^0.38.1 (uses @noble/curves)
 
-- `@solana/spl-token` chain (bigint-buffer)
-- `@cosmjs/*` chain (elliptic)
-- `@orca-so/whirlpool-sdk` (axios)
-
-These are monitored and will be updated when upstream fixes are available.
+Run `npm audit` to verify: **0 vulnerabilities**
 
 ### Sandbox Limitations
 

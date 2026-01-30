@@ -8,7 +8,7 @@
  * - Log management
  */
 
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import { existsSync, writeFileSync, unlinkSync, readFileSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join } from 'path';
@@ -71,7 +71,7 @@ export function createDaemonService(): DaemonService {
 </plist>`;
         const plistPath = getLaunchdPlist();
         writeFileSync(plistPath, plist);
-        execSync(`launchctl load ${plistPath}`);
+        execFileSync('launchctl', ['load', plistPath]);
         logger.info('Daemon installed (launchd)');
       } else if (os === 'linux') {
         const service = `[Unit]
@@ -100,7 +100,7 @@ WantedBy=default.target`;
       if (os === 'darwin') {
         const plistPath = getLaunchdPlist();
         if (existsSync(plistPath)) {
-          execSync(`launchctl unload ${plistPath}`);
+          execFileSync('launchctl', ['unload', plistPath]);
           unlinkSync(plistPath);
         }
         logger.info('Daemon uninstalled');
@@ -117,7 +117,7 @@ WantedBy=default.target`;
 
     async start() {
       if (os === 'darwin') {
-        execSync(`launchctl start ${SERVICE_NAME}`);
+        execFileSync('launchctl', ['start', SERVICE_NAME]);
       } else if (os === 'linux') {
         execSync('systemctl --user start clodds');
       }
@@ -126,7 +126,7 @@ WantedBy=default.target`;
 
     async stop() {
       if (os === 'darwin') {
-        execSync(`launchctl stop ${SERVICE_NAME}`);
+        execFileSync('launchctl', ['stop', SERVICE_NAME]);
       } else if (os === 'linux') {
         execSync('systemctl --user stop clodds');
       }
@@ -144,7 +144,9 @@ WantedBy=default.target`;
       
       try {
         if (os === 'darwin') {
-          const output = execSync(`launchctl list | grep ${SERVICE_NAME}`, { encoding: 'utf-8' });
+          // Get full list and filter in JS to avoid shell injection
+          const fullOutput = execFileSync('launchctl', ['list'], { encoding: 'utf-8' });
+          const output = fullOutput.split('\n').find(line => line.includes(SERVICE_NAME)) || '';
           const parts = output.trim().split(/\s+/);
           const pid = parseInt(parts[0], 10);
           return { installed: true, running: !isNaN(pid) && pid > 0, pid: isNaN(pid) ? undefined : pid };

@@ -12,7 +12,7 @@
  * - Application control
  */
 
-import { exec, execSync, spawn } from 'child_process';
+import { exec, execSync, execFileSync, spawn } from 'child_process';
 import { existsSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir, homedir, platform } from 'os';
@@ -108,7 +108,8 @@ export function runAppleScriptSync(script: string): string {
   writeFileSync(tempFile, script);
 
   try {
-    return execSync(`osascript ${tempFile}`, { encoding: 'utf-8' }).trim();
+    // Use execFileSync to prevent command injection
+    return execFileSync('osascript', [tempFile], { encoding: 'utf-8' }).trim();
   } finally {
     try { unlinkSync(tempFile); } catch {}
   }

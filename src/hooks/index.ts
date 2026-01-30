@@ -407,7 +407,8 @@ export function createHooksService(): HooksService {
     if (requirements.bins) {
       for (const bin of requirements.bins) {
         try {
-          require('child_process').execSync(`which ${bin}`, { stdio: 'ignore' });
+          // Use execFileSync to prevent command injection
+          require('child_process').execFileSync('which', [bin], { stdio: 'ignore' });
         } catch {
           missing.push(`bin:${bin}`);
         }

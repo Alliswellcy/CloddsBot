@@ -9,7 +9,7 @@
  * - Timeout management
  */
 
-import { spawn, exec, execSync, ChildProcess, SpawnOptions, ExecOptions } from 'child_process';
+import { spawn, exec, execSync, execFileSync, ChildProcess, SpawnOptions, ExecOptions } from 'child_process';
 import { EventEmitter } from 'events';
 import { logger } from '../utils/logger';
 
@@ -466,7 +466,8 @@ export function onShutdown(handler: SignalHandler): () => void {
 /** Check if a command exists */
 export function commandExists(command: string): boolean {
   try {
-    execSync(`which ${command}`, { stdio: 'ignore' });
+    // Use execFileSync with array args to prevent command injection
+    execFileSync('which', [command], { stdio: 'ignore' });
     return true;
   } catch {
     return false;

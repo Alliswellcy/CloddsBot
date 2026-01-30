@@ -64,8 +64,9 @@ export async function createNostrChannel(
     privateKeyHex = config.privateKey;
   }
 
-  // Derive public key
-  publicKeyHex = bytesToHex(secp256k1.getPublicKey(privateKeyHex, true).slice(1));
+  // Derive public key (convert hex string to bytes for noble secp256k1 v3)
+  const privateKeyBytes = hexToBytes(privateKeyHex);
+  publicKeyHex = bytesToHex(secp256k1.getPublicKey(privateKeyBytes, true).slice(1));
 
   function isUserAllowed(pubkey: string): boolean {
     if (staticAllowlist.has(pubkey)) return true;
@@ -91,7 +92,7 @@ export async function createNostrChannel(
 
   async function signEvent(event: UnsignedEvent): Promise<NostrEvent> {
     const id = getEventId(event);
-    const sig = bytesToHex(await secp256k1.sign(hexToBytes(id), privateKeyHex));
+    const sig = bytesToHex(await secp256k1.signAsync(hexToBytes(id), privateKeyBytes, { prehash: false }));
     return { ...event, id, sig };
   }
 
@@ -106,7 +107,7 @@ export async function createNostrChannel(
 
   async function sendDM(recipientPubkey: string, content: string): Promise<string> {
     // NIP-04 encrypted DM
-    const sharedSecret = secp256k1.getSharedSecret(privateKeyHex, '02' + recipientPubkey);
+    const sharedSecret = secp256k1.getSharedSecret(privateKeyBytes, hexToBytes('02' + recipientPubkey));
     const key = sharedSecret.slice(1, 33);
 
     // Simple XOR encryption for demo - real impl should use proper NIP-04
