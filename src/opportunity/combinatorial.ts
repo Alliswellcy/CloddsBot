@@ -15,6 +15,46 @@ import type { Database } from '../db/index';
 import type { FeedManager } from '../feeds/index';
 
 // ============================================================================
+// Fee Calculation
+// ============================================================================
+
+/**
+ * Get estimated taker fee rate for a platform (as decimal, e.g., 0.02 = 2%)
+ *
+ * VERIFIED FEE STRUCTURES (Jan 2026):
+ * - Polymarket: 0% on most markets; 15-min crypto markets have dynamic fees (up to ~3% at 50/50 odds)
+ * - Kalshi: Formula-based 0.07 * contracts * price * (1-price), averaging ~1.2%, capped at ~2%
+ * - PredictIt: 10% on profits
+ *
+ * Note: For conservative estimates, we use worst-case fees for each platform.
+ * The `is15MinCrypto` flag indicates Polymarket 15-minute crypto markets which have fees.
+ */
+export function getPlatformFeeRate(platform: string, is15MinCrypto = false): number {
+  switch (platform.toLowerCase()) {
+    case 'polymarket':
+      // Most Polymarket markets have ZERO fees
+      // Only 15-min crypto markets have dynamic fees (up to ~3.15% at 50/50)
+      return is15MinCrypto ? 0.03 : 0;
+    case 'kalshi':
+      // Formula-based fees averaging ~1.2%, we use 1.5% for conservative estimate
+      return 0.015;
+    case 'predictit':
+      // 10% on profits (5% on each side effectively)
+      return 0.05;
+    case 'betfair':
+      // Commission varies 2-5%, we use 2%
+      return 0.02;
+    case 'manifold':
+    case 'metaculus':
+      // Play money / no fees
+      return 0;
+    default:
+      // Conservative default for unknown platforms
+      return 0.02;
+  }
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -100,10 +140,10 @@ export function findRebalanceOpportunities(
   markets: MarketCondition[],
   options: {
     minEdgePct?: number;
-    feeRate?: number;
+    feeRate?: number; // Override fee rate (if not provided, uses platform-specific rate)
   } = {}
 ): RebalanceOpportunity[] {
-  const { minEdgePct = 0.5, feeRate = 0.02 } = options;
+  const { minEdgePct = 0.5, feeRate } = options;
   const opportunities: RebalanceOpportunity[] = [];
 
   for (const market of markets) {
@@ -112,8 +152,10 @@ export function findRebalanceOpportunities(
 
     if (deviation < 0.001) continue; // No opportunity
 
+    // Use provided fee rate or platform-specific rate
+    const effectiveFeeRate = feeRate ?? getPlatformFeeRate(market.platform);
     const grossProfit = deviation;
-    const fees = totalCost * feeRate;
+    const fees = totalCost * effectiveFeeRate;
     const netProfit = grossProfit - fees;
     const edgePct = (netProfit / totalCost) * 100;
 

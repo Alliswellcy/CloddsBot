@@ -2,9 +2,9 @@
  * Execution Service - Native TypeScript order execution
  *
  * Features:
- * - Limit orders (GTC)
+ * - Limit orders (GTC, GTD)
  * - Market orders (FOK)
- * - Maker orders (POST_ONLY)
+ * - Maker orders (GTC with postOnly flag)
  * - Order cancellation
  * - Open orders management
  *
@@ -27,7 +27,8 @@ import {
 // =============================================================================
 
 export type OrderSide = 'buy' | 'sell';
-export type OrderType = 'GTC' | 'FOK' | 'GTD' | 'POST_ONLY';
+// Note: Polymarket supports GTC, GTD, FOK. POST_ONLY is achieved via postOnly boolean flag.
+export type OrderType = 'GTC' | 'FOK' | 'GTD';
 export type OrderStatus = 'pending' | 'open' | 'filled' | 'cancelled' | 'expired' | 'rejected';
 
 export interface OrderRequest {
@@ -42,6 +43,8 @@ export interface OrderRequest {
   expiration?: number; // Unix timestamp for GTD
   /** Polymarket: true for negative risk markets (crypto 15-min markets) */
   negRisk?: boolean;
+  /** Polymarket: true to ensure order only adds liquidity (maker-only). Order rejected if it would take liquidity. */
+  postOnly?: boolean;
   /** Maximum slippage allowed (as decimal, e.g., 0.02 = 2%) */
   maxSlippage?: number;
 }
@@ -109,9 +112,9 @@ export interface ExecutionService {
   marketBuy(request: Omit<OrderRequest, 'side' | 'price'>): Promise<OrderResult>;
   marketSell(request: Omit<OrderRequest, 'side' | 'price'>): Promise<OrderResult>;
 
-  // Maker orders (POST_ONLY - avoid taker fees)
-  makerBuy(request: Omit<OrderRequest, 'side' | 'orderType'>): Promise<OrderResult>;
-  makerSell(request: Omit<OrderRequest, 'side' | 'orderType'>): Promise<OrderResult>;
+  // Maker orders (GTC with postOnly flag - avoid taker fees)
+  makerBuy(request: Omit<OrderRequest, 'side' | 'orderType' | 'postOnly'>): Promise<OrderResult>;
+  makerSell(request: Omit<OrderRequest, 'side' | 'orderType' | 'postOnly'>): Promise<OrderResult>;
 
   // Slippage-protected orders (checks slippage before executing)
   protectedBuy(request: Omit<OrderRequest, 'side'>, maxSlippage?: number): Promise<OrderResult>;
@@ -317,12 +320,15 @@ async function placePolymarketOrder(
   price: number,
   size: number,
   orderType: OrderType = 'GTC',
-  negRisk?: boolean
+  negRisk?: boolean,
+  postOnly?: boolean
 ): Promise<OrderResult> {
   const url = `${POLY_CLOB_URL}/order`;
 
   // Build order payload
   // Note: The CLOB API auto-detects neg_risk from token_id, but we can pass it explicitly
+  // Supported orderTypes: GTC, GTD, FOK (for market orders)
+  // postOnly is a separate boolean parameter for GTC/GTD to ensure maker-only execution
   const order: Record<string, unknown> = {
     tokenID: tokenId,
     side: side.toUpperCase(),
@@ -335,6 +341,11 @@ async function placePolymarketOrder(
   // If neg_risk is explicitly specified, include it
   if (negRisk !== undefined) {
     order.negRisk = negRisk;
+  }
+
+  // postOnly ensures order only adds liquidity (rejected if would take)
+  if (postOnly === true) {
+    order.postOnly = true;
   }
 
   const headers = buildPolymarketHeadersForUrl(auth, 'POST', url, order);
@@ -696,7 +707,8 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
         request.price,
         request.size,
         request.orderType,
-        request.negRisk
+        request.negRisk,
+        request.postOnly
       );
     }
 
@@ -742,11 +754,11 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
     },
 
     async makerBuy(request) {
-      return executeOrder({ ...request, side: 'buy', orderType: 'POST_ONLY' });
+      return executeOrder({ ...request, side: 'buy', orderType: 'GTC', postOnly: true });
     },
 
     async makerSell(request) {
-      return executeOrder({ ...request, side: 'sell', orderType: 'POST_ONLY' });
+      return executeOrder({ ...request, side: 'sell', orderType: 'GTC', postOnly: true });
     },
 
     async cancelOrder(platform, orderId) {

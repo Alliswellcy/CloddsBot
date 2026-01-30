@@ -10,13 +10,13 @@ Comprehensive glossary of terms used throughout the Clodds platform for predicti
 |------|------------|
 | **Limit Order** | Order to buy/sell at a specific price or better. Used for price-sensitive entries. |
 | **Market Order** | Order that executes immediately at best available price. Priority: speed over price. |
-| **Maker Order** | Order that adds liquidity to orderbook. On Polymarket, makers receive -0.5% rebate. |
-| **Taker Order** | Order that removes liquidity by crossing the spread. Pays taker fees. |
-| **Post-Only** | Order that only adds liquidity; rejected if would take liquidity. |
-| **GTC** | Good-Till-Cancelled. Order remains open until filled or manually cancelled. |
-| **FOK** | Fill-Or-Kill. Must execute in full immediately or be cancelled entirely. |
-| **FAK** | Fill-And-Kill. Fills what's available immediately, cancels remainder. |
-| **IOC** | Immediate-Or-Cancel. Same as FAK - fills available, cancels rest. |
+| **Maker Order** | Order that adds liquidity to orderbook. On Polymarket: 0% fees on most markets; eligible for rebates on 15-min crypto markets. |
+| **Taker Order** | Order that removes liquidity by crossing the spread. On Polymarket: 0% on most markets, dynamic fees (up to ~3% at 50/50 odds) on 15-min crypto markets. On Kalshi: formula-based fees capped at ~2%. |
+| **Post-Only** | Order parameter that ensures order only adds liquidity; rejected if would take. On Polymarket: use `postOnly: true` with GTC/GTD orders. |
+| **GTC** | Good-Till-Cancelled. Order remains open until filled or manually cancelled. Supported on Polymarket. |
+| **FOK** | Fill-Or-Kill. Must execute in full immediately or be cancelled entirely. Supported on Polymarket for market orders. |
+| **FAK** | Fill-And-Kill. Fills what's available immediately, cancels remainder. *Not supported on Polymarket.* |
+| **IOC** | Immediate-Or-Cancel. Same as FAK - fills available, cancels rest. *Not supported on Polymarket.* |
 | **GTD** | Good-Till-Date. Order expires at specified timestamp. |
 | **Fill** | Execution of an order. "Fill price" = price at which order executed. |
 | **Orderbook** | List of all open buy (bid) and sell (ask) orders at each price level. |
@@ -51,8 +51,8 @@ Comprehensive glossary of terms used throughout the Clodds platform for predicti
 | Term | Definition |
 |------|------------|
 | **Arbitrage** | Exploiting price differences for same asset across platforms for guaranteed profit. |
-| **Cross-Platform Arbitrage** | Buying at low price on one platform, selling at higher price on another. |
-| **Internal Arbitrage** | Exploiting YES + NO = $1 constraint. Buy both when total < $1 for guaranteed profit. |
+| **Cross-Platform Arbitrage** | Buying at low price on one platform, selling at higher price on another. *Note: Requires accounts and capital on both platforms; settlement delays and currency differences make execution challenging.* |
+| **Internal Arbitrage** | Exploiting YES + NO = $1 constraint. Buy both when total < $1. *Note: Polymarket has zero fees on most markets making this viable; 15-min crypto markets have dynamic fees that may reduce profitability.* |
 | **Combinatorial Arbitrage** | Exploiting logical violations between related markets (e.g., P(Trump) ≤ P(Republican)). |
 | **Edge** | Mathematical advantage on a trade. Edge = Estimated Probability - Market Price. |
 | **Fair Value** | Theoretically correct price based on probability models or arbitrage-free pricing. |
@@ -234,7 +234,7 @@ Comprehensive glossary of terms used throughout the Clodds platform for predicti
 | **Cursor** | Pagination pointer for retrieving next page of results. |
 | **Batch Operations** | Executing multiple actions in one API call. |
 | **Basis Points (bps)** | Unit = 0.01%. 100 bps = 1%. |
-| **Rebate** | Payment for being maker. Polymarket: -0.5% rebate. |
+| **Rebate** | Fee discount or payment for providing liquidity. *Polymarket has a Maker Rebates Program for 15-min crypto markets where taker fees are redistributed to liquidity providers.* |
 
 ---
 
@@ -242,8 +242,8 @@ Comprehensive glossary of terms used throughout the Clodds platform for predicti
 
 | Term | Definition |
 |------|------------|
-| **Polymarket** | Crypto prediction market on Polygon using USDC. |
-| **Kalshi** | US-regulated prediction market. |
+| **Polymarket** | Crypto prediction market on Polygon using USDC. Uses CLOB with GTC, GTD, FOK order types. Zero fees on most markets; dynamic fees on 15-min crypto markets. |
+| **Kalshi** | US-regulated prediction market (USD, US residents only). Formula-based fees: 0.07 × contracts × price × (1-price), capped at ~2%. |
 | **Betfair** | Sports betting exchange. |
 | **Drift** | Solana-based perpetual futures DEX. |
 | **Jupiter** | Solana DEX aggregator finding best swap routes. |

@@ -258,19 +258,19 @@ console.log(`  Levels consumed: ${estimate.levelsConsumed}`);
 
 ## Fee Structure
 
-### Polymarket
-- **Taker**: 0% (no fee)
-- **Maker**: -0.5% (rebate!)
+### Polymarket (Verified Jan 2026)
+- **Most markets**: 0% maker, 0% taker (zero fees)
+- **15-min crypto markets**: Dynamic taker fees up to ~3% at 50/50 odds; makers eligible for rebate program
 
 ### Kalshi
-- **Taker**: Varies by market
-- **Maker**: Lower than taker
+- **Taker**: Formula-based ~1.2% average, capped at ~2%
+- **Maker**: ~0.17% (formula-based)
 
 ---
 
 ## Best Practices
 
-1. **Use maker orders** when possible - Get rebates on Polymarket
+1. **Use maker orders** when possible - Pay no fees on Polymarket (most markets)
 2. **Check slippage** before large orders
 3. **Use protected orders** for size > $500
 4. **Set appropriate timeInForce** - GTC for patient orders, FOK for all-or-nothing

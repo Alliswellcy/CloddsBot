@@ -55,6 +55,7 @@ import { createOutcomeNormalizer, OutcomeNormalizer, NormalizedOutcome } from '.
 import { createOpportunityAnalytics, OpportunityAnalytics } from './analytics';
 import { createMarketLinker, MarketLinker, MarketLink } from './links';
 import { createRiskModeler, RiskModeler, RiskModelOutput, ArbitrageLeg } from './risk';
+import { getPlatformFeeRate } from './combinatorial';
 
 // =============================================================================
 // TYPES
@@ -92,9 +93,9 @@ export interface Opportunity {
   type: 'internal' | 'cross_platform' | 'edge';
   /** Markets involved */
   markets: OpportunityMarket[];
-  /** Calculated spread/edge % */
+  /** Calculated spread/edge % (net of platform fees) */
   edgePct: number;
-  /** Profit per $100 bet */
+  /** Profit per $100 bet (gross, before fees) */
   profitPer100: number;
   /** Liquidity-adjusted score (0-100) */
   score: number;
@@ -500,7 +501,14 @@ export function createOpportunityFinder(
         if (!isValidPrice(yesPrice) || !isValidPrice(noPrice)) continue;
 
         const sum = yesPrice + noPrice;
-        const edgePct = (1 - sum) * 100;
+        const grossEdgePct = (1 - sum) * 100;
+
+        // Calculate fee-adjusted edge (taker fees on both YES and NO)
+        // Note: Polymarket has 0% fees on most markets, so this preserves the edge
+        const feeRate = getPlatformFeeRate(platform);
+        const totalFees = sum * feeRate; // Fees on total cost
+        const netEdgePct = grossEdgePct - (totalFees * 100);
+        const edgePct = netEdgePct;
 
         if (edgePct < minEdge) continue;
 
@@ -638,11 +646,19 @@ export function createOpportunityFinder(
       const highest = pricesByPlatform[pricesByPlatform.length - 1];
 
       // Strategy 1: Buy YES on low, Sell YES on high (if platforms support selling)
-      const spreadYes = (highest.yesPrice - lowest.yesPrice) * 100;
+      const grossSpreadYes = (highest.yesPrice - lowest.yesPrice) * 100;
 
       // Strategy 2: Buy YES on low, Buy NO on high (if NO + YES_low < $1)
       const combinedCost = lowest.yesPrice + highest.noPrice;
-      const crossEdge = (1 - combinedCost) * 100;
+      const grossCrossEdge = (1 - combinedCost) * 100;
+
+      // Calculate fee-adjusted edges (fees on both platforms)
+      const lowestFeeRate = getPlatformFeeRate(lowest.platform);
+      const highestFeeRate = getPlatformFeeRate(highest.platform);
+      const totalFeesPct = (lowestFeeRate + highestFeeRate) * 100;
+
+      const spreadYes = grossSpreadYes - totalFeesPct;
+      const crossEdge = grossCrossEdge - totalFeesPct;
 
       const edgePct = Math.max(spreadYes, crossEdge);
 

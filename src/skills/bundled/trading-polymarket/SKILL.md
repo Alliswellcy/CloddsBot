@@ -507,9 +507,13 @@ client.drop_notifications(params=DropNotificationParams(...))
 
 ---
 
-## Fee Structure (15-min Crypto Markets)
+## Fee Structure
 
-**Only 15-minute BTC/ETH/SOL/XRP markets have fees.**
+**IMPORTANT: Most Polymarket markets have ZERO fees (0% maker, 0% taker).**
+
+### 15-min Crypto Markets (Exception)
+
+Only 15-minute BTC/ETH/SOL/XRP price prediction markets have fees:
 
 ```
 fee = shares × 0.25 × (price × (1 - price))²

@@ -408,20 +408,106 @@ export async function runDoctor(): Promise<CheckResult[]> {
     const stats = fs.statSync(dbPath);
     const sizeMb = (stats.size / 1024 / 1024).toFixed(2);
     results.push({
-      name: 'Database',
+      name: 'Database file',
       status: 'pass',
       message: `${dbPath} (${sizeMb} MB)`,
     });
+
+    // 6b. Database connectivity test
+    try {
+      // Try to read the database header to verify it's valid SQLite
+      const fd = fs.openSync(dbPath, 'r');
+      const header = Buffer.alloc(16);
+      fs.readSync(fd, header, 0, 16, 0);
+      fs.closeSync(fd);
+
+      // SQLite database files start with "SQLite format 3"
+      const headerStr = header.toString('utf8', 0, 15);
+      if (headerStr === 'SQLite format 3') {
+        results.push({
+          name: 'Database validity',
+          status: 'pass',
+          message: 'Valid SQLite format',
+        });
+      } else {
+        results.push({
+          name: 'Database validity',
+          status: 'warn',
+          message: 'File exists but may not be valid SQLite',
+          fix: 'Delete ~/.clodds/clodds.db and restart to recreate',
+        });
+      }
+    } catch (error) {
+      results.push({
+        name: 'Database validity',
+        status: 'warn',
+        message: `Could not verify: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
+    }
   } else {
     results.push({
-      name: 'Database',
+      name: 'Database file',
       status: 'warn',
       message: 'Not created yet',
       fix: 'Will be created on first run',
     });
   }
 
-  // 7. Webhook endpoints
+  // 7. API key format validation
+  if (anthropicKey) {
+    if (anthropicKey.startsWith('sk-ant-')) {
+      results.push({
+        name: 'Anthropic API key format',
+        status: 'pass',
+        message: 'Valid format (sk-ant-...)',
+      });
+    } else {
+      results.push({
+        name: 'Anthropic API key format',
+        status: 'warn',
+        message: 'Unexpected format (should start with sk-ant-)',
+        fix: 'Verify your API key at console.anthropic.com',
+      });
+    }
+  }
+
+  // 8. Port availability check
+  const port = config.gateway?.port || 18789;
+  try {
+    const net = await import('net');
+    const available = await new Promise<boolean>((resolve) => {
+      const server = net.createServer();
+      server.once('error', () => resolve(false));
+      server.once('listening', () => {
+        server.close();
+        resolve(true);
+      });
+      server.listen(port, '127.0.0.1');
+    });
+
+    if (available) {
+      results.push({
+        name: 'Gateway port',
+        status: 'pass',
+        message: `Port ${port} is available`,
+      });
+    } else {
+      results.push({
+        name: 'Gateway port',
+        status: 'fail',
+        message: `Port ${port} is in use`,
+        fix: `Stop the process using port ${port} or change gateway.port in config`,
+      });
+    }
+  } catch (error) {
+    results.push({
+      name: 'Gateway port',
+      status: 'warn',
+      message: `Could not check port ${port}`,
+    });
+  }
+
+  // 9. Webhook endpoints
   const scheme = process.env.CLODDS_PUBLIC_SCHEME || 'http';
   const host = process.env.CLODDS_PUBLIC_HOST || 'localhost';
   const portSuffix = config.gateway?.port && ![80, 443].includes(config.gateway.port)

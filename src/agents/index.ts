@@ -7691,7 +7691,7 @@ async function executeTool(
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           await context.credentials.markSuccess(userId, 'polymarket');
-          return JSON.stringify({ result: 'Maker buy order placed (POST_ONLY)', output: output.trim() });
+          return JSON.stringify({ result: 'Maker buy order placed (postOnly)', output: output.trim() });
         } catch (err: unknown) {
           const error = err as { stderr?: string; message?: string };
           if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {
@@ -7728,7 +7728,7 @@ async function executeTool(
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
           await context.credentials.markSuccess(userId, 'polymarket');
-          return JSON.stringify({ result: 'Maker sell order placed (POST_ONLY)', output: output.trim() });
+          return JSON.stringify({ result: 'Maker sell order placed (postOnly)', output: output.trim() });
         } catch (err: unknown) {
           const error = err as { stderr?: string; message?: string };
           if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {

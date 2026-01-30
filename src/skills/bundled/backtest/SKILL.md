@@ -52,10 +52,11 @@ const backtest = createBacktestEngine({
   // Capital
   initialCapital: 10000,
 
-  // Fees
+  // Fees (Polymarket: 0% on most markets; Kalshi: ~1.2% avg)
   fees: {
-    maker: -0.005,  // -0.5% rebate
-    taker: 0.01,    // 1% fee
+    maker: 0,       // 0% maker fee (Polymarket most markets)
+    taker: 0,       // 0% taker fee (Polymarket most markets)
+    // For 15-min crypto markets or Kalshi, use: taker: 0.012
   },
 
   // Slippage model

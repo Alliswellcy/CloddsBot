@@ -163,21 +163,116 @@ export function createServer(config: Config['gateway'], webhooks?: WebhookManage
 <head>
   <title>Clodds WebChat</title>
   <style>
-    body { font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 20px; }
-    #messages { height: 400px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
-    .msg { margin: 5px 0; padding: 8px; border-radius: 4px; }
-    .user { background: #e3f2fd; text-align: right; }
-    .bot { background: #f5f5f5; }
-    .system { background: #fff3e0; font-style: italic; font-size: 0.9em; }
-    #input { width: calc(100% - 80px); padding: 10px; }
-    button { padding: 10px 20px; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 650px;
+      margin: 0 auto;
+      padding: 20px;
+      background: linear-gradient(180deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+      min-height: 100vh;
+      color: #e2e8f0;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+      padding: 16px;
+      background: rgba(0,0,0,0.3);
+      border-radius: 12px;
+      border: 1px solid #334155;
+    }
+    .header img { width: 44px; height: 44px; border-radius: 10px; }
+    .header h1 {
+      margin: 0;
+      font-size: 22px;
+      background: linear-gradient(180deg, #fff 0%, #22d3ee 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    #messages {
+      height: 420px;
+      overflow-y: auto;
+      border: 1px solid #334155;
+      padding: 12px;
+      margin-bottom: 12px;
+      background: rgba(30, 41, 59, 0.5);
+      border-radius: 12px;
+    }
+    #messages::-webkit-scrollbar { width: 6px; }
+    #messages::-webkit-scrollbar-track { background: transparent; }
+    #messages::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    .msg { margin: 10px 0; padding: 12px 16px; border-radius: 12px; line-height: 1.5; }
+    .user {
+      background: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%);
+      color: #0f172a;
+      text-align: right;
+      margin-left: 20%;
+      font-weight: 500;
+    }
+    .bot {
+      background: #334155;
+      color: #e2e8f0;
+      margin-right: 10%;
+      border: 1px solid #475569;
+    }
+    .bot pre {
+      margin: 8px 0 0 0;
+      font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      color: #94a3b8;
+    }
+    .system {
+      background: rgba(34, 211, 238, 0.1);
+      border: 1px solid rgba(34, 211, 238, 0.3);
+      color: #22d3ee;
+      font-size: 0.85em;
+      text-align: center;
+    }
+    #input-area { display: flex; gap: 10px; }
+    #input {
+      flex: 1;
+      padding: 14px 18px;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      font-size: 14px;
+      background: #1e293b;
+      color: #e2e8f0;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #input:focus { border-color: #22d3ee; }
+    #input::placeholder { color: #64748b; }
+    button {
+      padding: 14px 28px;
+      background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+      color: #0f172a;
+      border: none;
+      border-radius: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.1s, box-shadow 0.2s;
+    }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px rgba(34, 211, 238, 0.3);
+    }
+    button:active { transform: translateY(0); }
   </style>
 </head>
 <body>
-  <h1>🎲 Clodds WebChat</h1>
+  <div class="header">
+    <img src="https://cloddsbot.com/logo.png" alt="Clodds" onerror="this.style.display='none'" />
+    <h1>Clodds WebChat</h1>
+  </div>
   <div id="messages"></div>
-  <input type="text" id="input" placeholder="Ask about prediction markets..." />
-  <button onclick="send()">Send</button>
+  <div id="input-area">
+    <input type="text" id="input" placeholder="Ask about prediction markets..." />
+    <button onclick="send()">Send</button>
+  </div>
   <script>
     const port = window.location.port || 80;
     const ws = new WebSocket('ws://' + window.location.hostname + ':' + port + '/chat');

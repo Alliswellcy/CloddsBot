@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/logo.png" alt="Clodds Logo" width="280">
+  <img src="https://cloddsbot.com/logo.png" alt="Clodds Logo" width="280">
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
 
 **Clodds** is a personal AI trading terminal for prediction markets, crypto spot, and **perpetual futures with leverage**. Run it on your own machine, chat via any of **22 messaging platforms**, trade across **9 prediction markets + 5 futures exchanges**, and manage your portfolio — all through natural conversation.
 
-Built on Claude with cross-platform arbitrage detection based on [arXiv:2508.03474](https://arxiv.org/abs/2508.03474) which found **$40M+ in realized arbitrage** on Polymarket.
+Built on Claude with arbitrage detection algorithms based on [arXiv:2508.03474](https://arxiv.org/abs/2508.03474), which documented arbitrage patterns on Polymarket. See [Arbitrage Limitations](#arbitrage-limitations) for practical considerations.
 
 ---
 
@@ -497,6 +497,30 @@ Edge: 7% (buy YES)
 - **Heuristic reduction** — O(2^n+m) → O(n·k) via topic clustering
 - **Win rate tracking** — Performance analytics by platform pair
 
+### Arbitrage Limitations
+
+**Important:** Arbitrage detection shows *theoretical* opportunities. Actual execution has challenges:
+
+| Type | Viability | Challenge |
+|------|-----------|-----------|
+| **Internal** (same platform) | Good | Zero fees on most Polymarket markets; viable with sufficient edge |
+| **Cross-Platform** | Limited | Different currencies (USDC vs USD), settlement delays, requires accounts on both platforms |
+| **Combinatorial** | Experimental | Dependency detection uses heuristics; manual verification recommended |
+
+**Fee Reality (Verified Jan 2026):**
+- **Polymarket:** Zero fees on most markets; 15-min crypto markets have dynamic fees (up to ~3% at 50/50 odds)
+- **Kalshi:** Formula-based fees averaging ~1.2%, capped at ~2%
+
+**What Works Well:**
+- Internal arbitrage on Polymarket (zero fees on most markets)
+- Price monitoring and alerts
+- Portfolio tracking and P&L
+- Market research and comparison
+
+**What Requires Caution:**
+- Cross-platform trades (currency/settlement complexity)
+- Automated execution (defaults to dry-run mode for safety)
+
 ---
 
 ## Advanced Trading
@@ -616,28 +640,8 @@ Real-time monitoring for leveraged positions:
 
 ### Demo
 <p align="center">
-  <img src="./assets/demo.gif" alt="Clodds Demo" width="600">
+  <img src="https://cloddsbot.com/demo.gif" alt="Clodds Demo" width="600">
 </p>
-
-### Arbitrage Scanner
-<img src="./assets/screenshots/arbitrage.png" alt="Arbitrage Scanner" width="700">
-
-### Portfolio Dashboard
-<img src="./assets/screenshots/portfolio.png" alt="Portfolio" width="700">
-
-### Chat Interfaces
-<table>
-<tr>
-<td width="40%">
-<strong>Telegram</strong>
-<img src="./assets/screenshots/telegram.png" alt="Telegram" width="280">
-</td>
-<td width="60%">
-<strong>WebChat</strong>
-<img src="./assets/screenshots/webchat.png" alt="WebChat" width="400">
-</td>
-</tr>
-</table>
 
 ---
 
@@ -1394,6 +1398,22 @@ OPPORTUNITY_FINDER_ENABLED=true
   }
 }
 ```
+
+### Data Directory
+
+Clodds stores data in `~/.clodds/`:
+
+```
+~/.clodds/
+├── clodds.db        # SQLite database (sessions, trades, positions, memory)
+├── config.json      # User configuration (optional)
+├── .env             # Environment variables (from onboard command)
+└── cache/           # Market data cache
+```
+
+**Database:** Uses sql.js (WebAssembly SQLite) for portability. The entire database is loaded into memory at startup. For large datasets, consider periodic cleanup via `clodds session clear`.
+
+**First Run:** Database and tables are created automatically on first startup.
 
 ---
 

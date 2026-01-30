@@ -62,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Documentation
 - 170+ term glossary
 - Comprehensive README
-- Frontend docs at clodds.vercel.app
+- Frontend docs at cloddsbot.com
 
 #### Infrastructure
 - MCP server support

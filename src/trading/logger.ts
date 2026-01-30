@@ -94,13 +94,22 @@ export interface TradeStats {
   byStrategy: Record<string, { trades: number; pnl: number; winRate: number }>;
 }
 
-/** Fee rates by platform (in basis points) */
+/**
+ * Fee rates by platform (in basis points)
+ *
+ * VERIFIED (Jan 2026):
+ * - Polymarket: 0% on most markets; 15-min crypto markets have dynamic fees (up to ~315 bps at 50/50)
+ * - Kalshi: Formula-based 0.07*C*P*(1-P), averaging ~120 bps, capped at ~200 bps
+ * - Betfair: 2-5% commission on net winnings (varies by market)
+ * - Smarkets: 2% commission
+ * - Manifold: Play money, no fees
+ */
 export const PLATFORM_FEES = {
-  polymarket: { takerFeeBps: 200, makerRebateBps: 50 },
-  kalshi: { takerFeeBps: 100, makerRebateBps: 0 },
-  betfair: { takerFeeBps: 200, makerRebateBps: 0 },
-  smarkets: { takerFeeBps: 200, makerRebateBps: 0 },
-  manifold: { takerFeeBps: 0, makerRebateBps: 0 },
+  polymarket: { takerFeeBps: 0, makerRebateBps: 0 }, // Zero fees on most markets
+  kalshi: { takerFeeBps: 120, makerRebateBps: 0 },   // ~1.2% average (formula-based)
+  betfair: { takerFeeBps: 200, makerRebateBps: 0 },  // ~2% commission
+  smarkets: { takerFeeBps: 200, makerRebateBps: 0 }, // 2% commission
+  manifold: { takerFeeBps: 0, makerRebateBps: 0 },   // Play money
 } as const;
 
 /** Calculate fees for a trade */

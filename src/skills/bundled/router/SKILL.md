@@ -218,8 +218,8 @@ for (const platform of liquidity) {
 
 | Platform | Maker Fee | Taker Fee | Notes |
 |----------|-----------|-----------|-------|
-| **Polymarket** | -0.5% rebate | 1% | Best for makers |
-| **Kalshi** | 0% | 1% | Regulated |
+| **Polymarket** | 0% | 0% | Zero fees on most markets; 15-min crypto markets have dynamic fees |
+| **Kalshi** | ~0.17% | ~1.2% | Formula-based fees, capped at ~2% |
 | **Manifold** | 0% | 0% | Play money |
 
 ---
@@ -227,7 +227,7 @@ for (const platform of liquidity) {
 ## Best Practices
 
 1. **Compare before trading** — Always check alternatives
-2. **Use maker orders** — Get rebates on Polymarket
+2. **Use maker orders** — Pay no fees on Polymarket (vs dynamic fees on 15-min crypto markets)
 3. **Split large orders** — Reduce slippage
 4. **Check liquidity** — Don't trade thin markets
-5. **Account for fees** — Include in edge calculations
+5. **Account for fees** — Polymarket: 0% most markets; Kalshi: ~1.2% average

@@ -102,14 +102,17 @@ const DEFAULT_CONFIG: Required<SmartRouterConfig> = {
 };
 
 // Platform fee structures (in basis points)
+// NOTE: These are defaults/estimates. Actual fees vary:
+// - Polymarket: 0 fees on most markets; 15-min crypto markets have dynamic fees (up to ~315bps at 50/50 odds)
+// - Kalshi: Formula-based fees 0.07*C*P*(1-P), averaging ~120bps, capped at ~200bps
 const PLATFORM_FEES: Partial<Record<Platform, { takerBps: number; makerBps: number }>> = {
-  polymarket: { takerBps: 200, makerBps: -50 }, // 2% taker, 0.5% maker rebate
-  kalshi: { takerBps: 100, makerBps: 0 }, // 1% taker, no maker rebate
+  polymarket: { takerBps: 0, makerBps: 0 }, // Zero fees on most markets (15-min crypto markets have dynamic fees)
+  kalshi: { takerBps: 120, makerBps: 17 }, // Average ~1.2% taker, ~0.17% maker (formula-based, varies by price)
   manifold: { takerBps: 0, makerBps: 0 }, // No fees
   metaculus: { takerBps: 0, makerBps: 0 }, // No fees
-  predictit: { takerBps: 500, makerBps: 500 }, // 5% on profits
+  predictit: { takerBps: 500, makerBps: 500 }, // 5% on profits (10% total on winning trades)
   drift: { takerBps: 100, makerBps: -25 }, // Estimated
-  betfair: { takerBps: 200, makerBps: 0 }, // Varies by market
+  betfair: { takerBps: 200, makerBps: 0 }, // Varies by market (2-5% commission on net winnings)
   smarkets: { takerBps: 200, makerBps: 0 }, // 2% commission
 };
 

@@ -52,9 +52,10 @@ export async function runOnboard(): Promise<void> {
   console.log('\n2️⃣  Telegram (optional)\n');
   const telegramToken = await question('Enter your Telegram bot token (or press Enter to skip): ');
   if (telegramToken) {
+    // Note: Config references env var, actual token stored in .env
     (config.channels as Record<string, unknown>).telegram = {
       enabled: true,
-      botToken: '${TELEGRAM_BOT_TOKEN}',
+      // Token loaded from environment at runtime
       dmPolicy: 'allowlist',
       allowFrom: [],
     };
@@ -64,9 +65,10 @@ export async function runOnboard(): Promise<void> {
   console.log('\n3️⃣  Discord (optional)\n');
   const discordToken = await question('Enter your Discord bot token (or press Enter to skip): ');
   if (discordToken) {
+    // Note: Config references env var, actual token stored in .env
     (config.channels as Record<string, unknown>).discord = {
       enabled: true,
-      token: '${DISCORD_BOT_TOKEN}',
+      // Token loaded from environment at runtime
     };
   }
 
@@ -103,8 +105,12 @@ export async function runOnboard(): Promise<void> {
   console.log('\n✅ Setup complete!\n');
   console.log(`Config saved to: ${configPath}`);
   console.log(`Environment saved to: ${envPath}`);
+  console.log('\n📋 Important: If running from a project directory, copy the .env:');
+  console.log(`  cp ${envPath} ./.env`);
+  console.log('\nOr set environment variables directly before running.');
   console.log('\nTo start Clodds, run:\n');
-  console.log('  npx clodds start\n');
+  console.log('  clodds start\n');
+  console.log('Then open: http://localhost:18789/webchat\n');
 
   rl.close();
 }

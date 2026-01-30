@@ -11,6 +11,47 @@ import { loadConfig } from './utils/config';
 import { logger } from './utils/logger';
 import { installHttpClient, configureHttpClient } from './utils/http';
 
+/**
+ * Validate required environment variables and configuration
+ * Provides clear error messages for common setup issues
+ */
+function validateStartupRequirements(): void {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Check for Anthropic API key (required for AI functionality)
+  if (!process.env.ANTHROPIC_API_KEY) {
+    errors.push(
+      'ANTHROPIC_API_KEY is not set. The AI agent will not function.\n' +
+      '  Fix: Add ANTHROPIC_API_KEY=sk-ant-... to your .env file\n' +
+      '  Or run: clodds onboard'
+    );
+  }
+
+  // Check for common channel configurations (warnings only)
+  if (!process.env.TELEGRAM_BOT_TOKEN && !process.env.DISCORD_BOT_TOKEN) {
+    warnings.push(
+      'No messaging channel configured (TELEGRAM_BOT_TOKEN or DISCORD_BOT_TOKEN).\n' +
+      '  WebChat at http://localhost:18789/webchat will still work.'
+    );
+  }
+
+  // Log warnings
+  for (const warning of warnings) {
+    logger.warn(warning);
+  }
+
+  // Exit with errors if critical requirements missing
+  if (errors.length > 0) {
+    console.error('\n=== Clodds Startup Failed ===\n');
+    for (const error of errors) {
+      console.error(`ERROR: ${error}\n`);
+    }
+    console.error('Run "clodds doctor" for full diagnostics.\n');
+    process.exit(1);
+  }
+}
+
 async function main() {
   logger.info('Starting Clodds...');
   installHttpClient();
@@ -22,6 +63,9 @@ async function main() {
     logger.error({ error }, 'Uncaught exception');
     process.exit(1);
   });
+
+  // Validate startup requirements before loading config
+  validateStartupRequirements();
 
   // Load configuration
   const config = await loadConfig();

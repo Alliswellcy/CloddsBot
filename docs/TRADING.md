@@ -810,73 +810,223 @@ The system fetches live orderbook data and simulates walking the book to calcula
 
 ### Perpetual Futures Trading
 
-Trade leveraged perpetual futures across centralized and decentralized exchanges.
+Trade leveraged perpetual futures across centralized and decentralized exchanges with comprehensive API coverage, database tracking, custom strategies, and A/B testing.
 
 **Supported Exchanges:**
 
-| Exchange | Type | Max Leverage | Settlement |
-|----------|------|--------------|------------|
-| Binance Futures | CEX | 125x | USDT |
-| Bybit | CEX | 100x | USDT |
-| Hyperliquid | DEX | 50x | USDC (on Arbitrum) |
-| dYdX v4 | DEX | 20x | USDC (Cosmos) |
+| Exchange | Type | Max Leverage | KYC | Settlement | API Methods |
+|----------|------|--------------|-----|------------|-------------|
+| Binance Futures | CEX | 125x | Yes | USDT | 55+ |
+| Bybit | CEX | 100x | Yes | USDT | 50+ |
+| Hyperliquid | DEX | 50x | No | USDC (Arbitrum) | 60+ |
+| MEXC | CEX | 200x | No* | USDT | 35+ |
+
+*MEXC allows trading without KYC for smaller amounts.
+
+#### Quick Setup
 
 ```typescript
-import { createFuturesService } from './trading/futures';
+import { setupFromEnv } from './trading/futures';
 
-const futures = createFuturesService([
-  {
-    exchange: 'binance',
-    credentials: {
-      apiKey: process.env.BINANCE_API_KEY!,
-      apiSecret: process.env.BINANCE_API_SECRET!,
-    },
-    maxLeverage: 20,  // Safety limit
-    dryRun: false,
-  },
-  {
-    exchange: 'bybit',
-    credentials: {
-      apiKey: process.env.BYBIT_API_KEY!,
-      apiSecret: process.env.BYBIT_API_SECRET!,
-    },
-  },
-]);
+// Auto-configure from environment variables
+const { clients, database, strategyEngine } = await setupFromEnv();
 
-// Check balances
-const balance = await futures.getBalance('binance');
-console.log(`Available: $${balance.available}`);
+// Required env vars:
+// BINANCE_API_KEY, BINANCE_API_SECRET
+// BYBIT_API_KEY, BYBIT_API_SECRET
+// HYPERLIQUID_PRIVATE_KEY, HYPERLIQUID_WALLET_ADDRESS
+// MEXC_API_KEY, MEXC_API_SECRET
+// DATABASE_URL (PostgreSQL for trade tracking)
+```
 
-// Open a long position with TP/SL
-const order = await futures.openLong('binance', 'BTCUSDT', 0.01, 10, {
-  takeProfit: 105000,
-  stopLoss: 95000,
+#### Database Integration
+
+All trades are automatically logged to PostgreSQL for analysis:
+
+```sql
+-- Tables created automatically:
+-- futures_trades: All executed trades with P&L
+-- futures_strategy_variants: A/B test configurations
+
+-- Query your performance
+SELECT
+  exchange,
+  symbol,
+  COUNT(*) as trades,
+  SUM(realized_pnl) as total_pnl,
+  AVG(realized_pnl) as avg_pnl
+FROM futures_trades
+GROUP BY exchange, symbol
+ORDER BY total_pnl DESC;
+```
+
+```typescript
+import { FuturesDatabase } from './trading/futures';
+
+const db = new FuturesDatabase(process.env.DATABASE_URL!);
+await db.initialize();
+
+// Log a trade
+await db.logTrade({
+  exchange: 'binance',
+  symbol: 'BTCUSDT',
+  orderId: '12345',
+  side: 'BUY',
+  price: 95000,
+  quantity: 0.01,
+  realizedPnl: 50.25,
+  commission: 0.95,
+  timestamp: Date.now(),
 });
 
-// Open a short position
-await futures.openShort('bybit', 'ETHUSDT', 0.5, 5);
+// Query trades
+const trades = await db.getTrades({ exchange: 'binance', symbol: 'BTCUSDT' });
+const stats = await db.getTradeStats('binance');
+```
 
-// View all positions
-const positions = await futures.getAllPositions();
-for (const pos of positions) {
-  console.log(`${pos.exchange} ${pos.symbol}: ${pos.side} ${pos.size} @ ${pos.entryPrice}`);
-  console.log(`  P&L: $${pos.unrealizedPnl.toFixed(2)} (${pos.unrealizedPnlPct.toFixed(2)}%)`);
-  console.log(`  Liquidation: $${pos.liquidationPrice}`);
+#### Custom Strategies
+
+Build your own trading strategies with the `FuturesStrategy` interface:
+
+```typescript
+import { FuturesStrategy, StrategyEngine, StrategySignal } from './trading/futures';
+
+class MyStrategy implements FuturesStrategy {
+  name = 'my-strategy';
+
+  constructor(private config: { threshold: number }) {}
+
+  async analyze(data: MarketData): Promise<StrategySignal | null> {
+    // Your logic here
+    if (data.priceChange > this.config.threshold) {
+      return {
+        action: 'BUY',
+        symbol: data.symbol,
+        confidence: 0.8,
+        reason: 'Strong upward momentum',
+        metadata: { priceChange: data.priceChange },
+      };
+    }
+    return null;
+  }
 }
 
-// Monitor for liquidation risk
-futures.on('liquidationWarning', ({ level, position, proximityPct }) => {
-  if (level === 'critical') {
-    console.log(`CRITICAL: ${position.symbol} ${proximityPct.toFixed(1)}% from liquidation!`);
-  }
+// Register and run
+const engine = new StrategyEngine(db);
+engine.registerStrategy(new MyStrategy({ threshold: 0.02 }));
+```
+
+#### A/B Testing Strategies
+
+Test multiple strategy variants simultaneously:
+
+```typescript
+// Register strategy variants
+engine.registerVariant('momentum', 'aggressive', { threshold: 0.02, leverage: 10 });
+engine.registerVariant('momentum', 'conservative', { threshold: 0.05, leverage: 3 });
+engine.registerVariant('momentum', 'control', { threshold: 0.03, leverage: 5 });
+
+// Variants are logged to futures_strategy_variants table
+// Query results:
+const results = await db.getVariantPerformance('momentum');
+// { aggressive: { trades: 45, pnl: 1250 }, conservative: { trades: 23, pnl: 890 }, ... }
+```
+
+#### Comprehensive API Methods
+
+**Binance Futures (55+ methods):**
+- Market data: `getKlines`, `getOrderBook`, `getTrades`, `getTicker24h`, `getMarkPrice`, `getFundingRate`
+- Trading: `placeOrder`, `cancelOrder`, `cancelAllOrders`, `placeBatchOrders`, `modifyOrder`
+- Account: `getAccountInfo`, `getPositions`, `getBalance`, `getIncomeHistory`, `getTradeHistory`
+- Risk: `setLeverage`, `setMarginType`, `modifyIsolatedMargin`, `getLeverageBrackets`
+- Advanced: `getPositionRisk`, `getCommissionRate`, `getMultiAssetMode`, `setMultiAssetMode`
+- Analytics: `getLongShortRatio`, `getOpenInterest`, `getTakerBuySellVolume`, `getTopTraderPositions`
+- Staking: `getStakingProducts`, `stake`, `unstake`, `getStakingHistory`
+- Convert: `getConvertPairs`, `sendQuote`, `acceptQuote`, `getConvertHistory`
+- Portfolio Margin: `getPortfolioMarginAccount`, `getPortfolioMarginBankruptcyLoan`
+
+**Bybit (50+ methods):**
+- Market data: `getKline`, `getOrderbook`, `getTickers`, `getFundingHistory`, `getOpenInterest`
+- Trading: `placeOrder`, `cancelOrder`, `amendOrder`, `placeBatchOrders`, `cancelBatchOrders`
+- Account: `getWalletBalance`, `getPositionInfo`, `getExecutionList`, `getClosedPnl`
+- Risk: `setLeverage`, `setMarginMode`, `setPositionMode`, `setTpSlMode`
+- Copy Trading: `getCopyTradingLeaders`, `followLeader`, `unfollowLeader`, `getCopyPositions`
+- Lending: `getLendingProducts`, `deposit`, `redeem`, `getLendingOrders`
+- Earn: `getEarnProducts`, `getEarnOrders`
+
+**Hyperliquid (60+ methods):**
+- Trading: `placeOrder`, `cancelOrder`, `cancelAllOrders`, `placeTwapOrder`, `modifyOrder`
+- Market data: `getMeta`, `getAssetCtxs`, `getAllMids`, `getCandleSnapshot`, `getL2Snapshot`
+- Account: `getUserState`, `getUserFills`, `getUserFunding`, `getOpenOrders`, `getOrderStatus`
+- Spot: `getSpotMeta`, `getSpotClearinghouseState`, `placeSpotOrder`
+- Vaults: `getVaultDetails`, `getUserVaultEquities`, `depositToVault`, `withdrawFromVault`
+- Staking: `getValidatorSummaries`, `getUserStakingSummary`, `stakeHype`, `unstakeHype`
+- Delegations: `getDelegatorSummary`, `getDelegatorHistory`, `delegate`, `undelegate`
+- Referrals: `getReferralState`, `createReferralCode`, `getReferredUsers`
+- Analytics: `getUserAnalytics`, `getLeaderboard`, `getSubaccounts`
+
+**MEXC (35+ methods):**
+- Market data: `getContractDetail`, `getOrderbook`, `getKlines`, `getFundingRate`, `getOpenInterest`
+- Trading: `placeOrder`, `cancelOrder`, `cancelAllOrders`, `placeBatchOrders`, `placeTriggerOrder`
+- Account: `getAccountInfo`, `getPositions`, `getOpenOrders`, `getOrderHistory`, `getTradeHistory`
+- Risk: `setLeverage`, `changeMarginMode`, `changePositionMode`, `autoAddMargin`
+
+#### Basic Usage
+
+```typescript
+import { BinanceFuturesClient, BybitFuturesClient, HyperliquidClient, MexcFuturesClient } from './trading/futures';
+
+// Initialize clients
+const binance = new BinanceFuturesClient({
+  apiKey: process.env.BINANCE_API_KEY!,
+  apiSecret: process.env.BINANCE_API_SECRET!,
 });
-futures.startPositionMonitor(5000); // Check every 5s
 
-// Close a position
-await futures.closePosition('binance', 'BTCUSDT');
+const bybit = new BybitFuturesClient({
+  apiKey: process.env.BYBIT_API_KEY!,
+  apiSecret: process.env.BYBIT_API_SECRET!,
+});
 
-// Close all positions on an exchange
-await futures.closeAllPositions('binance');
+const hyperliquid = new HyperliquidClient({
+  privateKey: process.env.HYPERLIQUID_PRIVATE_KEY!,
+  walletAddress: process.env.HYPERLIQUID_WALLET_ADDRESS!,
+});
+
+const mexc = new MexcFuturesClient({
+  apiKey: process.env.MEXC_API_KEY!,
+  apiSecret: process.env.MEXC_API_SECRET!,
+});
+
+// Check balances
+const balance = await binance.getBalance();
+console.log(`Available: $${balance.availableBalance}`);
+
+// Open a long position
+const order = await binance.placeOrder({
+  symbol: 'BTCUSDT',
+  side: 'BUY',
+  type: 'MARKET',
+  quantity: 0.01,
+});
+
+// Set leverage
+await binance.setLeverage('BTCUSDT', 10);
+
+// View positions
+const positions = await binance.getPositions();
+for (const pos of positions) {
+  console.log(`${pos.symbol}: ${pos.positionAmt} @ ${pos.entryPrice}`);
+  console.log(`  P&L: $${pos.unrealizedProfit}`);
+}
+
+// Close position
+await binance.placeOrder({
+  symbol: 'BTCUSDT',
+  side: 'SELL',
+  type: 'MARKET',
+  quantity: 0.01,
+  reduceOnly: true,
+});
 ```
 
 **Chat Commands:**
@@ -892,6 +1042,7 @@ await futures.closeAllPositions('binance');
 /futures close-all                 # Close all positions
 /futures markets binance           # List available markets
 /futures funding BTCUSDT           # Check funding rate
+/futures stats                     # View trade statistics from database
 ```
 
 **Configuration:**
@@ -911,7 +1062,15 @@ await futures.closeAllPositions('binance');
       },
       "hyperliquid": {
         "enabled": true
+      },
+      "mexc": {
+        "enabled": true,
+        "maxLeverage": 50
       }
+    },
+    "database": {
+      "enabled": true,
+      "url": "postgres://user:pass@localhost:5432/clodds"
     },
     "riskManagement": {
       "maxPositionSize": 10000,

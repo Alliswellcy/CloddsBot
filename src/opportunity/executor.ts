@@ -227,7 +227,9 @@ export function createOpportunityExecutor(
     try {
       // Execute each step in order
       for (const step of opp.execution.steps) {
-        const orderType = cfg.preferMakerOrders && step.orderType !== 'market' ? 'POST_ONLY' : 'GTC';
+        // Use GTC order type; postOnly ensures maker-only execution if preferred
+        const orderType = step.orderType === 'market' ? 'FOK' : 'GTC';
+        const postOnly = cfg.preferMakerOrders && step.orderType !== 'market';
 
         // Determine size (capped by maxPositionSize)
         const maxSize = cfg.maxPositionSize / step.price;
@@ -256,6 +258,7 @@ export function createOpportunityExecutor(
               price: step.price,
               size,
               orderType,
+              postOnly,
             });
           } else {
             orderResult = await execution.sellLimit({
@@ -266,6 +269,7 @@ export function createOpportunityExecutor(
               price: step.price,
               size,
               orderType,
+              postOnly,
             });
           }
         }

@@ -137,23 +137,27 @@ Override automatic matching:
 
 ## Slippage Estimation
 
-Platform-specific slippage factors:
+**Note:** These factors are heuristic estimates, not empirically validated. Actual slippage varies significantly based on market, time of day, and current orderbook depth.
 
-| Platform | Factor | Notes |
-|----------|--------|-------|
-| Betfair | 0.6 | Best liquidity |
-| Smarkets | 0.7 | Good liquidity |
-| Polymarket | 0.8 | Good for crypto |
-| Drift | 0.9 | Decent |
-| Kalshi | 1.0 | Moderate |
-| PredictIt | 1.2 | Lower liquidity |
-| Manifold | 1.5 | Play money effects |
-| Metaculus | 2.0 | Least liquid |
+Platform-specific slippage factors (relative scale):
 
-Slippage formula:
+| Platform | Factor | Rationale |
+|----------|--------|-----------|
+| Betfair | 0.6 | High-volume sports exchange |
+| Smarkets | 0.7 | Good liquidity, regulated |
+| Polymarket | 0.8 | Varies greatly by market |
+| Drift | 0.9 | Solana DEX |
+| Kalshi | 1.0 | Baseline (moderate liquidity) |
+| PredictIt | 1.2 | Lower liquidity, US only |
+| Manifold | 1.5 | Play money (less market depth) |
+| Metaculus | 2.0 | Community predictions |
+
+Slippage formula (heuristic):
 ```
 slippage = sqrt(size / liquidity) * 2 * platform_factor + spread/2
 ```
+
+**Recommendation:** For real trading, fetch actual orderbook depth via `/orderbook` command rather than relying on these estimates.
 
 ## Kelly Criterion
 
@@ -172,7 +176,7 @@ Capped at 25% of bankroll per opportunity.
 /opportunity stats 30  # Last 30 days
 ```
 
-Output:
+Example output (illustrative, not actual results):
 ```
 Found: 1,247
 Taken: 89
@@ -186,12 +190,14 @@ By Type:
   edge: 212 found, 14 taken, 64.3% WR
 ```
 
+**Note:** Actual results depend on execution speed, market conditions, and timing. Past performance does not guarantee future results.
+
 ### Platform Pairs
 ```bash
 /opportunity pairs
 ```
 
-Output:
+Example output (illustrative):
 ```
 polymarket <-> kalshi
   Opportunities: 423 | Taken: 32
@@ -332,7 +338,12 @@ Get performance statistics.
 
 Based on [arXiv:2508.03474](https://arxiv.org/abs/2508.03474) - "Unravelling the Probabilistic Forest"
 
-The paper found **$40M+ in realized arbitrage profits** on Polymarket through two mechanisms:
+The paper analyzed Polymarket data from **April 2024 to April 2025** (86 million bets across thousands of markets) and found **$40M in realized arbitrage profits** extracted by traders. Key caveats:
+- Most profits were captured by **sophisticated arbitrageurs** with fast execution
+- Political markets (2024 US election) had the largest spreads
+- Sports markets had more frequent but smaller opportunities
+
+The paper identifies two mechanisms:
 
 ### 1. Market Rebalancing
 When YES + NO prices don't sum to $1.00:
