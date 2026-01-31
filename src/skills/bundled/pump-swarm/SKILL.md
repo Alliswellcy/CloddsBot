@@ -15,13 +15,14 @@ Coordinate multiple wallets to execute synchronized trades on Pump.fun tokens.
 ## Quick Start
 
 ```bash
-# Set up wallets (primary + swarm wallets)
-export SOLANA_PRIVATE_KEY="your-main-wallet-key"
-export SOLANA_SWARM_KEY_1="wallet-2-key"
-export SOLANA_SWARM_KEY_2="wallet-3-key"
+# Set up wallets
+export SOLANA_PRIVATE_KEY="your-main-wallet-key"     # wallet_0
+export SOLANA_SWARM_KEY_1="second-wallet-key"        # wallet_1
+export SOLANA_SWARM_KEY_2="third-wallet-key"         # wallet_2
 # ... up to SOLANA_SWARM_KEY_20
 
-# Optional: API key for trading
+# Optional
+export SOLANA_RPC_URL="https://your-rpc.com"
 export PUMPPORTAL_API_KEY="your-api-key"
 ```
 
@@ -30,109 +31,121 @@ export PUMPPORTAL_API_KEY="your-api-key"
 ### Wallet Management
 
 ```
-/swarm wallets                    List all swarm wallets
-/swarm balances                   Check SOL balances
-/swarm enable <wallet_id>         Enable a wallet
-/swarm disable <wallet_id>        Disable a wallet
-/swarm add <private_key>          Add wallet to swarm (runtime)
+/swarm wallets              List all swarm wallets with addresses
+/swarm balances             Fetch SOL balances from chain
+/swarm enable <wallet_id>   Enable a wallet for trading
+/swarm disable <wallet_id>  Disable a wallet
 ```
 
-### Coordinated Trading
+### Trading
 
 ```
-/swarm buy <mint> <sol_each> [options]     Buy across all wallets
-/swarm sell <mint> <amount|%> [options]    Sell across all wallets
-/swarm position <mint>                     Check swarm position
+/swarm buy <mint> <sol> [options]      Buy with all enabled wallets
+/swarm sell <mint> <amount|%> [opts]   Sell from wallets with positions
 ```
 
-**Options:**
-- `--wallets <id1,id2,...>` - Specific wallets only
-- `--bundle` - Force Jito bundle (atomic)
-- `--sequential` - Force sequential execution
-- `--slippage <bps>` - Slippage (default: 500 = 5%)
-- `--pool <pool>` - Pool: pump, raydium, auto
+### Position Management
 
-### Examples
+```
+/swarm position <mint>      Show cached token positions
+/swarm refresh <mint>       Fetch fresh positions from chain (required before sell)
+```
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `--wallets <id1,id2>` | Use specific wallets only |
+| `--bundle` | Force Jito bundle (atomic execution) |
+| `--sequential` | Force sequential execution (staggered) |
+| `--slippage <bps>` | Slippage tolerance (default: 500 = 5%) |
+| `--pool <pool>` | Pool: pump, raydium, auto |
+
+## Examples
 
 ```bash
-# Buy 0.1 SOL worth on each of 5 wallets (0.5 SOL total)
+# Buy 0.1 SOL worth on each enabled wallet
 /swarm buy ABC123mint... 0.1
 
 # Buy with specific wallets only
 /swarm buy ABC123mint... 0.2 --wallets wallet_0,wallet_1
 
-# Sell 100% of position from all wallets
+# Sell 100% of all positions (fetches from chain first)
 /swarm sell ABC123mint... 100%
 
-# Sell 50% with atomic execution
+# Sell 50% with atomic Jito bundle
 /swarm sell ABC123mint... 50% --bundle
 
-# Check total swarm position
+# Check positions before selling
+/swarm refresh ABC123mint...
 /swarm position ABC123mint...
 ```
 
 ## Execution Modes
 
-### Jito Bundle (Default)
-- **Atomic:** All transactions succeed or all fail
-- **MEV-protected:** No front-running between wallets
-- **Cost:** ~0.00001 SOL tip per bundle
-- Up to 5 transactions per bundle
+### Jito Bundle (Default for 2-5 wallets)
+- **Atomic:** All transactions succeed or all fail together
+- **MEV-protected:** No front-running between your own wallets
+- **Cost:** ~10,000 lamports tip per bundle
+- **Limit:** Max 5 transactions per bundle
 
-### Sequential (Fallback)
-- **Staggered:** 200-400ms delay between wallets
-- **Amount variance:** ±5% to avoid detection
+### Sequential (Fallback or forced)
+- **Staggered:** 200-400ms random delay between wallets
+- **Amount variance:** ±5% to avoid detection patterns
 - **Rate limited:** 5 seconds minimum between trades per wallet
+
+## How It Works
+
+### Buy Flow
+1. Refreshes SOL balances from chain
+2. Filters wallets with sufficient balance
+3. Builds transaction for each wallet via PumpPortal API
+4. Signs all transactions locally
+5. Submits via Jito bundle OR sequential with delays
+6. Reports results per wallet
+
+### Sell Flow
+1. **Fetches actual token balances from chain** (critical!)
+2. Filters wallets with positions
+3. Calculates sell amount (% of position or exact)
+4. Builds and signs transactions
+5. Submits via Jito bundle OR sequential
+6. Reports results per wallet
+
+## Safety Features
+
+- **Balance check:** Verifies sufficient SOL before buy
+- **Position check:** Fetches real token balances before sell
+- **Max amount:** Rejects buy amounts > 10 SOL per wallet
+- **Confirmation timeout:** 60 second timeout per transaction
+- **Error reporting:** Shows detailed errors per wallet
 
 ## Configuration
 
-```bash
-# Required
-export SOLANA_PRIVATE_KEY="base58-or-json-array"
+| Env Variable | Description |
+|--------------|-------------|
+| `SOLANA_PRIVATE_KEY` | Main wallet (wallet_0) |
+| `SOLANA_SWARM_KEY_1..20` | Additional swarm wallets |
+| `SOLANA_RPC_URL` | Custom RPC endpoint (faster = better) |
+| `PUMPPORTAL_API_KEY` | PumpPortal API key (optional, for trading) |
 
-# Swarm wallets (up to 20)
-export SOLANA_SWARM_KEY_1="..."
-export SOLANA_SWARM_KEY_2="..."
+## Agent Tools (8)
 
-# Optional
-export SOLANA_RPC_URL="https://your-rpc.com"
-export PUMPPORTAL_API_KEY="your-key"
-```
-
-## Position Tracking
-
-The swarm tracks positions per wallet:
-
-```
-/swarm position ABC123...
-
-Swarm Position: ABC123mint...
-Total: 1,500,000 tokens
-
-By Wallet:
-  wallet_0: 500,000 (33.3%)
-  wallet_1: 500,000 (33.3%)
-  wallet_2: 500,000 (33.3%)
-```
-
-## Risk Management
-
-- **Rate limiting:** Prevents rapid-fire trades per wallet
-- **Stagger timing:** Avoids pattern detection
-- **Amount variance:** Randomizes trade sizes slightly
-- **Balance checks:** Validates sufficient SOL before trade
-
-## Detection Avoidance
-
-The swarm implements several measures:
-1. **Timing spread:** 200-400ms between wallet executions
-2. **Amount variance:** ±5% on each trade
-3. **Rate limiting:** 5s minimum between trades per wallet
-4. **Bundle option:** Atomic execution hides coordination
+| Tool | Description |
+|------|-------------|
+| `swarm_wallets` | List all swarm wallets |
+| `swarm_balances` | Refresh SOL balances from chain |
+| `swarm_buy` | Coordinated buy across wallets |
+| `swarm_sell` | Coordinated sell across wallets |
+| `swarm_position` | Get cached positions |
+| `swarm_refresh` | Fetch fresh positions from chain |
+| `swarm_enable` | Enable a wallet |
+| `swarm_disable` | Disable a wallet |
 
 ## Notes
 
 - Pump.fun tokens are highly volatile - use small amounts
-- Jito bundles require tips (~10,000 lamports default)
-- Bundle failure falls back to sequential automatically
-- Track positions carefully - swarm state is in-memory
+- Jito bundles have ~70-85% success rate depending on network congestion
+- Bundle failures automatically fall back to sequential execution
+- Always refresh positions before selling (`/swarm refresh <mint>`)
+- Use `--sequential` flag if you prefer guaranteed order of execution

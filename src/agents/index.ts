@@ -4919,11 +4919,22 @@ function buildTools(): ToolDefinition[] {
     },
     {
       name: 'swarm_position',
-      description: 'Get swarm position for a Pump.fun token across all wallets.',
+      description: 'Get cached swarm position for a Pump.fun token across all wallets.',
       input_schema: {
         type: 'object',
         properties: {
           mint: { type: 'string', description: 'Token mint address' },
+        },
+        required: ['mint'],
+      },
+    },
+    {
+      name: 'swarm_refresh',
+      description: 'Refresh token positions from chain for all swarm wallets. Required before selling.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          mint: { type: 'string', description: 'Token mint address to refresh positions for' },
         },
         required: ['mint'],
       },

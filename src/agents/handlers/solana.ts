@@ -680,8 +680,31 @@ async function swarmPositionHandler(toolInput: ToolInput): Promise<HandlerResult
 
     return {
       mint: position.mint,
-      totalAmount: position.totalAmount,
+      totalTokens: position.totalTokens,
       byWallet,
+      lastUpdated: position.lastUpdated,
+    };
+  });
+}
+
+async function swarmRefreshHandler(toolInput: ToolInput): Promise<HandlerResult> {
+  const mint = toolInput.mint as string;
+
+  return safeHandler(async () => {
+    const { getSwarm } = await import('../../solana/pump-swarm');
+    const swarm = getSwarm();
+    const position = await swarm.refreshTokenPositions(mint);
+
+    const byWallet: Record<string, number> = {};
+    for (const [id, amount] of position.byWallet) {
+      byWallet[id] = amount;
+    }
+
+    return {
+      mint: position.mint,
+      totalTokens: position.totalTokens,
+      byWallet,
+      lastUpdated: position.lastUpdated,
     };
   });
 }
@@ -1421,6 +1444,7 @@ export const solanaHandlers: HandlersMap = {
   swarm_buy: swarmBuyHandler,
   swarm_sell: swarmSellHandler,
   swarm_position: swarmPositionHandler,
+  swarm_refresh: swarmRefreshHandler,
   swarm_enable: swarmEnableHandler,
   swarm_disable: swarmDisableHandler,
 
