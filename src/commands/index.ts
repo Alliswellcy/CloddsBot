@@ -17,6 +17,7 @@ import { SessionManager } from '../sessions/index';
 import { Session, IncomingMessage } from '../types';
 import { logger } from '../utils/logger';
 import { SkillRegistry, InstalledSkill } from '../skills/index';
+import { executeSkillCommand, isSkillCommand } from '../skills/executor';
 
 export interface CommandResult {
   handled: boolean;
@@ -311,17 +312,39 @@ export function createCommandsService(
         }
 
         default:
-          // Check if this is a skill command
+          // Try to execute as a skill command using the executor
+          if (config.enableSkillCommands && isSkillCommand(command)) {
+            if (!isCommandEnabled(command, message.platform)) {
+              logger.debug({ command, channel: message.platform }, 'Skill command is disabled');
+              return { handled: false };
+            }
+
+            // Execute the skill command
+            const result = await executeSkillCommand(text);
+            if (result.handled) {
+              logger.info({ command, skill: result.skill }, 'Skill command executed');
+              return {
+                handled: true,
+                action: 'skill_command',
+                skill: result.skill,
+                response: result.error
+                  ? `❌ Error: ${result.error}`
+                  : result.response || '(no response)',
+              };
+            }
+          }
+
+          // Check registered skill commands from registry (legacy path)
           if (config.enableSkillCommands) {
             for (const [skillName, commands] of skillCommands.entries()) {
               for (const cmd of commands) {
                 if (cmd.name === command && isCommandEnabled(command, message.platform)) {
-                  logger.info({ command, skillName }, 'Skill command invoked');
+                  logger.info({ command, skillName }, 'Skill command invoked (registry)');
                   return {
                     handled: true,
                     action: 'skill_command',
                     skill: skillName,
-                    response: `🔧 Skill command \`${command}\` from *${skillName}* is ready to execute.`,
+                    response: `🔧 Skill command \`${command}\` from *${skillName}* registered but no handler.`,
                   };
                 }
               }

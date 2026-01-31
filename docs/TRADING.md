@@ -1059,10 +1059,74 @@ const { clients, database, strategyEngine } = await setupFromEnv();
 // Required env vars:
 // BINANCE_API_KEY, BINANCE_API_SECRET
 // BYBIT_API_KEY, BYBIT_API_SECRET
-// HYPERLIQUID_PRIVATE_KEY, HYPERLIQUID_WALLET_ADDRESS
+// HYPERLIQUID_PRIVATE_KEY, HYPERLIQUID_WALLET (Note: HYPERLIQUID_WALLET not WALLET_ADDRESS)
 // MEXC_API_KEY, MEXC_API_SECRET
 // DATABASE_URL (PostgreSQL for trade tracking)
 ```
+
+#### Skill Commands
+
+Each exchange has a dedicated skill with slash commands:
+
+**Binance Futures (`/bf`):**
+| Command | Description |
+|---------|-------------|
+| `/bf balance` | Margin balance |
+| `/bf positions` | Open positions |
+| `/bf orders` | Open orders |
+| `/bf long <sym> <size> [lev]x` | Open long position |
+| `/bf short <sym> <size> [lev]x` | Open short position |
+| `/bf close <symbol>` | Close position |
+| `/bf closeall` | Close all positions |
+| `/bf leverage <sym> <value>` | Set leverage |
+| `/bf price <symbol>` | Current price |
+| `/bf funding <symbol>` | Funding rate |
+| `/bf markets [query]` | List markets |
+
+**Bybit (`/by`):**
+| Command | Description |
+|---------|-------------|
+| `/by balance` | Wallet balance |
+| `/by positions` | Open positions |
+| `/by orders` | Open orders |
+| `/by long <sym> <qty> [lev]x` | Open long |
+| `/by short <sym> <qty> [lev]x` | Open short |
+| `/by close <symbol>` | Close position |
+| `/by closeall` | Close all |
+| `/by leverage <sym> <value>` | Set leverage |
+| `/by price <symbol>` | Current price |
+| `/by funding <symbol>` | Funding rate |
+| `/by markets [query]` | List markets |
+
+**MEXC (`/mx`):**
+| Command | Description |
+|---------|-------------|
+| `/mx balance` | Account balance |
+| `/mx positions` | Open positions |
+| `/mx orders` | Open orders |
+| `/mx long <sym> <vol> [lev]x` | Open long |
+| `/mx short <sym> <vol> [lev]x` | Open short |
+| `/mx close <symbol>` | Close position |
+| `/mx closeall` | Close all |
+| `/mx leverage <sym> <value>` | Set leverage |
+| `/mx price <symbol>` | Current price |
+| `/mx funding <symbol>` | Funding rate |
+| `/mx markets [query]` | List markets |
+
+**Hyperliquid (`/hl`):** See dedicated section below.
+
+#### Agent Tools
+
+The agent also has direct tool access for programmatic trading:
+
+| Exchange | Tools |
+|----------|-------|
+| Binance | `binance_balance`, `binance_positions`, `binance_orders`, `binance_long`, `binance_short`, `binance_close`, `binance_cancel`, `binance_cancel_all`, `binance_price`, `binance_funding` |
+| Bybit | `bybit_balance`, `bybit_positions`, `bybit_orders`, `bybit_long`, `bybit_short`, `bybit_close`, `bybit_cancel`, `bybit_cancel_all`, `bybit_price`, `bybit_funding` |
+| MEXC | `mexc_balance`, `mexc_positions`, `mexc_orders`, `mexc_long`, `mexc_short`, `mexc_close`, `mexc_cancel`, `mexc_cancel_all`, `mexc_price`, `mexc_funding` |
+| Hyperliquid | `hyperliquid_balance`, `hyperliquid_positions`, `hyperliquid_orders`, `hyperliquid_long`, `hyperliquid_short`, `hyperliquid_close`, `hyperliquid_cancel`, `hyperliquid_cancel_all`, `hyperliquid_price`, `hyperliquid_funding`, `hyperliquid_leverage` |
+
+All trading tools automatically log to the database when `DATABASE_URL` is set.
 
 #### Database Integration
 
@@ -1452,6 +1516,62 @@ All trades are automatically logged to SQLite for performance tracking.
 - `hyperliquid_trades` - All executed trades with PnL
 - `hyperliquid_positions` - Position history with entry/exit
 - `hyperliquid_funding` - Funding payment records
+
+### All Futures Exchanges Database
+
+Database tracking is available for all 4 futures exchanges:
+
+| Exchange | Trades Table | Positions Table | Funding Table |
+|----------|-------------|-----------------|---------------|
+| Hyperliquid | `hyperliquid_trades` | `hyperliquid_positions` | `hyperliquid_funding` |
+| Binance | `binance_futures_trades` | `binance_futures_positions` | `binance_futures_funding` |
+| Bybit | `bybit_futures_trades` | `bybit_futures_positions` | `bybit_futures_funding` |
+| MEXC | `mexc_futures_trades` | `mexc_futures_positions` | `mexc_futures_funding` |
+
+**Programmatic Usage:**
+
+```typescript
+import { initDatabase } from 'clodds/db';
+
+const db = await initDatabase();
+
+// Log a Binance trade
+db.logBinanceFuturesTrade({
+  userId: 'user123',
+  symbol: 'BTCUSDT',
+  side: 'BUY',
+  size: 0.01,
+  price: 95000,
+  realizedPnl: 50.25,
+  leverage: 10,
+  timestamp: new Date(),
+});
+
+// Get Bybit stats
+const stats = db.getBybitFuturesStats('user123', { symbol: 'ETHUSDT' });
+console.log(`Win rate: ${stats.winRate}%, PnL: $${stats.totalPnl}`);
+
+// Get MEXC positions
+const positions = db.getMexcFuturesPositions('user123', { openOnly: true });
+
+// Get all funding payments
+const binanceFunding = db.getBinanceFuturesFundingTotal('user123');
+const bybitFunding = db.getBybitFuturesFundingTotal('user123');
+```
+
+**Available Methods (per exchange):**
+
+| Method | Description |
+|--------|-------------|
+| `log{Exchange}FuturesTrade()` | Log a trade |
+| `get{Exchange}FuturesTrades()` | Query trade history |
+| `get{Exchange}FuturesStats()` | Win rate, PnL, profit factor |
+| `upsert{Exchange}FuturesPosition()` | Track position |
+| `get{Exchange}FuturesPositions()` | Query positions |
+| `close{Exchange}FuturesPosition()` | Mark position closed |
+| `log{Exchange}FuturesFunding()` | Log funding payment |
+| `get{Exchange}FuturesFunding()` | Query funding history |
+| `get{Exchange}FuturesFundingTotal()` | Sum of funding payments |
 
 ### Features
 

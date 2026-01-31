@@ -23,6 +23,7 @@ import {
   KalshiCredentials,
   ManifoldCredentials,
   Market,
+  ExecutionServiceRef,
 } from '../types';
 import { logger } from '../utils/logger';
 import { createSkillManager, SkillManager } from '../skills/loader';
@@ -66,6 +67,10 @@ import { wormholeQuote, wormholeBridge, wormholeRedeem, usdcBridgeAuto, usdcQuot
 import { isRetryableError, withRetry, RETRY_POLICIES } from '../infra/retry';
 import { createMarketIndexService, MarketIndexService } from '../market-index';
 import { enforceExposureLimits, enforceMaxOrderSize } from '../trading/risk';
+import * as binanceFutures from '../exchanges/binance-futures';
+import * as bybit from '../exchanges/bybit';
+import * as mexc from '../exchanges/mexc';
+import * as hyperliquid from '../exchanges/hyperliquid';
 
 // Background process tracking
 const backgroundProcesses: Map<string, {
@@ -1207,6 +1212,19 @@ function buildTools(): ToolDefinition[] {
           condition_id: { type: 'string', description: 'Market condition ID' },
         },
         required: ['condition_id'],
+      },
+    },
+    {
+      name: 'orderbook_imbalance',
+      description: 'Analyze orderbook imbalance to detect directional pressure. Returns bid/ask volume ratio, imbalance score (-1 to +1), directional signal (bullish/bearish/neutral), and timing recommendation. Use this before trading to find optimal entry timing.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          platform: { type: 'string', description: 'Platform (polymarket or kalshi)', enum: ['polymarket', 'kalshi'] },
+          market_id: { type: 'string', description: 'Token ID (Polymarket) or ticker (Kalshi)' },
+          depth_levels: { type: 'number', description: 'Number of price levels to analyze (default: 5)' },
+        },
+        required: ['platform', 'market_id'],
       },
     },
 
@@ -4158,6 +4176,364 @@ function buildTools(): ToolDefinition[] {
           signature: { type: 'string', description: 'Optional: transaction signature to fetch details' },
           limit: { type: 'number', description: 'Max results (default 50)' },
         },
+      },
+    },
+
+    // ============================================
+    // CENTRALIZED FUTURES EXCHANGES
+    // ============================================
+
+    // Binance Futures
+    {
+      name: 'binance_futures_balance',
+      description: 'Get Binance Futures USDT-M account balance',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'binance_futures_positions',
+      description: 'Get open positions on Binance Futures',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'binance_futures_orders',
+      description: 'Get open orders on Binance Futures',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Optional: filter by symbol (e.g., BTCUSDT)' },
+        },
+      },
+    },
+    {
+      name: 'binance_futures_long',
+      description: 'Open a long position on Binance Futures',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTCUSDT)' },
+          quantity: { type: 'number', description: 'Position size' },
+          leverage: { type: 'number', description: 'Leverage (1-125)' },
+        },
+        required: ['symbol', 'quantity'],
+      },
+    },
+    {
+      name: 'binance_futures_short',
+      description: 'Open a short position on Binance Futures',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTCUSDT)' },
+          quantity: { type: 'number', description: 'Position size' },
+          leverage: { type: 'number', description: 'Leverage (1-125)' },
+        },
+        required: ['symbol', 'quantity'],
+      },
+    },
+    {
+      name: 'binance_futures_close',
+      description: 'Close a position on Binance Futures',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair to close (e.g., BTCUSDT)' },
+        },
+        required: ['symbol'],
+      },
+    },
+    {
+      name: 'binance_futures_price',
+      description: 'Get current mark price for a Binance Futures symbol',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTCUSDT)' },
+        },
+        required: ['symbol'],
+      },
+    },
+    {
+      name: 'binance_futures_funding',
+      description: 'Get funding rate for a Binance Futures symbol',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTCUSDT)' },
+        },
+        required: ['symbol'],
+      },
+    },
+
+    // Bybit Futures
+    {
+      name: 'bybit_balance',
+      description: 'Get Bybit account balance',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'bybit_positions',
+      description: 'Get open positions on Bybit',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'bybit_orders',
+      description: 'Get open orders on Bybit',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Optional: filter by symbol (e.g., BTCUSDT)' },
+        },
+      },
+    },
+    {
+      name: 'bybit_long',
+      description: 'Open a long position on Bybit',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTCUSDT)' },
+          qty: { type: 'number', description: 'Position size' },
+          leverage: { type: 'number', description: 'Leverage (1-100)' },
+        },
+        required: ['symbol', 'qty'],
+      },
+    },
+    {
+      name: 'bybit_short',
+      description: 'Open a short position on Bybit',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTCUSDT)' },
+          qty: { type: 'number', description: 'Position size' },
+          leverage: { type: 'number', description: 'Leverage (1-100)' },
+        },
+        required: ['symbol', 'qty'],
+      },
+    },
+    {
+      name: 'bybit_close',
+      description: 'Close a position on Bybit',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair to close (e.g., BTCUSDT)' },
+        },
+        required: ['symbol'],
+      },
+    },
+    {
+      name: 'bybit_price',
+      description: 'Get current mark price for a Bybit symbol',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTCUSDT)' },
+        },
+        required: ['symbol'],
+      },
+    },
+    {
+      name: 'bybit_funding',
+      description: 'Get funding rate for a Bybit symbol',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTCUSDT)' },
+        },
+        required: ['symbol'],
+      },
+    },
+
+    // MEXC Futures
+    {
+      name: 'mexc_balance',
+      description: 'Get MEXC Futures account balance',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'mexc_positions',
+      description: 'Get open positions on MEXC Futures',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'mexc_orders',
+      description: 'Get open orders on MEXC Futures',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Optional: filter by symbol (e.g., BTC_USDT)' },
+        },
+      },
+    },
+    {
+      name: 'mexc_long',
+      description: 'Open a long position on MEXC Futures (no KYC, 200x leverage)',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTC_USDT - note underscore)' },
+          vol: { type: 'number', description: 'Number of contracts' },
+          leverage: { type: 'number', description: 'Leverage (1-200)' },
+        },
+        required: ['symbol', 'vol'],
+      },
+    },
+    {
+      name: 'mexc_short',
+      description: 'Open a short position on MEXC Futures (no KYC, 200x leverage)',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTC_USDT - note underscore)' },
+          vol: { type: 'number', description: 'Number of contracts' },
+          leverage: { type: 'number', description: 'Leverage (1-200)' },
+        },
+        required: ['symbol', 'vol'],
+      },
+    },
+    {
+      name: 'mexc_close',
+      description: 'Close a position on MEXC Futures',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair to close (e.g., BTC_USDT)' },
+        },
+        required: ['symbol'],
+      },
+    },
+    {
+      name: 'mexc_price',
+      description: 'Get current mark price for a MEXC Futures symbol',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTC_USDT)' },
+        },
+        required: ['symbol'],
+      },
+    },
+    {
+      name: 'mexc_funding',
+      description: 'Get funding rate for a MEXC Futures symbol',
+      input_schema: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'Trading pair (e.g., BTC_USDT)' },
+        },
+        required: ['symbol'],
+      },
+    },
+
+    // Hyperliquid (69% perps market share)
+    {
+      name: 'hyperliquid_balance',
+      description: 'Get Hyperliquid account balance and positions',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'hyperliquid_positions',
+      description: 'Get open perp positions on Hyperliquid',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'hyperliquid_orders',
+      description: 'Get open orders on Hyperliquid',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'hyperliquid_long',
+      description: 'Open a long position on Hyperliquid',
+      input_schema: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Asset (e.g., BTC, ETH)' },
+          size: { type: 'number', description: 'Position size' },
+          price: { type: 'number', description: 'Limit price (omit for market order)' },
+          leverage: { type: 'number', description: 'Leverage (1-50)' },
+        },
+        required: ['coin', 'size'],
+      },
+    },
+    {
+      name: 'hyperliquid_short',
+      description: 'Open a short position on Hyperliquid',
+      input_schema: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Asset (e.g., BTC, ETH)' },
+          size: { type: 'number', description: 'Position size' },
+          price: { type: 'number', description: 'Limit price (omit for market order)' },
+          leverage: { type: 'number', description: 'Leverage (1-50)' },
+        },
+        required: ['coin', 'size'],
+      },
+    },
+    {
+      name: 'hyperliquid_close',
+      description: 'Close a position on Hyperliquid',
+      input_schema: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Asset to close (e.g., BTC)' },
+        },
+        required: ['coin'],
+      },
+    },
+    {
+      name: 'hyperliquid_cancel',
+      description: 'Cancel an order on Hyperliquid',
+      input_schema: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Asset' },
+          oid: { type: 'number', description: 'Order ID to cancel' },
+        },
+        required: ['coin', 'oid'],
+      },
+    },
+    {
+      name: 'hyperliquid_cancel_all',
+      description: 'Cancel all orders on Hyperliquid',
+      input_schema: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Optional: only cancel orders for this asset' },
+        },
+      },
+    },
+    {
+      name: 'hyperliquid_price',
+      description: 'Get current mid prices on Hyperliquid',
+      input_schema: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Optional: specific asset' },
+        },
+      },
+    },
+    {
+      name: 'hyperliquid_funding',
+      description: 'Get funding rates on Hyperliquid',
+      input_schema: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Optional: specific asset' },
+        },
+      },
+    },
+    {
+      name: 'hyperliquid_leverage',
+      description: 'Set leverage for a Hyperliquid position',
+      input_schema: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Asset' },
+          leverage: { type: 'number', description: 'Leverage (1-50)' },
+          isCross: { type: 'boolean', description: 'Cross margin mode (default: false = isolated)' },
+        },
+        required: ['coin', 'leverage'],
       },
     },
 
@@ -7310,99 +7686,110 @@ async function executeTool(
       // ============================================
 
       case 'polymarket_buy': {
-        // Check for credentials first
+        // Check for execution service first (preferred)
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          const tokenId = toolInput.token_id as string;
+          const price = toolInput.price as number;
+          const size = toolInput.size as number;
+          const notional = price * size;
+          const maxError = enforceMaxOrderSize(context, notional, 'polymarket_buy');
+          if (maxError) return maxError;
+          const exposureError = enforceExposureLimits(context, userId, {
+            platform: 'polymarket',
+            outcomeId: tokenId,
+            notional,
+            label: 'polymarket_buy',
+          });
+          if (exposureError) return exposureError;
+
+          try {
+            const result = await execSvc.buyLimit({
+              platform: 'polymarket',
+              marketId: tokenId,
+              tokenId,
+              price,
+              size,
+              orderType: 'GTC',
+            });
+
+            if (result.success) {
+              await context.credentials.markSuccess(userId, 'polymarket');
+              return JSON.stringify({
+                result: 'Order placed',
+                orderId: result.orderId,
+                avgFillPrice: result.avgFillPrice,
+              });
+            } else {
+              return JSON.stringify({ error: 'Order failed', details: result.error });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Order failed', details: error.message });
+          }
+        }
+
+        // Fallback: Check for credentials
         const polyCreds = context.tradingContext?.credentials.get('polymarket');
         if (!polyCreds || polyCreds.platform !== 'polymarket') {
           return JSON.stringify({
-            error: 'No Polymarket credentials set up. Use setup_polymarket_credentials first.',
+            error: 'No trading service configured. Set up trading credentials in config.',
           });
         }
 
-        const tokenId = toolInput.token_id as string;
-        const price = toolInput.price as number;
-        const size = toolInput.size as number;
-        const notional = price * size;
-        const maxError = enforceMaxOrderSize(context, notional, 'polymarket_buy');
-        if (maxError) return maxError;
-        const exposureError = enforceExposureLimits(context, userId, {
-          platform: 'polymarket',
-          outcomeId: tokenId,
-          notional,
-          label: 'polymarket_buy',
+        // No execution service and no Python fallback available
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Polymarket credentials.',
         });
-        if (exposureError) return exposureError;
-
-        // Execute via Python trading script with user's credentials
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 polymarket.py buy ${tokenId} ${price} ${size}`;
-
-        // Build env with user's credentials
-        const creds = polyCreds.data as PolymarketCredentials;
-        const userEnv = {
-          ...process.env,
-          PRIVATE_KEY: creds.privateKey,
-          POLY_FUNDER_ADDRESS: creds.funderAddress,
-          POLY_API_KEY: creds.apiKey,
-          POLY_API_SECRET: creds.apiSecret,
-          POLY_API_PASSPHRASE: creds.apiPassphrase,
-        };
-
-        try {
-          const output = execSync(cmd, {
-            timeout: 30000,
-            encoding: 'utf-8',
-            env: userEnv,
-          });
-
-          // Mark credential success
-          await context.credentials.markSuccess(userId, 'polymarket');
-          return JSON.stringify({ result: 'Order placed', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          // Check if auth failure
-          if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {
-            await context.credentials.markFailure(userId, 'polymarket');
-          }
-          return JSON.stringify({ error: 'Order failed', details: error.stderr || error.message });
-        }
       }
 
       case 'polymarket_sell': {
-        const polyCreds = context.tradingContext?.credentials.get('polymarket');
-        if (!polyCreds || polyCreds.platform !== 'polymarket') {
-          return JSON.stringify({
-            error: 'No Polymarket credentials set up. Use setup_polymarket_credentials first.',
-          });
-        }
-
         const tokenId = toolInput.token_id as string;
         const size = toolInput.size as number;
         const price = (toolInput.price as number) || 0.01;
 
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 polymarket.py sell ${tokenId} ${size} ${price}`;
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const result = await execSvc.sellLimit({
+              platform: 'polymarket',
+              marketId: tokenId,
+              tokenId,
+              price,
+              size,
+              orderType: 'GTC',
+            });
 
-        const creds = polyCreds.data as PolymarketCredentials;
-        const userEnv = {
-          ...process.env,
-          PRIVATE_KEY: creds.privateKey,
-          POLY_FUNDER_ADDRESS: creds.funderAddress,
-          POLY_API_KEY: creds.apiKey,
-          POLY_API_SECRET: creds.apiSecret,
-          POLY_API_PASSPHRASE: creds.apiPassphrase,
-        };
-
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          await context.credentials.markSuccess(userId, 'polymarket');
-          return JSON.stringify({ result: 'Sell order placed', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {
-            await context.credentials.markFailure(userId, 'polymarket');
+            if (result.success) {
+              await context.credentials.markSuccess(userId, 'polymarket');
+              return JSON.stringify({
+                result: 'Sell order placed',
+                orderId: result.orderId,
+                filledSize: result.filledSize,
+                avgFillPrice: result.avgFillPrice,
+                status: result.status,
+              });
+            } else {
+              return JSON.stringify({ error: 'Sell failed', details: result.error });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Order failed', details: error.message });
           }
-          return JSON.stringify({ error: 'Sell failed', details: error.stderr || error.message });
         }
+
+        // Fallback: Check for credentials
+        const polyCreds = context.tradingContext?.credentials.get('polymarket');
+        if (!polyCreds || polyCreds.platform !== 'polymarket') {
+          return JSON.stringify({
+            error: 'No trading service configured. Set up trading credentials in config.',
+          });
+        }
+
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Polymarket credentials.',
+        });
       }
 
       case 'polymarket_positions': {
@@ -7436,33 +7823,29 @@ async function executeTool(
       }
 
       case 'polymarket_cancel_all': {
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const cancelledCount = await execSvc.cancelAllOrders('polymarket');
+            return JSON.stringify({ result: 'All orders cancelled', cancelledCount });
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Cancel failed', details: error.message });
+          }
+        }
+
+        // Fallback: Check for credentials
         const polyCreds = context.tradingContext?.credentials.get('polymarket');
         if (!polyCreds || polyCreds.platform !== 'polymarket') {
           return JSON.stringify({
-            error: 'No Polymarket credentials set up. Use setup_polymarket_credentials first.',
+            error: 'No trading service configured. Set up trading credentials in config.',
           });
         }
 
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 polymarket.py cancel_all`;
-
-        const creds = polyCreds.data as PolymarketCredentials;
-        const userEnv = {
-          ...process.env,
-          PRIVATE_KEY: creds.privateKey,
-          POLY_FUNDER_ADDRESS: creds.funderAddress,
-          POLY_API_KEY: creds.apiKey,
-          POLY_API_SECRET: creds.apiSecret,
-          POLY_API_PASSPHRASE: creds.apiPassphrase,
-        };
-
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          return JSON.stringify({ result: 'All orders cancelled', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          return JSON.stringify({ error: 'Cancel failed', details: error.stderr || error.message });
-        }
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Polymarket credentials.',
+        });
       }
 
       case 'polymarket_orderbook': {
@@ -7511,112 +7894,123 @@ async function executeTool(
       }
 
       case 'polymarket_cancel': {
+        const orderId = toolInput.order_id as string;
+
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const success = await execSvc.cancelOrder('polymarket', orderId);
+            if (success) {
+              return JSON.stringify({ result: 'Order cancelled', orderId });
+            } else {
+              return JSON.stringify({ error: 'Cancel failed', details: 'Order not found or already filled' });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Cancel failed', details: error.message });
+          }
+        }
+
+        // Fallback: Check for credentials
         const polyCreds = context.tradingContext?.credentials.get('polymarket');
         if (!polyCreds || polyCreds.platform !== 'polymarket') {
           return JSON.stringify({
-            error: 'No Polymarket credentials set up. Use setup_polymarket_credentials first.',
+            error: 'No trading service configured. Set up trading credentials in config.',
           });
         }
 
-        const orderId = toolInput.order_id as string;
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 polymarket.py cancel ${orderId}`;
-
-        const creds = polyCreds.data as PolymarketCredentials;
-        const userEnv = {
-          ...process.env,
-          PRIVATE_KEY: creds.privateKey,
-          POLY_FUNDER_ADDRESS: creds.funderAddress,
-          POLY_API_KEY: creds.apiKey,
-          POLY_API_SECRET: creds.apiSecret,
-          POLY_API_PASSPHRASE: creds.apiPassphrase,
-        };
-
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          return JSON.stringify({ result: 'Order cancelled', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          return JSON.stringify({ error: 'Cancel failed', details: error.stderr || error.message });
-        }
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Polymarket credentials.',
+        });
       }
 
       case 'polymarket_orders': {
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const orders = await execSvc.getOpenOrders('polymarket');
+            return JSON.stringify({
+              result: orders.map(o => ({
+                orderId: o.orderId,
+                marketId: o.marketId,
+                tokenId: o.tokenId,
+                side: o.side,
+                price: o.price,
+                originalSize: o.originalSize,
+                remainingSize: o.remainingSize,
+                filledSize: o.filledSize,
+                status: o.status,
+                createdAt: o.createdAt,
+              })),
+            });
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Orders fetch failed', details: error.message });
+          }
+        }
+
+        // Fallback: Check for credentials
         const polyCreds = context.tradingContext?.credentials.get('polymarket');
         if (!polyCreds || polyCreds.platform !== 'polymarket') {
           return JSON.stringify({
-            error: 'No Polymarket credentials set up. Use setup_polymarket_credentials first.',
+            error: 'No trading service configured. Set up trading credentials in config.',
           });
         }
 
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 polymarket.py orders`;
-
-        const creds = polyCreds.data as PolymarketCredentials;
-        const userEnv = {
-          ...process.env,
-          PRIVATE_KEY: creds.privateKey,
-          POLY_FUNDER_ADDRESS: creds.funderAddress,
-          POLY_API_KEY: creds.apiKey,
-          POLY_API_SECRET: creds.apiSecret,
-          POLY_API_PASSPHRASE: creds.apiPassphrase,
-        };
-
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          return JSON.stringify({ result: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          return JSON.stringify({ error: 'Orders fetch failed', details: error.stderr || error.message });
-        }
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Polymarket credentials.',
+        });
       }
 
       case 'polymarket_market_sell': {
+        const tokenId = toolInput.token_id as string;
+        const size = toolInput.size as number;
+
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const result = await execSvc.marketSell({
+              platform: 'polymarket',
+              marketId: tokenId,
+              tokenId,
+              size,
+            });
+
+            if (result.success) {
+              await context.credentials.markSuccess(userId, 'polymarket');
+              return JSON.stringify({
+                result: 'Market sell executed',
+                orderId: result.orderId,
+                filledSize: result.filledSize,
+                avgFillPrice: result.avgFillPrice,
+                status: result.status,
+              });
+            } else {
+              return JSON.stringify({ error: 'Market sell failed', details: result.error });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Market sell failed', details: error.message });
+          }
+        }
+
+        // Fallback: Check for credentials
         const polyCreds = context.tradingContext?.credentials.get('polymarket');
         if (!polyCreds || polyCreds.platform !== 'polymarket') {
           return JSON.stringify({
-            error: 'No Polymarket credentials set up. Use setup_polymarket_credentials first.',
+            error: 'No trading service configured. Set up trading credentials in config.',
           });
         }
 
-        const tokenId = toolInput.token_id as string;
-        const size = toolInput.size as number | undefined;
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = size
-          ? `cd ${tradingDir} && python3 polymarket.py market_sell ${tokenId} ${size}`
-          : `cd ${tradingDir} && python3 polymarket.py market_sell ${tokenId}`;
-
-        const creds = polyCreds.data as PolymarketCredentials;
-        const userEnv = {
-          ...process.env,
-          PRIVATE_KEY: creds.privateKey,
-          POLY_FUNDER_ADDRESS: creds.funderAddress,
-          POLY_API_KEY: creds.apiKey,
-          POLY_API_SECRET: creds.apiSecret,
-          POLY_API_PASSPHRASE: creds.apiPassphrase,
-        };
-
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          await context.credentials.markSuccess(userId, 'polymarket');
-          return JSON.stringify({ result: 'Market sell executed', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {
-            await context.credentials.markFailure(userId, 'polymarket');
-          }
-          return JSON.stringify({ error: 'Market sell failed', details: error.stderr || error.message });
-        }
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Polymarket credentials.',
+        });
       }
 
       case 'polymarket_market_buy': {
-        const polyCreds = context.tradingContext?.credentials.get('polymarket');
-        if (!polyCreds || polyCreds.platform !== 'polymarket') {
-          return JSON.stringify({
-            error: 'No Polymarket credentials set up. Use setup_polymarket_credentials first.',
-          });
-        }
-
         const tokenId = toolInput.token_id as string;
         const amount = toolInput.amount as number;
         const maxError = enforceMaxOrderSize(context, amount, 'polymarket_market_buy');
@@ -7628,40 +8022,50 @@ async function executeTool(
           label: 'polymarket_market_buy',
         });
         if (exposureError) return exposureError;
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 polymarket.py market_buy ${tokenId} ${amount}`;
 
-        const creds = polyCreds.data as PolymarketCredentials;
-        const userEnv = {
-          ...process.env,
-          PRIVATE_KEY: creds.privateKey,
-          POLY_FUNDER_ADDRESS: creds.funderAddress,
-          POLY_API_KEY: creds.apiKey,
-          POLY_API_SECRET: creds.apiSecret,
-          POLY_API_PASSPHRASE: creds.apiPassphrase,
-        };
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const result = await execSvc.marketBuy({
+              platform: 'polymarket',
+              marketId: tokenId,
+              tokenId,
+              size: amount,
+            });
 
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          await context.credentials.markSuccess(userId, 'polymarket');
-          return JSON.stringify({ result: 'Market buy executed', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {
-            await context.credentials.markFailure(userId, 'polymarket');
+            if (result.success) {
+              await context.credentials.markSuccess(userId, 'polymarket');
+              return JSON.stringify({
+                result: 'Market buy executed',
+                orderId: result.orderId,
+                filledSize: result.filledSize,
+                avgFillPrice: result.avgFillPrice,
+                status: result.status,
+              });
+            } else {
+              return JSON.stringify({ error: 'Market buy failed', details: result.error });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Market buy failed', details: error.message });
           }
-          return JSON.stringify({ error: 'Market buy failed', details: error.stderr || error.message });
         }
-      }
 
-      case 'polymarket_maker_buy': {
+        // Fallback: Check for credentials
         const polyCreds = context.tradingContext?.credentials.get('polymarket');
         if (!polyCreds || polyCreds.platform !== 'polymarket') {
           return JSON.stringify({
-            error: 'No Polymarket credentials set up. Use setup_polymarket_credentials first.',
+            error: 'No trading service configured. Set up trading credentials in config.',
           });
         }
 
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Polymarket credentials.',
+        });
+      }
+
+      case 'polymarket_maker_buy': {
         const tokenId = toolInput.token_id as string;
         const price = toolInput.price as number;
         const size = toolInput.size as number;
@@ -7675,67 +8079,96 @@ async function executeTool(
           label: 'polymarket_maker_buy',
         });
         if (exposureError) return exposureError;
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 polymarket.py maker_buy ${tokenId} ${price} ${size}`;
 
-        const creds = polyCreds.data as PolymarketCredentials;
-        const userEnv = {
-          ...process.env,
-          PRIVATE_KEY: creds.privateKey,
-          POLY_FUNDER_ADDRESS: creds.funderAddress,
-          POLY_API_KEY: creds.apiKey,
-          POLY_API_SECRET: creds.apiSecret,
-          POLY_API_PASSPHRASE: creds.apiPassphrase,
-        };
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const result = await execSvc.makerBuy({
+              platform: 'polymarket',
+              marketId: tokenId,
+              tokenId,
+              price,
+              size,
+            });
 
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          await context.credentials.markSuccess(userId, 'polymarket');
-          return JSON.stringify({ result: 'Maker buy order placed (postOnly)', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {
-            await context.credentials.markFailure(userId, 'polymarket');
+            if (result.success) {
+              await context.credentials.markSuccess(userId, 'polymarket');
+              return JSON.stringify({
+                result: 'Maker buy order placed (postOnly)',
+                orderId: result.orderId,
+                filledSize: result.filledSize,
+                avgFillPrice: result.avgFillPrice,
+                status: result.status,
+              });
+            } else {
+              return JSON.stringify({ error: 'Maker buy failed', details: result.error });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Maker buy failed', details: error.message });
           }
-          return JSON.stringify({ error: 'Maker buy failed', details: error.stderr || error.message });
         }
-      }
 
-      case 'polymarket_maker_sell': {
+        // Fallback: Check for credentials
         const polyCreds = context.tradingContext?.credentials.get('polymarket');
         if (!polyCreds || polyCreds.platform !== 'polymarket') {
           return JSON.stringify({
-            error: 'No Polymarket credentials set up. Use setup_polymarket_credentials first.',
+            error: 'No trading service configured. Set up trading credentials in config.',
           });
         }
 
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Polymarket credentials.',
+        });
+      }
+
+      case 'polymarket_maker_sell': {
         const tokenId = toolInput.token_id as string;
         const price = toolInput.price as number;
         const size = toolInput.size as number;
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 polymarket.py maker_sell ${tokenId} ${price} ${size}`;
 
-        const creds = polyCreds.data as PolymarketCredentials;
-        const userEnv = {
-          ...process.env,
-          PRIVATE_KEY: creds.privateKey,
-          POLY_FUNDER_ADDRESS: creds.funderAddress,
-          POLY_API_KEY: creds.apiKey,
-          POLY_API_SECRET: creds.apiSecret,
-          POLY_API_PASSPHRASE: creds.apiPassphrase,
-        };
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const result = await execSvc.makerSell({
+              platform: 'polymarket',
+              marketId: tokenId,
+              tokenId,
+              price,
+              size,
+            });
 
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          await context.credentials.markSuccess(userId, 'polymarket');
-          return JSON.stringify({ result: 'Maker sell order placed (postOnly)', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {
-            await context.credentials.markFailure(userId, 'polymarket');
+            if (result.success) {
+              await context.credentials.markSuccess(userId, 'polymarket');
+              return JSON.stringify({
+                result: 'Maker sell order placed (postOnly)',
+                orderId: result.orderId,
+                filledSize: result.filledSize,
+                avgFillPrice: result.avgFillPrice,
+                status: result.status,
+              });
+            } else {
+              return JSON.stringify({ error: 'Maker sell failed', details: result.error });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Maker sell failed', details: error.message });
           }
-          return JSON.stringify({ error: 'Maker sell failed', details: error.stderr || error.message });
         }
+
+        // Fallback: Check for credentials
+        const polyCreds = context.tradingContext?.credentials.get('polymarket');
+        if (!polyCreds || polyCreds.platform !== 'polymarket') {
+          return JSON.stringify({
+            error: 'No trading service configured. Set up trading credentials in config.',
+          });
+        }
+
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Polymarket credentials.',
+        });
       }
 
       case 'polymarket_fee_rate': {
@@ -7990,6 +8423,56 @@ async function executeTool(
         } catch (err: unknown) {
           const error = err as { message?: string };
           return JSON.stringify({ error: 'Market info fetch failed', details: error.message });
+        }
+      }
+
+      case 'orderbook_imbalance': {
+        // Import dynamically to avoid circular dependency issues
+        const { getOrderbookImbalance } = await import('../execution');
+
+        const platform = toolInput.platform as 'polymarket' | 'kalshi';
+        const marketId = toolInput.market_id as string;
+        const depthLevels = (toolInput.depth_levels as number) || 5;
+
+        try {
+          const imbalance = await getOrderbookImbalance(platform, marketId, depthLevels);
+
+          if (!imbalance) {
+            return JSON.stringify({
+              error: 'Could not fetch orderbook',
+              hint: 'Check that the market/token ID is correct and the market is active',
+            });
+          }
+
+          // Format for user-friendly output
+          const signalEmoji = imbalance.signal === 'bullish' ? '🟢' :
+                             imbalance.signal === 'bearish' ? '🔴' : '⚪';
+
+          const timingEmoji = imbalance.imbalanceScore > 0.15 ? '⚡ Execute now - strong buy pressure' :
+                              imbalance.imbalanceScore < -0.15 ? '⏳ Wait - sell pressure detected' :
+                              '👀 Monitor - balanced orderbook';
+
+          return JSON.stringify({
+            signal: `${signalEmoji} ${imbalance.signal.toUpperCase()}`,
+            imbalance_score: Math.round(imbalance.imbalanceScore * 100) / 100,
+            bid_ask_ratio: Math.round(imbalance.bidAskRatio * 100) / 100,
+            best_bid: imbalance.bestBid,
+            best_ask: imbalance.bestAsk,
+            mid_price: imbalance.midPrice,
+            spread: `${(imbalance.spreadPct * 100).toFixed(2)}%`,
+            total_bid_volume: Math.round(imbalance.totalBidVolume),
+            total_ask_volume: Math.round(imbalance.totalAskVolume),
+            confidence: `${(imbalance.confidence * 100).toFixed(1)}%`,
+            timing: timingEmoji,
+            interpretation: imbalance.signal === 'bullish'
+              ? 'More buying pressure - price may rise. Favorable for BUY orders.'
+              : imbalance.signal === 'bearish'
+              ? 'More selling pressure - price may fall. Favorable for SELL orders.'
+              : 'Balanced orderbook - no strong directional bias.',
+          });
+        } catch (err: unknown) {
+          const error = err as { message?: string };
+          return JSON.stringify({ error: 'Imbalance analysis failed', details: error.message });
         }
       }
 
@@ -9110,13 +9593,6 @@ async function executeTool(
       }
 
       case 'kalshi_buy': {
-        const kalshiCreds = context.tradingContext?.credentials.get('kalshi');
-        if (!kalshiCreds || kalshiCreds.platform !== 'kalshi') {
-          return JSON.stringify({
-            error: 'No Kalshi credentials set up. Use setup_kalshi_credentials first.',
-          });
-        }
-
         const ticker = toolInput.ticker as string;
         const side = toolInput.side as string;
         const count = toolInput.count as number;
@@ -9133,55 +9609,98 @@ async function executeTool(
         });
         if (exposureError) return exposureError;
 
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 kalshi.py buy ${ticker} ${side} ${count} ${price}`;
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const result = await execSvc.buyLimit({
+              platform: 'kalshi',
+              marketId: ticker,
+              outcome: side,
+              price: price > 1 ? price / 100 : price, // Normalize to 0-1 range
+              size: count,
+              orderType: 'GTC',
+            });
 
-        const creds = kalshiCreds.data;
-        const userEnv = buildKalshiEnv(creds);
-
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          await context.credentials.markSuccess(userId, 'kalshi');
-          return JSON.stringify({ result: 'Order placed', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {
-            await context.credentials.markFailure(userId, 'kalshi');
+            if (result.success) {
+              await context.credentials.markSuccess(userId, 'kalshi');
+              return JSON.stringify({
+                result: 'Order placed',
+                orderId: result.orderId,
+                filledSize: result.filledSize,
+                avgFillPrice: result.avgFillPrice,
+                status: result.status,
+              });
+            } else {
+              return JSON.stringify({ error: 'Order failed', details: result.error });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Order failed', details: error.message });
           }
-          return JSON.stringify({ error: 'Order failed', details: error.stderr || error.message });
         }
-      }
 
-      case 'kalshi_sell': {
+        // Fallback: Check for credentials
         const kalshiCreds = context.tradingContext?.credentials.get('kalshi');
         if (!kalshiCreds || kalshiCreds.platform !== 'kalshi') {
           return JSON.stringify({
-            error: 'No Kalshi credentials set up. Use setup_kalshi_credentials first.',
+            error: 'No trading service configured. Set up trading credentials in config.',
           });
         }
 
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Kalshi credentials.',
+        });
+      }
+
+      case 'kalshi_sell': {
         const ticker = toolInput.ticker as string;
         const side = toolInput.side as string;
         const count = toolInput.count as number;
         const price = toolInput.price as number;
 
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 kalshi.py sell ${ticker} ${side} ${count} ${price}`;
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const result = await execSvc.sellLimit({
+              platform: 'kalshi',
+              marketId: ticker,
+              outcome: side,
+              price: price > 1 ? price / 100 : price, // Normalize to 0-1 range
+              size: count,
+              orderType: 'GTC',
+            });
 
-        const creds = kalshiCreds.data;
-        const userEnv = buildKalshiEnv(creds);
-
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          await context.credentials.markSuccess(userId, 'kalshi');
-          return JSON.stringify({ result: 'Sell order placed', output: output.trim() });
-        } catch (err: unknown) {
-          const error = err as { stderr?: string; message?: string };
-          if (error.stderr?.includes('auth') || error.stderr?.includes('401')) {
-            await context.credentials.markFailure(userId, 'kalshi');
+            if (result.success) {
+              await context.credentials.markSuccess(userId, 'kalshi');
+              return JSON.stringify({
+                result: 'Sell order placed',
+                orderId: result.orderId,
+                filledSize: result.filledSize,
+                avgFillPrice: result.avgFillPrice,
+                status: result.status,
+              });
+            } else {
+              return JSON.stringify({ error: 'Sell failed', details: result.error });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Sell failed', details: error.message });
           }
-          return JSON.stringify({ error: 'Sell failed', details: error.stderr || error.message });
         }
+
+        // Fallback: Check for credentials
+        const kalshiCreds = context.tradingContext?.credentials.get('kalshi');
+        if (!kalshiCreds || kalshiCreds.platform !== 'kalshi') {
+          return JSON.stringify({
+            error: 'No trading service configured. Set up trading credentials in config.',
+          });
+        }
+
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Kalshi credentials.',
+        });
       }
 
       case 'kalshi_positions': {
@@ -9263,38 +9782,74 @@ async function executeTool(
       }
 
       case 'kalshi_orders': {
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const orders = await execSvc.getOpenOrders('kalshi');
+            return JSON.stringify({
+              result: orders.map(o => ({
+                orderId: o.orderId,
+                marketId: o.marketId,
+                outcome: o.outcome,
+                side: o.side,
+                price: o.price,
+                originalSize: o.originalSize,
+                remainingSize: o.remainingSize,
+                filledSize: o.filledSize,
+                status: o.status,
+                createdAt: o.createdAt,
+              })),
+            });
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Orders fetch failed', details: error.message });
+          }
+        }
+
+        // Fallback: Check for credentials
         const kalshiCreds = context.tradingContext?.credentials.get('kalshi');
         if (!kalshiCreds || kalshiCreds.platform !== 'kalshi') {
-          return JSON.stringify({ error: 'No Kalshi credentials set up. Use setup_kalshi_credentials first.' });
+          return JSON.stringify({
+            error: 'No trading service configured. Set up trading credentials in config.',
+          });
         }
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 kalshi.py orders`;
-        const creds = kalshiCreds.data;
-        const userEnv = buildKalshiEnv(creds);
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          return output.trim();
-        } catch (err: unknown) {
-          return JSON.stringify({ error: (err as { stderr?: string; message?: string }).stderr || (err as { message?: string }).message });
-        }
+
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Kalshi credentials.',
+        });
       }
 
       case 'kalshi_cancel': {
+        const orderId = toolInput.order_id as string;
+
+        // Use TypeScript execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const success = await execSvc.cancelOrder('kalshi', orderId);
+            if (success) {
+              return JSON.stringify({ result: 'Order cancelled', orderId });
+            } else {
+              return JSON.stringify({ error: 'Cancel failed', details: 'Order not found or already filled' });
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            return JSON.stringify({ error: 'Cancel failed', details: error.message });
+          }
+        }
+
+        // Fallback: Check for credentials
         const kalshiCreds = context.tradingContext?.credentials.get('kalshi');
         if (!kalshiCreds || kalshiCreds.platform !== 'kalshi') {
-          return JSON.stringify({ error: 'No Kalshi credentials set up. Use setup_kalshi_credentials first.' });
+          return JSON.stringify({
+            error: 'No trading service configured. Set up trading credentials in config.',
+          });
         }
-        const orderId = toolInput.order_id as string;
-        const tradingDir = join(__dirname, '..', '..', 'trading');
-        const cmd = `cd ${tradingDir} && python3 kalshi.py cancel ${orderId}`;
-        const creds = kalshiCreds.data;
-        const userEnv = buildKalshiEnv(creds);
-        try {
-          const output = execSync(cmd, { timeout: 30000, encoding: 'utf-8', env: userEnv });
-          return output.trim();
-        } catch (err: unknown) {
-          return JSON.stringify({ error: (err as { stderr?: string; message?: string }).stderr || (err as { message?: string }).message });
-        }
+
+        return JSON.stringify({
+          error: 'Trading execution not available. Configure trading.enabled=true in config with Kalshi credentials.',
+        });
       }
 
       // ========== KALSHI - EXCHANGE INFO ==========
@@ -12918,6 +13473,798 @@ async function executeTool(
       }
 
       // ============================================
+      // CENTRALIZED FUTURES EXCHANGES
+      // ============================================
+
+      // Binance Futures handlers
+      case 'binance_futures_balance': {
+        const apiKey = process.env.BINANCE_API_KEY;
+        const apiSecret = process.env.BINANCE_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BINANCE_API_KEY and BINANCE_API_SECRET' });
+        }
+        try {
+          const config: binanceFutures.BinanceFuturesConfig = { apiKey, apiSecret };
+          const balances = await binanceFutures.getBalance(config);
+          return JSON.stringify({ balances });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'binance_futures_positions': {
+        const apiKey = process.env.BINANCE_API_KEY;
+        const apiSecret = process.env.BINANCE_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BINANCE_API_KEY and BINANCE_API_SECRET' });
+        }
+        try {
+          const config: binanceFutures.BinanceFuturesConfig = { apiKey, apiSecret };
+          const positions = await binanceFutures.getPositions(config);
+          return JSON.stringify({ positions });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'binance_futures_orders': {
+        const apiKey = process.env.BINANCE_API_KEY;
+        const apiSecret = process.env.BINANCE_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BINANCE_API_KEY and BINANCE_API_SECRET' });
+        }
+        try {
+          const config: binanceFutures.BinanceFuturesConfig = { apiKey, apiSecret };
+          const symbol = toolInput.symbol as string | undefined;
+          const orders = await binanceFutures.getOpenOrders(config, symbol);
+          return JSON.stringify({ orders });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'binance_futures_long': {
+        const apiKey = process.env.BINANCE_API_KEY;
+        const apiSecret = process.env.BINANCE_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BINANCE_API_KEY and BINANCE_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        const quantity = toolInput.quantity as number;
+        const leverage = toolInput.leverage as number | undefined;
+        try {
+          const config: binanceFutures.BinanceFuturesConfig = { apiKey, apiSecret, dryRun: process.env.DRY_RUN === 'true' };
+          const result = await binanceFutures.openLong(config, symbol, quantity, leverage);
+          // Log trade to database
+          db.logBinanceFuturesTrade({
+            userId,
+            orderId: String(result.orderId),
+            symbol: result.symbol,
+            side: 'BUY',
+            positionSide: 'LONG',
+            size: result.executedQty,
+            price: result.avgPrice || 0,
+            leverage,
+            timestamp: new Date(),
+          });
+          return JSON.stringify({ success: true, order: result });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'binance_futures_short': {
+        const apiKey = process.env.BINANCE_API_KEY;
+        const apiSecret = process.env.BINANCE_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BINANCE_API_KEY and BINANCE_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        const quantity = toolInput.quantity as number;
+        const leverage = toolInput.leverage as number | undefined;
+        try {
+          const config: binanceFutures.BinanceFuturesConfig = { apiKey, apiSecret, dryRun: process.env.DRY_RUN === 'true' };
+          const result = await binanceFutures.openShort(config, symbol, quantity, leverage);
+          // Log trade to database
+          db.logBinanceFuturesTrade({
+            userId,
+            orderId: String(result.orderId),
+            symbol: result.symbol,
+            side: 'SELL',
+            positionSide: 'SHORT',
+            size: result.executedQty,
+            price: result.avgPrice || 0,
+            leverage,
+            timestamp: new Date(),
+          });
+          return JSON.stringify({ success: true, order: result });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'binance_futures_close': {
+        const apiKey = process.env.BINANCE_API_KEY;
+        const apiSecret = process.env.BINANCE_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BINANCE_API_KEY and BINANCE_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        try {
+          const config: binanceFutures.BinanceFuturesConfig = { apiKey, apiSecret, dryRun: process.env.DRY_RUN === 'true' };
+          const result = await binanceFutures.closePosition(config, symbol);
+          if (!result) {
+            return JSON.stringify({ error: `No open position for ${symbol}` });
+          }
+          // Log trade to database
+          db.logBinanceFuturesTrade({
+            userId,
+            orderId: String(result.orderId),
+            symbol: result.symbol,
+            side: result.side,
+            positionSide: result.positionSide,
+            size: result.executedQty,
+            price: result.avgPrice || 0,
+            timestamp: new Date(),
+          });
+          return JSON.stringify({ success: true, order: result });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'binance_futures_price': {
+        const apiKey = process.env.BINANCE_API_KEY;
+        const apiSecret = process.env.BINANCE_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BINANCE_API_KEY and BINANCE_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        try {
+          const config: binanceFutures.BinanceFuturesConfig = { apiKey, apiSecret };
+          const price = await binanceFutures.getPrice(config, symbol);
+          return JSON.stringify({ symbol, price });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'binance_futures_funding': {
+        const apiKey = process.env.BINANCE_API_KEY;
+        const apiSecret = process.env.BINANCE_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BINANCE_API_KEY and BINANCE_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        try {
+          const config: binanceFutures.BinanceFuturesConfig = { apiKey, apiSecret };
+          const funding = await binanceFutures.getFundingRate(config, symbol);
+          return JSON.stringify(funding);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      // Bybit handlers
+      case 'bybit_balance': {
+        const apiKey = process.env.BYBIT_API_KEY;
+        const apiSecret = process.env.BYBIT_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BYBIT_API_KEY and BYBIT_API_SECRET' });
+        }
+        try {
+          const config: bybit.BybitConfig = { apiKey, apiSecret };
+          const balances = await bybit.getBalance(config);
+          return JSON.stringify({ balances });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'bybit_positions': {
+        const apiKey = process.env.BYBIT_API_KEY;
+        const apiSecret = process.env.BYBIT_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BYBIT_API_KEY and BYBIT_API_SECRET' });
+        }
+        try {
+          const config: bybit.BybitConfig = { apiKey, apiSecret };
+          const positions = await bybit.getPositions(config);
+          return JSON.stringify({ positions });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'bybit_orders': {
+        const apiKey = process.env.BYBIT_API_KEY;
+        const apiSecret = process.env.BYBIT_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BYBIT_API_KEY and BYBIT_API_SECRET' });
+        }
+        try {
+          const config: bybit.BybitConfig = { apiKey, apiSecret };
+          const symbol = toolInput.symbol as string | undefined;
+          const orders = await bybit.getOpenOrders(config, symbol);
+          return JSON.stringify({ orders });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'bybit_long': {
+        const apiKey = process.env.BYBIT_API_KEY;
+        const apiSecret = process.env.BYBIT_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BYBIT_API_KEY and BYBIT_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        const qty = toolInput.qty as number;
+        const leverage = toolInput.leverage as number | undefined;
+        try {
+          const config: bybit.BybitConfig = { apiKey, apiSecret, dryRun: process.env.DRY_RUN === 'true' };
+          const result = await bybit.openLong(config, symbol, qty, leverage);
+          // Log trade to database
+          db.logBybitFuturesTrade({
+            userId,
+            orderId: result.orderId,
+            symbol: result.symbol,
+            side: 'Buy',
+            positionSide: 'Long',
+            size: result.cumExecQty,
+            price: result.avgPrice || 0,
+            leverage,
+            timestamp: new Date(),
+          });
+          return JSON.stringify({ success: true, order: result });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'bybit_short': {
+        const apiKey = process.env.BYBIT_API_KEY;
+        const apiSecret = process.env.BYBIT_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BYBIT_API_KEY and BYBIT_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        const qty = toolInput.qty as number;
+        const leverage = toolInput.leverage as number | undefined;
+        try {
+          const config: bybit.BybitConfig = { apiKey, apiSecret, dryRun: process.env.DRY_RUN === 'true' };
+          const result = await bybit.openShort(config, symbol, qty, leverage);
+          // Log trade to database
+          db.logBybitFuturesTrade({
+            userId,
+            orderId: result.orderId,
+            symbol: result.symbol,
+            side: 'Sell',
+            positionSide: 'Short',
+            size: result.cumExecQty,
+            price: result.avgPrice || 0,
+            leverage,
+            timestamp: new Date(),
+          });
+          return JSON.stringify({ success: true, order: result });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'bybit_close': {
+        const apiKey = process.env.BYBIT_API_KEY;
+        const apiSecret = process.env.BYBIT_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BYBIT_API_KEY and BYBIT_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        try {
+          const config: bybit.BybitConfig = { apiKey, apiSecret, dryRun: process.env.DRY_RUN === 'true' };
+          const result = await bybit.closePosition(config, symbol);
+          if (!result) {
+            return JSON.stringify({ error: `No open position for ${symbol}` });
+          }
+          // Log trade to database
+          db.logBybitFuturesTrade({
+            userId,
+            orderId: result.orderId,
+            symbol: result.symbol,
+            side: result.side,
+            size: result.cumExecQty,
+            price: result.avgPrice || 0,
+            timestamp: new Date(),
+          });
+          return JSON.stringify({ success: true, order: result });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'bybit_price': {
+        const apiKey = process.env.BYBIT_API_KEY;
+        const apiSecret = process.env.BYBIT_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BYBIT_API_KEY and BYBIT_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        try {
+          const config: bybit.BybitConfig = { apiKey, apiSecret };
+          const price = await bybit.getPrice(config, symbol);
+          return JSON.stringify({ symbol, price });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'bybit_funding': {
+        const apiKey = process.env.BYBIT_API_KEY;
+        const apiSecret = process.env.BYBIT_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set BYBIT_API_KEY and BYBIT_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        try {
+          const config: bybit.BybitConfig = { apiKey, apiSecret };
+          const funding = await bybit.getFundingRate(config, symbol);
+          return JSON.stringify(funding);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      // MEXC handlers
+      case 'mexc_balance': {
+        const apiKey = process.env.MEXC_API_KEY;
+        const apiSecret = process.env.MEXC_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set MEXC_API_KEY and MEXC_API_SECRET' });
+        }
+        try {
+          const config: mexc.MexcConfig = { apiKey, apiSecret };
+          const balances = await mexc.getBalance(config);
+          return JSON.stringify({ balances });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'mexc_positions': {
+        const apiKey = process.env.MEXC_API_KEY;
+        const apiSecret = process.env.MEXC_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set MEXC_API_KEY and MEXC_API_SECRET' });
+        }
+        try {
+          const config: mexc.MexcConfig = { apiKey, apiSecret };
+          const positions = await mexc.getPositions(config);
+          return JSON.stringify({ positions });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'mexc_orders': {
+        const apiKey = process.env.MEXC_API_KEY;
+        const apiSecret = process.env.MEXC_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set MEXC_API_KEY and MEXC_API_SECRET' });
+        }
+        try {
+          const config: mexc.MexcConfig = { apiKey, apiSecret };
+          const symbol = toolInput.symbol as string | undefined;
+          const orders = await mexc.getOpenOrders(config, symbol);
+          return JSON.stringify({ orders });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'mexc_long': {
+        const apiKey = process.env.MEXC_API_KEY;
+        const apiSecret = process.env.MEXC_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set MEXC_API_KEY and MEXC_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        const vol = toolInput.vol as number;
+        const leverage = toolInput.leverage as number | undefined;
+        try {
+          const config: mexc.MexcConfig = { apiKey, apiSecret, dryRun: process.env.DRY_RUN === 'true' };
+          const result = await mexc.openLong(config, symbol, vol, leverage);
+          // Log trade to database (side: 1=Open Long)
+          db.logMexcFuturesTrade({
+            userId,
+            orderId: result.orderId,
+            symbol: result.symbol,
+            side: 1, // Open Long
+            vol: result.dealVol,
+            price: result.dealAvgPrice || 0,
+            leverage,
+            timestamp: new Date(),
+          });
+          return JSON.stringify({ success: true, order: result });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'mexc_short': {
+        const apiKey = process.env.MEXC_API_KEY;
+        const apiSecret = process.env.MEXC_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set MEXC_API_KEY and MEXC_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        const vol = toolInput.vol as number;
+        const leverage = toolInput.leverage as number | undefined;
+        try {
+          const config: mexc.MexcConfig = { apiKey, apiSecret, dryRun: process.env.DRY_RUN === 'true' };
+          const result = await mexc.openShort(config, symbol, vol, leverage);
+          // Log trade to database (side: 3=Open Short)
+          db.logMexcFuturesTrade({
+            userId,
+            orderId: result.orderId,
+            symbol: result.symbol,
+            side: 3, // Open Short
+            vol: result.dealVol,
+            price: result.dealAvgPrice || 0,
+            leverage,
+            timestamp: new Date(),
+          });
+          return JSON.stringify({ success: true, order: result });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'mexc_close': {
+        const apiKey = process.env.MEXC_API_KEY;
+        const apiSecret = process.env.MEXC_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set MEXC_API_KEY and MEXC_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        try {
+          const config: mexc.MexcConfig = { apiKey, apiSecret, dryRun: process.env.DRY_RUN === 'true' };
+          const result = await mexc.closePosition(config, symbol);
+          if (!result) {
+            return JSON.stringify({ error: `No open position for ${symbol}` });
+          }
+          // Log trade to database
+          db.logMexcFuturesTrade({
+            userId,
+            orderId: result.orderId,
+            symbol: result.symbol,
+            side: result.side,
+            vol: result.dealVol,
+            price: result.dealAvgPrice || 0,
+            timestamp: new Date(),
+          });
+          return JSON.stringify({ success: true, order: result });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'mexc_price': {
+        const apiKey = process.env.MEXC_API_KEY;
+        const apiSecret = process.env.MEXC_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set MEXC_API_KEY and MEXC_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        try {
+          const config: mexc.MexcConfig = { apiKey, apiSecret };
+          const price = await mexc.getPrice(config, symbol);
+          return JSON.stringify({ symbol, price });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'mexc_funding': {
+        const apiKey = process.env.MEXC_API_KEY;
+        const apiSecret = process.env.MEXC_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          return JSON.stringify({ error: 'Set MEXC_API_KEY and MEXC_API_SECRET' });
+        }
+        const symbol = toolInput.symbol as string;
+        try {
+          const config: mexc.MexcConfig = { apiKey, apiSecret };
+          const funding = await mexc.getFundingRate(config, symbol);
+          return JSON.stringify(funding);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      // ============================================
+      // HYPERLIQUID (69% perps market share)
+      // ============================================
+
+      case 'hyperliquid_balance': {
+        const wallet = process.env.HYPERLIQUID_WALLET;
+        if (!wallet) {
+          return JSON.stringify({ error: 'Set HYPERLIQUID_WALLET' });
+        }
+        try {
+          const state = await hyperliquid.getUserState(wallet);
+          return JSON.stringify({
+            accountValue: state.marginSummary.accountValue,
+            marginUsed: state.marginSummary.totalMarginUsed,
+            positions: state.assetPositions.length,
+          });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_positions': {
+        const wallet = process.env.HYPERLIQUID_WALLET;
+        if (!wallet) {
+          return JSON.stringify({ error: 'Set HYPERLIQUID_WALLET' });
+        }
+        try {
+          const state = await hyperliquid.getUserState(wallet);
+          const positions = state.assetPositions
+            .filter(p => parseFloat(p.position.szi) !== 0)
+            .map(p => ({
+              coin: p.position.coin,
+              size: parseFloat(p.position.szi),
+              entryPrice: parseFloat(p.position.entryPx),
+              unrealizedPnl: parseFloat(p.position.unrealizedPnl),
+              liquidationPrice: parseFloat(p.position.liquidationPx),
+            }));
+          return JSON.stringify(positions);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_orders': {
+        const wallet = process.env.HYPERLIQUID_WALLET;
+        if (!wallet) {
+          return JSON.stringify({ error: 'Set HYPERLIQUID_WALLET' });
+        }
+        try {
+          const orders = await hyperliquid.getOpenOrders(wallet);
+          return JSON.stringify(orders.map(o => ({
+            orderId: o.oid,
+            coin: o.coin,
+            side: o.side,
+            price: parseFloat(o.limitPx),
+            size: parseFloat(o.sz),
+            timestamp: o.timestamp,
+          })));
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_long': {
+        const wallet = process.env.HYPERLIQUID_WALLET;
+        const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
+        if (!wallet || !privateKey) {
+          return JSON.stringify({ error: 'Set HYPERLIQUID_WALLET and HYPERLIQUID_PRIVATE_KEY' });
+        }
+        const coin = toolInput.coin as string;
+        const size = toolInput.size as number;
+        const leverage = toolInput.leverage as number | undefined;
+        try {
+          const config: hyperliquid.HyperliquidConfig = {
+            walletAddress: wallet,
+            privateKey,
+            dryRun: process.env.DRY_RUN === 'true',
+          };
+          if (leverage) {
+            await hyperliquid.updateLeverage(config, coin, leverage);
+          }
+          const result = await hyperliquid.placePerpOrder(config, {
+            coin,
+            side: 'BUY',
+            size,
+            type: 'MARKET',
+          });
+          // Log trade to DB
+          db.logHyperliquidTrade({
+            userId: wallet.slice(0, 16),
+            orderId: String(result.orderId || Date.now()),
+            coin,
+            side: 'BUY',
+            size,
+            price: 0,
+            leverage,
+            timestamp: new Date(),
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_short': {
+        const wallet = process.env.HYPERLIQUID_WALLET;
+        const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
+        if (!wallet || !privateKey) {
+          return JSON.stringify({ error: 'Set HYPERLIQUID_WALLET and HYPERLIQUID_PRIVATE_KEY' });
+        }
+        const coin = toolInput.coin as string;
+        const size = toolInput.size as number;
+        const leverage = toolInput.leverage as number | undefined;
+        try {
+          const config: hyperliquid.HyperliquidConfig = {
+            walletAddress: wallet,
+            privateKey,
+            dryRun: process.env.DRY_RUN === 'true',
+          };
+          if (leverage) {
+            await hyperliquid.updateLeverage(config, coin, leverage);
+          }
+          const result = await hyperliquid.placePerpOrder(config, {
+            coin,
+            side: 'SELL',
+            size,
+            type: 'MARKET',
+          });
+          // Log trade to DB
+          db.logHyperliquidTrade({
+            userId: wallet.slice(0, 16),
+            orderId: String(result.orderId || Date.now()),
+            coin,
+            side: 'SELL',
+            size,
+            price: 0,
+            leverage,
+            timestamp: new Date(),
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_close': {
+        const wallet = process.env.HYPERLIQUID_WALLET;
+        const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
+        if (!wallet || !privateKey) {
+          return JSON.stringify({ error: 'Set HYPERLIQUID_WALLET and HYPERLIQUID_PRIVATE_KEY' });
+        }
+        const coin = toolInput.coin as string;
+        try {
+          const config: hyperliquid.HyperliquidConfig = {
+            walletAddress: wallet,
+            privateKey,
+            dryRun: process.env.DRY_RUN === 'true',
+          };
+          // Get current position
+          const state = await hyperliquid.getUserState(wallet);
+          const position = state.assetPositions.find(p => p.position.coin === coin);
+          if (!position || parseFloat(position.position.szi) === 0) {
+            return JSON.stringify({ error: `No open position for ${coin}` });
+          }
+          const size = Math.abs(parseFloat(position.position.szi));
+          const side = parseFloat(position.position.szi) > 0 ? 'SELL' : 'BUY';
+          const result = await hyperliquid.placePerpOrder(config, {
+            coin,
+            side,
+            size,
+            type: 'MARKET',
+            reduceOnly: true,
+          });
+          // Log trade to DB
+          db.logHyperliquidTrade({
+            userId: wallet.slice(0, 16),
+            orderId: String(result.orderId || Date.now()),
+            coin,
+            side: side as 'BUY' | 'SELL',
+            size,
+            price: 0,
+            timestamp: new Date(),
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_cancel': {
+        const wallet = process.env.HYPERLIQUID_WALLET;
+        const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
+        if (!wallet || !privateKey) {
+          return JSON.stringify({ error: 'Set HYPERLIQUID_WALLET and HYPERLIQUID_PRIVATE_KEY' });
+        }
+        const coin = toolInput.coin as string;
+        const orderId = toolInput.order_id as number;
+        try {
+          const config: hyperliquid.HyperliquidConfig = {
+            walletAddress: wallet,
+            privateKey,
+            dryRun: process.env.DRY_RUN === 'true',
+          };
+          const result = await hyperliquid.cancelOrder(config, coin, orderId);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_cancel_all': {
+        const wallet = process.env.HYPERLIQUID_WALLET;
+        const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
+        if (!wallet || !privateKey) {
+          return JSON.stringify({ error: 'Set HYPERLIQUID_WALLET and HYPERLIQUID_PRIVATE_KEY' });
+        }
+        const coin = toolInput.coin as string | undefined;
+        try {
+          const config: hyperliquid.HyperliquidConfig = {
+            walletAddress: wallet,
+            privateKey,
+            dryRun: process.env.DRY_RUN === 'true',
+          };
+          const result = await hyperliquid.cancelAllOrders(config, coin);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_price': {
+        const coin = toolInput.coin as string;
+        try {
+          const mids = await hyperliquid.getAllMids();
+          const price = mids[coin];
+          if (!price) {
+            return JSON.stringify({ error: `No price for ${coin}` });
+          }
+          return JSON.stringify({ coin, price: parseFloat(price) });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_funding': {
+        const coin = toolInput.coin as string | undefined;
+        try {
+          const rates = await hyperliquid.getFundingRates();
+          if (coin) {
+            const rate = rates.find(r => r.coin === coin);
+            if (!rate) {
+              return JSON.stringify({ error: `No funding rate for ${coin}` });
+            }
+            return JSON.stringify(rate);
+          }
+          // Return top 10 by funding rate
+          const sorted = rates.sort((a, b) => Math.abs(parseFloat(b.funding)) - Math.abs(parseFloat(a.funding)));
+          return JSON.stringify(sorted.slice(0, 10));
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'hyperliquid_leverage': {
+        const wallet = process.env.HYPERLIQUID_WALLET;
+        const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
+        if (!wallet || !privateKey) {
+          return JSON.stringify({ error: 'Set HYPERLIQUID_WALLET and HYPERLIQUID_PRIVATE_KEY' });
+        }
+        const coin = toolInput.coin as string;
+        const leverage = toolInput.leverage as number;
+        const isCross = (toolInput.is_cross as boolean) ?? true;
+        try {
+          const config: hyperliquid.HyperliquidConfig = {
+            walletAddress: wallet,
+            privateKey,
+            dryRun: process.env.DRY_RUN === 'true',
+          };
+          const result = await hyperliquid.updateLeverage(config, coin, leverage, isCross);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      // ============================================
       // SOLANA WALLET + AGGREGATORS (Jupiter + Pump.fun)
       // ============================================
 
@@ -15035,7 +16382,8 @@ export async function createAgentManager(
   createPoll?: (msg: PollMessage) => Promise<string | null>,
   memory?: MemoryService,
   configProvider?: () => Config,
-  webhookToolProvider?: () => WebhookTool | undefined
+  webhookToolProvider?: () => WebhookTool | undefined,
+  executionService?: ExecutionServiceRef | null
 ): Promise<AgentManager> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -15187,6 +16535,10 @@ export async function createAgentManager(
 
     // Build trading context for this user (per-user credentials)
     const tradingContext = await credentials.buildTradingContext(session.userId, session.key);
+    // Add execution service if available
+    if (executionService) {
+      tradingContext.executionService = executionService;
+    }
 
     // Helper to add to conversation history
     const addToHistory = (role: 'user' | 'assistant', content: string) => {
