@@ -566,7 +566,7 @@ async function swarmWalletsHandler(): Promise<HandlerResult> {
       wallets: wallets.map(w => ({
         id: w.id,
         publicKey: w.publicKey,
-        balance: w.balance,
+        solBalance: w.solBalance,
         enabled: w.enabled,
         positionCount: w.positions.size,
       })),
@@ -591,7 +591,7 @@ async function swarmBuyHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const mint = toolInput.mint as string;
   const amountPerWallet = toolInput.amount_per_wallet as number;
   const walletIds = toolInput.wallet_ids as string[] | undefined;
-  const useBundle = toolInput.use_bundle as boolean | undefined;
+  const executionMode = toolInput.execution_mode as 'parallel' | 'bundle' | 'multi-bundle' | 'sequential' | undefined;
   const slippageBps = toolInput.slippage_bps as number | undefined;
   const pool = toolInput.pool as string | undefined;
 
@@ -606,16 +606,17 @@ async function swarmBuyHandler(toolInput: ToolInput): Promise<HandlerResult> {
       denominatedInSol: true,
       slippageBps,
       pool,
-      useBundle,
+      executionMode,
       walletIds,
     });
 
     return {
       success: result.success,
       mint: result.mint,
-      totalAmount: result.totalAmount,
+      totalSolSpent: result.totalSolSpent,
+      executionMode: result.executionMode,
       executionTimeMs: result.executionTimeMs,
-      bundleId: result.bundleId,
+      bundleIds: result.bundleIds,
       walletResults: result.walletResults.map(wr => ({
         walletId: wr.walletId,
         success: wr.success,
@@ -630,7 +631,7 @@ async function swarmSellHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const mint = toolInput.mint as string;
   const amountPerWallet = toolInput.amount_per_wallet as number | string;
   const walletIds = toolInput.wallet_ids as string[] | undefined;
-  const useBundle = toolInput.use_bundle as boolean | undefined;
+  const executionMode = toolInput.execution_mode as 'parallel' | 'bundle' | 'multi-bundle' | 'sequential' | undefined;
   const slippageBps = toolInput.slippage_bps as number | undefined;
   const pool = toolInput.pool as string | undefined;
 
@@ -645,16 +646,17 @@ async function swarmSellHandler(toolInput: ToolInput): Promise<HandlerResult> {
       denominatedInSol: false,
       slippageBps,
       pool,
-      useBundle,
+      executionMode,
       walletIds,
     });
 
     return {
       success: result.success,
       mint: result.mint,
-      totalAmount: result.totalAmount,
+      totalTokens: result.totalTokens,
+      executionMode: result.executionMode,
       executionTimeMs: result.executionTimeMs,
-      bundleId: result.bundleId,
+      bundleIds: result.bundleIds,
       walletResults: result.walletResults.map(wr => ({
         walletId: wr.walletId,
         success: wr.success,

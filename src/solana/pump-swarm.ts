@@ -1,8 +1,13 @@
 /**
  * Pump.fun Swarm Trading System
  *
- * Coordinates multiple wallets to execute trades on Pump.fun tokens.
- * Supports atomic execution via Jito bundles or staggered sequential execution.
+ * Coordinates up to 20 wallets to execute trades simultaneously on Pump.fun tokens.
+ *
+ * Execution modes:
+ * - Parallel: All wallets execute simultaneously (fastest, default for >5 wallets)
+ * - Jito Bundle: Atomic execution for up to 5 wallets per bundle
+ * - Multi-Bundle: Multiple Jito bundles in parallel for >5 wallets
+ * - Sequential: Staggered execution with delays (for stealth)
  */
 
 import {
@@ -12,7 +17,6 @@ import {
   PublicKey,
   SystemProgram,
   TransactionMessage,
-  TransactionInstruction,
 } from '@solana/web3.js';
 import { EventEmitter } from 'events';
 import bs58 from 'bs58';
@@ -26,7 +30,7 @@ export interface SwarmWallet {
   keypair: Keypair;
   publicKey: string;
   solBalance: number;
-  positions: Map<string, number>; // mint -> token amount (fetched from chain)
+  positions: Map<string, number>;
   lastTradeAt: number;
   enabled: boolean;
 }
@@ -34,7 +38,7 @@ export interface SwarmWallet {
 export interface SwarmConfig {
   rpcUrl: string;
   wallets: SwarmWallet[];
-  maxConcurrentTrades: number;
+  maxWallets: number;
   rateLimitMs: number;
   bundleEnabled: boolean;
   jitoTipLamports: number;
@@ -43,18 +47,21 @@ export interface SwarmConfig {
   amountVariancePct: number;
   minSolBalance: number;
   confirmTimeoutMs: number;
+  parallelBatches: number; // How many parallel batches for large swarms
 }
+
+export type ExecutionMode = 'parallel' | 'bundle' | 'multi-bundle' | 'sequential';
 
 export interface SwarmTradeParams {
   mint: string;
   action: 'buy' | 'sell';
-  amountPerWallet: number | string; // SOL for buy, tokens or "100%" for sell
+  amountPerWallet: number | string;
   denominatedInSol?: boolean;
   slippageBps?: number;
   priorityFeeLamports?: number;
   pool?: string;
-  useBundle?: boolean;
-  walletIds?: string[]; // Specific wallets, or all if omitted
+  executionMode?: ExecutionMode; // User can specify
+  walletIds?: string[];
 }
 
 export interface SwarmTradeResult {
@@ -62,10 +69,11 @@ export interface SwarmTradeResult {
   mint: string;
   action: 'buy' | 'sell';
   walletResults: WalletTradeResult[];
-  bundleId?: string;
+  bundleIds?: string[];
   totalSolSpent?: number;
   totalTokens?: number;
   executionTimeMs: number;
+  executionMode: ExecutionMode;
   errors?: string[];
 }
 
@@ -103,8 +111,8 @@ const JITO_TIP_ACCOUNTS = [
   '3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT',
 ];
 
-// SPL Token Program
-const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const MAX_BUNDLE_SIZE = 5; // Jito limit
+const MAX_WALLETS = 20;
 
 // ============================================================================
 // Wallet Pool Management
@@ -118,36 +126,20 @@ export function loadWalletsFromEnv(): SwarmWallet[] {
   if (mainKey) {
     try {
       const keypair = loadKeypairFromString(mainKey);
-      wallets.push({
-        id: 'wallet_0',
-        keypair,
-        publicKey: keypair.publicKey.toBase58(),
-        solBalance: 0,
-        positions: new Map(),
-        lastTradeAt: 0,
-        enabled: true,
-      });
+      wallets.push(createWallet('wallet_0', keypair));
     } catch (e) {
       console.error('Failed to load SOLANA_PRIVATE_KEY:', e);
     }
   }
 
-  // Load SOLANA_SWARM_KEY_1, SOLANA_SWARM_KEY_2, etc.
-  for (let i = 1; i <= 20; i++) {
+  // Load SOLANA_SWARM_KEY_1 through SOLANA_SWARM_KEY_20
+  for (let i = 1; i <= MAX_WALLETS; i++) {
     const key = process.env[`SOLANA_SWARM_KEY_${i}`];
     if (!key) continue;
 
     try {
       const keypair = loadKeypairFromString(key);
-      wallets.push({
-        id: `wallet_${i}`,
-        keypair,
-        publicKey: keypair.publicKey.toBase58(),
-        solBalance: 0,
-        positions: new Map(),
-        lastTradeAt: 0,
-        enabled: true,
-      });
+      wallets.push(createWallet(`wallet_${i}`, keypair));
     } catch (e) {
       console.error(`Failed to load SOLANA_SWARM_KEY_${i}:`, e);
     }
@@ -156,30 +148,36 @@ export function loadWalletsFromEnv(): SwarmWallet[] {
   return wallets;
 }
 
+function createWallet(id: string, keypair: Keypair): SwarmWallet {
+  return {
+    id,
+    keypair,
+    publicKey: keypair.publicKey.toBase58(),
+    solBalance: 0,
+    positions: new Map(),
+    lastTradeAt: 0,
+    enabled: true,
+  };
+}
+
 function loadKeypairFromString(keyStr: string): Keypair {
   // Try base58
   try {
     const decoded = bs58.decode(keyStr);
-    if (decoded.length === 64) {
-      return Keypair.fromSecretKey(decoded);
-    }
+    if (decoded.length === 64) return Keypair.fromSecretKey(decoded);
   } catch {}
 
   // Try JSON array
   try {
     const arr = JSON.parse(keyStr);
-    if (Array.isArray(arr)) {
-      return Keypair.fromSecretKey(Uint8Array.from(arr));
-    }
+    if (Array.isArray(arr)) return Keypair.fromSecretKey(Uint8Array.from(arr));
   } catch {}
 
   // Try hex
   try {
     const hex = keyStr.replace(/^0x/, '');
     const bytes = Buffer.from(hex, 'hex');
-    if (bytes.length === 64) {
-      return Keypair.fromSecretKey(bytes);
-    }
+    if (bytes.length === 64) return Keypair.fromSecretKey(bytes);
   } catch {}
 
   throw new Error('Invalid key format');
@@ -206,7 +204,7 @@ export class PumpFunSwarm extends EventEmitter {
     this.config = {
       rpcUrl,
       wallets: loadedWallets,
-      maxConcurrentTrades: config.maxConcurrentTrades ?? 5,
+      maxWallets: config.maxWallets ?? MAX_WALLETS,
       rateLimitMs: config.rateLimitMs ?? 5000,
       bundleEnabled: config.bundleEnabled ?? true,
       jitoTipLamports: config.jitoTipLamports ?? 10000,
@@ -215,6 +213,7 @@ export class PumpFunSwarm extends EventEmitter {
       amountVariancePct: config.amountVariancePct ?? 5,
       minSolBalance: config.minSolBalance ?? 0.01,
       confirmTimeoutMs: config.confirmTimeoutMs ?? 60000,
+      parallelBatches: config.parallelBatches ?? 4,
     };
   }
 
@@ -244,6 +243,18 @@ export class PumpFunSwarm extends EventEmitter {
     if (wallet) wallet.enabled = false;
   }
 
+  enableAll(): void {
+    for (const wallet of this.wallets.values()) {
+      wallet.enabled = true;
+    }
+  }
+
+  disableAll(): void {
+    for (const wallet of this.wallets.values()) {
+      wallet.enabled = false;
+    }
+  }
+
   getWalletCount(): { total: number; enabled: number } {
     const all = this.getWallets();
     return {
@@ -253,24 +264,31 @@ export class PumpFunSwarm extends EventEmitter {
   }
 
   // --------------------------------------------------------------------------
-  // Public API - Balance & Position Fetching (FROM CHAIN)
+  // Public API - Balance & Position Fetching
   // --------------------------------------------------------------------------
 
   async refreshBalances(): Promise<Map<string, number>> {
     const balances = new Map<string, number>();
+    const wallets = this.getWallets();
 
-    await Promise.all(
-      this.getWallets().map(async (wallet) => {
-        try {
-          const balance = await this.connection.getBalance(wallet.keypair.publicKey);
-          wallet.solBalance = balance / 1e9;
-          balances.set(wallet.id, wallet.solBalance);
-        } catch (e) {
-          console.error(`Failed to get balance for ${wallet.id}:`, e);
-          balances.set(wallet.id, wallet.solBalance);
-        }
+    // Fetch all balances in parallel
+    const results = await Promise.allSettled(
+      wallets.map(async (wallet) => {
+        const balance = await this.connection.getBalance(wallet.keypair.publicKey);
+        return { id: wallet.id, balance: balance / 1e9 };
       })
     );
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      const wallet = wallets[i];
+      if (result.status === 'fulfilled') {
+        wallet.solBalance = result.value.balance;
+        balances.set(wallet.id, result.value.balance);
+      } else {
+        balances.set(wallet.id, wallet.solBalance);
+      }
+    }
 
     return balances;
   }
@@ -279,24 +297,27 @@ export class PumpFunSwarm extends EventEmitter {
     const mintPubkey = new PublicKey(mint);
     const byWallet = new Map<string, number>();
     let totalTokens = 0;
+    const wallets = this.getWallets();
 
-    await Promise.all(
-      this.getWallets().map(async (wallet) => {
-        try {
-          const balance = await this.getTokenBalance(wallet.keypair.publicKey, mintPubkey);
-          if (balance > 0) {
-            wallet.positions.set(mint, balance);
-            byWallet.set(wallet.id, balance);
-            totalTokens += balance;
-          } else {
-            wallet.positions.delete(mint);
-          }
-        } catch (e) {
-          // Token account may not exist
-          wallet.positions.delete(mint);
-        }
+    // Fetch all token balances in parallel
+    const results = await Promise.allSettled(
+      wallets.map(async (wallet) => {
+        const balance = await this.getTokenBalance(wallet.keypair.publicKey, mintPubkey);
+        return { id: wallet.id, balance };
       })
     );
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      const wallet = wallets[i];
+      if (result.status === 'fulfilled' && result.value.balance > 0) {
+        wallet.positions.set(mint, result.value.balance);
+        byWallet.set(wallet.id, result.value.balance);
+        totalTokens += result.value.balance;
+      } else {
+        wallet.positions.delete(mint);
+      }
+    }
 
     return { mint, totalTokens, byWallet, lastUpdated: Date.now() };
   }
@@ -308,7 +329,6 @@ export class PumpFunSwarm extends EventEmitter {
     let total = 0;
     for (const acc of accounts.value) {
       const data = acc.account.data;
-      // Token account data: first 32 bytes = mint, next 32 = owner, next 8 = amount (u64 LE)
       const amount = data.readBigUInt64LE(64);
       total += Number(amount);
     }
@@ -331,7 +351,7 @@ export class PumpFunSwarm extends EventEmitter {
   }
 
   // --------------------------------------------------------------------------
-  // Coordinated Trading
+  // Coordinated Trading - Main Entry Points
   // --------------------------------------------------------------------------
 
   async coordinatedBuy(params: SwarmTradeParams): Promise<SwarmTradeResult> {
@@ -341,7 +361,7 @@ export class PumpFunSwarm extends EventEmitter {
     // Refresh balances first
     await this.refreshBalances();
 
-    // Select wallets with sufficient balance
+    // Select and filter wallets
     let wallets = this.selectWallets(params.walletIds);
     const solNeeded = typeof params.amountPerWallet === 'number'
       ? params.amountPerWallet
@@ -349,40 +369,28 @@ export class PumpFunSwarm extends EventEmitter {
 
     wallets = wallets.filter(w => {
       if (w.solBalance < solNeeded + this.config.minSolBalance) {
-        errors.push(`${w.id}: insufficient SOL (${w.solBalance.toFixed(4)} < ${solNeeded.toFixed(4)})`);
+        errors.push(`${w.id}: insufficient SOL (${w.solBalance.toFixed(4)})`);
         return false;
       }
       return true;
     });
 
     if (wallets.length === 0) {
-      return {
-        success: false,
-        mint: params.mint,
-        action: 'buy',
-        walletResults: [],
-        executionTimeMs: Date.now() - startTime,
-        errors: errors.length > 0 ? errors : ['No wallets with sufficient balance'],
-      };
+      return this.emptyResult(params, 'buy', startTime, errors, 'No wallets with sufficient balance');
     }
 
-    const useBundle = params.useBundle ?? (this.config.bundleEnabled && wallets.length > 1);
-
-    if (useBundle && wallets.length > 1 && wallets.length <= 5) {
-      return this.executeBundledTrade(params, wallets, startTime, errors);
-    } else {
-      return this.executeStaggeredTrade(params, wallets, startTime, errors);
-    }
+    const mode = this.selectExecutionMode(params, wallets.length);
+    return this.executeWithMode(mode, params, wallets, startTime, errors);
   }
 
   async coordinatedSell(params: SwarmTradeParams): Promise<SwarmTradeResult> {
     const startTime = Date.now();
     const errors: string[] = [];
 
-    // CRITICAL: Refresh actual token positions from chain
+    // Fetch actual token positions from chain
     await this.refreshTokenPositions(params.mint);
 
-    // Select wallets with actual positions
+    // Select wallets with positions
     let wallets = this.selectWallets(params.walletIds);
     wallets = wallets.filter(w => {
       const pos = w.positions.get(params.mint) || 0;
@@ -394,193 +402,277 @@ export class PumpFunSwarm extends EventEmitter {
     });
 
     if (wallets.length === 0) {
-      return {
-        success: false,
-        mint: params.mint,
-        action: 'sell',
-        walletResults: [],
-        executionTimeMs: Date.now() - startTime,
-        errors: errors.length > 0 ? errors : ['No wallets have positions in this token'],
-      };
+      return this.emptyResult(params, 'sell', startTime, errors, 'No wallets with positions');
     }
 
-    const useBundle = params.useBundle ?? (this.config.bundleEnabled && wallets.length > 1);
-
-    if (useBundle && wallets.length > 1 && wallets.length <= 5) {
-      return this.executeBundledTrade(params, wallets, startTime, errors);
-    } else {
-      return this.executeStaggeredTrade(params, wallets, startTime, errors);
-    }
+    const mode = this.selectExecutionMode(params, wallets.length);
+    return this.executeWithMode(mode, params, wallets, startTime, errors);
   }
 
   // --------------------------------------------------------------------------
-  // Bundle Execution (Atomic via Jito)
+  // Execution Mode Selection & Dispatch
   // --------------------------------------------------------------------------
 
-  private async executeBundledTrade(
+  private selectExecutionMode(params: SwarmTradeParams, walletCount: number): ExecutionMode {
+    // User specified mode takes priority
+    if (params.executionMode) return params.executionMode;
+
+    // Default logic:
+    // - 1 wallet: parallel (just one)
+    // - 2-5 wallets: bundle (atomic)
+    // - 6-20 wallets: multi-bundle (multiple atomic bundles in parallel)
+    // - If bundles disabled: parallel
+
+    if (!this.config.bundleEnabled) return 'parallel';
+    if (walletCount <= 1) return 'parallel';
+    if (walletCount <= MAX_BUNDLE_SIZE) return 'bundle';
+    return 'multi-bundle';
+  }
+
+  private async executeWithMode(
+    mode: ExecutionMode,
     params: SwarmTradeParams,
     wallets: SwarmWallet[],
     startTime: number,
     errors: string[]
   ): Promise<SwarmTradeResult> {
-    const walletResults: WalletTradeResult[] = [];
-    const signedTransactions: VersionedTransaction[] = [];
+    switch (mode) {
+      case 'bundle':
+        return this.executeSingleBundle(params, wallets, startTime, errors);
+      case 'multi-bundle':
+        return this.executeMultiBundles(params, wallets, startTime, errors);
+      case 'sequential':
+        return this.executeSequential(params, wallets, startTime, errors);
+      case 'parallel':
+      default:
+        return this.executeParallel(params, wallets, startTime, errors);
+    }
+  }
 
-    // Build and sign transactions for each wallet
-    for (const wallet of wallets) {
+  // --------------------------------------------------------------------------
+  // Execution Mode: PARALLEL (All at once, no bundles)
+  // --------------------------------------------------------------------------
+
+  private async executeParallel(
+    params: SwarmTradeParams,
+    wallets: SwarmWallet[],
+    startTime: number,
+    errors: string[]
+  ): Promise<SwarmTradeResult> {
+    // Build all transactions in parallel
+    const txPromises = wallets.map(async (wallet) => {
+      try {
+        const amount = this.calculateAmount(params.amountPerWallet, wallet, params.mint);
+        if (amount <= 0) return { wallet, tx: null, amount, error: 'Amount is zero' };
+        const tx = await this.buildTransaction(wallet, params, amount);
+        return { wallet, tx, amount, error: null };
+      } catch (e) {
+        return { wallet, tx: null, amount: 0, error: e instanceof Error ? e.message : String(e) };
+      }
+    });
+
+    const txResults = await Promise.all(txPromises);
+
+    // Sign all transactions
+    for (const result of txResults) {
+      if (result.tx) {
+        result.tx.sign([result.wallet.keypair]);
+      }
+    }
+
+    // Send all transactions in parallel
+    const sendPromises = txResults.map(async (result) => {
+      if (!result.tx) {
+        return {
+          walletId: result.wallet.id,
+          publicKey: result.wallet.publicKey,
+          success: false,
+          error: result.error || 'No transaction',
+        } as WalletTradeResult;
+      }
+
+      try {
+        const signature = await this.connection.sendRawTransaction(result.tx.serialize(), {
+          skipPreflight: true,
+          maxRetries: 3,
+        });
+        return {
+          walletId: result.wallet.id,
+          publicKey: result.wallet.publicKey,
+          success: true,
+          signature,
+          solAmount: params.action === 'buy' ? result.amount : undefined,
+          tokenAmount: params.action === 'sell' ? result.amount : undefined,
+        } as WalletTradeResult;
+      } catch (e) {
+        return {
+          walletId: result.wallet.id,
+          publicKey: result.wallet.publicKey,
+          success: false,
+          error: e instanceof Error ? e.message : String(e),
+        } as WalletTradeResult;
+      }
+    });
+
+    const walletResults = await Promise.all(sendPromises);
+
+    // Confirm all successful sends in parallel (don't wait for full confirmation to return)
+    this.confirmAllAsync(walletResults.filter(r => r.success && r.signature).map(r => r.signature!));
+
+    // Schedule position refresh
+    setTimeout(() => this.refreshTokenPositions(params.mint), 5000);
+
+    return this.buildResult(params, walletResults, startTime, errors, 'parallel');
+  }
+
+  // --------------------------------------------------------------------------
+  // Execution Mode: SINGLE BUNDLE (Atomic, up to 5 wallets)
+  // --------------------------------------------------------------------------
+
+  private async executeSingleBundle(
+    params: SwarmTradeParams,
+    wallets: SwarmWallet[],
+    startTime: number,
+    errors: string[]
+  ): Promise<SwarmTradeResult> {
+    const { signedTxs, walletResults, tipWallet } = await this.buildAndSignTransactions(params, wallets, errors);
+
+    if (signedTxs.length === 0) {
+      return this.buildResult(params, walletResults, startTime, errors, 'bundle');
+    }
+
+    // Add tip transaction
+    try {
+      const tipTx = await this.buildTipTransaction(tipWallet);
+      tipTx.sign([tipWallet.keypair]);
+      signedTxs.push(tipTx);
+    } catch (e) {
+      errors.push(`Tip failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // Submit bundle
+    try {
+      const bundleId = await this.submitJitoBundle(signedTxs);
+      // Mark all as successful
+      for (const result of walletResults) {
+        if (!result.error) result.success = true;
+      }
+      setTimeout(() => this.refreshTokenPositions(params.mint), 5000);
+      return this.buildResult(params, walletResults, startTime, errors, 'bundle', [bundleId]);
+    } catch (e) {
+      errors.push(`Bundle failed: ${e instanceof Error ? e.message : String(e)}`);
+      // Fallback to parallel
+      return this.executeParallel(params, wallets, startTime, errors);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Execution Mode: MULTI-BUNDLE (Multiple bundles in parallel for >5 wallets)
+  // --------------------------------------------------------------------------
+
+  private async executeMultiBundles(
+    params: SwarmTradeParams,
+    wallets: SwarmWallet[],
+    startTime: number,
+    errors: string[]
+  ): Promise<SwarmTradeResult> {
+    // Split wallets into chunks of MAX_BUNDLE_SIZE
+    const chunks = this.chunkArray(wallets, MAX_BUNDLE_SIZE);
+    const bundleIds: string[] = [];
+    const allWalletResults: WalletTradeResult[] = [];
+
+    // Execute all bundles in parallel
+    const bundlePromises = chunks.map(async (chunk, index) => {
+      const chunkErrors: string[] = [];
+      const { signedTxs, walletResults, tipWallet } = await this.buildAndSignTransactions(params, chunk, chunkErrors);
+
+      if (signedTxs.length === 0) {
+        return { walletResults, bundleId: null, errors: chunkErrors };
+      }
+
+      // Add tip transaction
+      try {
+        const tipTx = await this.buildTipTransaction(tipWallet);
+        tipTx.sign([tipWallet.keypair]);
+        signedTxs.push(tipTx);
+      } catch (e) {
+        chunkErrors.push(`Chunk ${index} tip failed`);
+      }
+
+      // Submit bundle
+      try {
+        const bundleId = await this.submitJitoBundle(signedTxs);
+        for (const result of walletResults) {
+          if (!result.error) result.success = true;
+        }
+        return { walletResults, bundleId, errors: chunkErrors };
+      } catch (e) {
+        chunkErrors.push(`Chunk ${index} bundle failed: ${e instanceof Error ? e.message : String(e)}`);
+        // Try parallel for this chunk
+        const parallelResults = await this.executeParallelForChunk(params, chunk);
+        return { walletResults: parallelResults, bundleId: null, errors: chunkErrors };
+      }
+    });
+
+    const results = await Promise.all(bundlePromises);
+
+    for (const result of results) {
+      allWalletResults.push(...result.walletResults);
+      if (result.bundleId) bundleIds.push(result.bundleId);
+      errors.push(...result.errors);
+    }
+
+    setTimeout(() => this.refreshTokenPositions(params.mint), 5000);
+    return this.buildResult(params, allWalletResults, startTime, errors, 'multi-bundle', bundleIds);
+  }
+
+  private async executeParallelForChunk(
+    params: SwarmTradeParams,
+    wallets: SwarmWallet[]
+  ): Promise<WalletTradeResult[]> {
+    const results: WalletTradeResult[] = [];
+
+    const promises = wallets.map(async (wallet) => {
       try {
         const amount = this.calculateAmount(params.amountPerWallet, wallet, params.mint);
         if (amount <= 0) {
-          walletResults.push({
-            walletId: wallet.id,
-            publicKey: wallet.publicKey,
-            success: false,
-            error: 'Amount is zero',
-          });
-          continue;
+          return { walletId: wallet.id, publicKey: wallet.publicKey, success: false, error: 'Zero amount' };
         }
-
         const tx = await this.buildTransaction(wallet, params, amount);
-        if (tx) {
-          // CRITICAL: Sign transaction before adding to bundle
-          tx.sign([wallet.keypair]);
-          signedTransactions.push(tx);
-          walletResults.push({
-            walletId: wallet.id,
-            publicKey: wallet.publicKey,
-            success: false, // Will update after submission
-            solAmount: params.action === 'buy' ? amount : undefined,
-            tokenAmount: params.action === 'sell' ? amount : undefined,
-          });
+        if (!tx) {
+          return { walletId: wallet.id, publicKey: wallet.publicKey, success: false, error: 'Build failed' };
         }
+        tx.sign([wallet.keypair]);
+        const signature = await this.connection.sendRawTransaction(tx.serialize(), {
+          skipPreflight: true,
+          maxRetries: 3,
+        });
+        return {
+          walletId: wallet.id,
+          publicKey: wallet.publicKey,
+          success: true,
+          signature,
+          solAmount: params.action === 'buy' ? amount : undefined,
+          tokenAmount: params.action === 'sell' ? amount : undefined,
+        };
       } catch (e) {
-        const errMsg = e instanceof Error ? e.message : String(e);
-        errors.push(`${wallet.id}: ${errMsg}`);
-        walletResults.push({
+        return {
           walletId: wallet.id,
           publicKey: wallet.publicKey,
           success: false,
-          error: errMsg,
-        });
+          error: e instanceof Error ? e.message : String(e),
+        };
       }
-    }
-
-    if (signedTransactions.length === 0) {
-      return {
-        success: false,
-        mint: params.mint,
-        action: params.action,
-        walletResults,
-        executionTimeMs: Date.now() - startTime,
-        errors,
-      };
-    }
-
-    // Add tip transaction from first wallet
-    try {
-      const tipTx = await this.buildTipTransaction(wallets[0]);
-      tipTx.sign([wallets[0].keypair]);
-      signedTransactions.push(tipTx);
-    } catch (e) {
-      errors.push(`Tip tx failed: ${e instanceof Error ? e.message : String(e)}`);
-      // Continue without tip - Jito may still accept
-    }
-
-    // Submit via Jito bundle
-    try {
-      const bundleId = await this.submitJitoBundle(signedTransactions);
-
-      // Mark all as successful (bundle is atomic)
-      for (const result of walletResults) {
-        if (!result.error) {
-          result.success = true;
-        }
-      }
-
-      // Refresh positions after trade
-      setTimeout(() => this.refreshTokenPositions(params.mint), 5000);
-
-      const totalSol = walletResults
-        .filter(r => r.success && r.solAmount)
-        .reduce((sum, r) => sum + (r.solAmount || 0), 0);
-
-      return {
-        success: true,
-        mint: params.mint,
-        action: params.action,
-        walletResults,
-        bundleId,
-        totalSolSpent: params.action === 'buy' ? totalSol : undefined,
-        executionTimeMs: Date.now() - startTime,
-        errors: errors.length > 0 ? errors : undefined,
-      };
-    } catch (bundleError) {
-      const errMsg = bundleError instanceof Error ? bundleError.message : String(bundleError);
-      errors.push(`Bundle failed: ${errMsg}`);
-
-      // Fallback to staggered execution
-      console.warn('Bundle submission failed, falling back to staggered:', errMsg);
-      return this.executeStaggeredTrade(params, wallets, startTime, errors);
-    }
-  }
-
-  private async buildTipTransaction(wallet: SwarmWallet): Promise<VersionedTransaction> {
-    const tipAccount = new PublicKey(
-      JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)]
-    );
-
-    const { blockhash } = await this.connection.getLatestBlockhash();
-
-    const instruction = SystemProgram.transfer({
-      fromPubkey: wallet.keypair.publicKey,
-      toPubkey: tipAccount,
-      lamports: this.config.jitoTipLamports,
     });
 
-    const messageV0 = new TransactionMessage({
-      payerKey: wallet.keypair.publicKey,
-      recentBlockhash: blockhash,
-      instructions: [instruction],
-    }).compileToV0Message();
-
-    return new VersionedTransaction(messageV0);
-  }
-
-  private async submitJitoBundle(transactions: VersionedTransaction[]): Promise<string> {
-    const serializedTxs = transactions.map(tx =>
-      bs58.encode(tx.serialize())
-    );
-
-    const response = await fetch(`${JITO_BLOCK_ENGINE}/api/v1/bundles`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'sendBundle',
-        params: [serializedTxs],
-      }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Jito API error ${response.status}: ${text}`);
-    }
-
-    const result = await response.json() as { result?: string; error?: { message: string } };
-
-    if (result.error) {
-      throw new Error(`Jito error: ${result.error.message}`);
-    }
-
-    return result.result || 'bundle_submitted';
+    return Promise.all(promises);
   }
 
   // --------------------------------------------------------------------------
-  // Staggered Execution (Sequential with delays)
+  // Execution Mode: SEQUENTIAL (Staggered, for stealth)
   // --------------------------------------------------------------------------
 
-  private async executeStaggeredTrade(
+  private async executeSequential(
     params: SwarmTradeParams,
     wallets: SwarmWallet[],
     startTime: number,
@@ -591,13 +683,13 @@ export class PumpFunSwarm extends EventEmitter {
     for (let i = 0; i < wallets.length; i++) {
       const wallet = wallets[i];
 
-      // Rate limiting per wallet
+      // Rate limiting
       const timeSinceLastTrade = Date.now() - wallet.lastTradeAt;
       if (timeSinceLastTrade < this.config.rateLimitMs) {
         await sleep(this.config.rateLimitMs - timeSinceLastTrade);
       }
 
-      // Stagger delay between wallets (randomized)
+      // Stagger delay
       if (i > 0) {
         const delay = this.config.staggerDelayMs + Math.random() * this.config.staggerDelayMs;
         await sleep(delay);
@@ -606,51 +698,27 @@ export class PumpFunSwarm extends EventEmitter {
       try {
         const amount = this.calculateAmount(params.amountPerWallet, wallet, params.mint);
         if (amount <= 0) {
-          walletResults.push({
-            walletId: wallet.id,
-            publicKey: wallet.publicKey,
-            success: false,
-            error: 'Amount is zero',
-          });
+          walletResults.push({ walletId: wallet.id, publicKey: wallet.publicKey, success: false, error: 'Zero amount' });
           continue;
         }
 
         const result = await this.executeSingleTrade(wallet, params, amount);
         walletResults.push(result);
-
         wallet.lastTradeAt = Date.now();
-
-        // Emit event for monitoring
         this.emit('trade', { wallet: wallet.id, ...result });
       } catch (e) {
-        const errMsg = e instanceof Error ? e.message : String(e);
-        errors.push(`${wallet.id}: ${errMsg}`);
+        errors.push(`${wallet.id}: ${e instanceof Error ? e.message : String(e)}`);
         walletResults.push({
           walletId: wallet.id,
           publicKey: wallet.publicKey,
           success: false,
-          error: errMsg,
+          error: e instanceof Error ? e.message : String(e),
         });
       }
     }
 
-    // Refresh positions after all trades
     setTimeout(() => this.refreshTokenPositions(params.mint), 5000);
-
-    const successCount = walletResults.filter(r => r.success).length;
-    const totalSol = walletResults
-      .filter(r => r.success && r.solAmount)
-      .reduce((sum, r) => sum + (r.solAmount || 0), 0);
-
-    return {
-      success: successCount > 0,
-      mint: params.mint,
-      action: params.action,
-      walletResults,
-      totalSolSpent: params.action === 'buy' ? totalSol : undefined,
-      executionTimeMs: Date.now() - startTime,
-      errors: errors.length > 0 ? errors : undefined,
-    };
+    return this.buildResult(params, walletResults, startTime, errors, 'sequential');
   }
 
   private async executeSingleTrade(
@@ -660,24 +728,15 @@ export class PumpFunSwarm extends EventEmitter {
   ): Promise<WalletTradeResult> {
     const tx = await this.buildTransaction(wallet, params, amount);
     if (!tx) {
-      return {
-        walletId: wallet.id,
-        publicKey: wallet.publicKey,
-        success: false,
-        error: 'Failed to build transaction',
-      };
+      return { walletId: wallet.id, publicKey: wallet.publicKey, success: false, error: 'Build failed' };
     }
 
-    // Sign
     tx.sign([wallet.keypair]);
-
-    // Send with skip preflight for speed
     const signature = await this.connection.sendRawTransaction(tx.serialize(), {
       skipPreflight: true,
       maxRetries: 3,
     });
 
-    // Confirm with timeout
     try {
       await this.confirmWithTimeout(signature, this.config.confirmTimeoutMs);
     } catch (e) {
@@ -686,7 +745,7 @@ export class PumpFunSwarm extends EventEmitter {
         publicKey: wallet.publicKey,
         success: false,
         signature,
-        error: `Confirmation failed: ${e instanceof Error ? e.message : String(e)}`,
+        error: `Confirm failed: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
 
@@ -700,29 +759,47 @@ export class PumpFunSwarm extends EventEmitter {
     };
   }
 
-  private async confirmWithTimeout(signature: string, timeoutMs: number): Promise<void> {
-    const start = Date.now();
+  // --------------------------------------------------------------------------
+  // Transaction Building & Jito
+  // --------------------------------------------------------------------------
 
-    while (Date.now() - start < timeoutMs) {
-      const status = await this.connection.getSignatureStatus(signature);
+  private async buildAndSignTransactions(
+    params: SwarmTradeParams,
+    wallets: SwarmWallet[],
+    errors: string[]
+  ): Promise<{ signedTxs: VersionedTransaction[]; walletResults: WalletTradeResult[]; tipWallet: SwarmWallet }> {
+    const signedTxs: VersionedTransaction[] = [];
+    const walletResults: WalletTradeResult[] = [];
 
-      if (status.value?.confirmationStatus === 'confirmed' ||
-          status.value?.confirmationStatus === 'finalized') {
-        if (status.value.err) {
-          throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+    for (const wallet of wallets) {
+      try {
+        const amount = this.calculateAmount(params.amountPerWallet, wallet, params.mint);
+        if (amount <= 0) {
+          walletResults.push({ walletId: wallet.id, publicKey: wallet.publicKey, success: false, error: 'Zero amount' });
+          continue;
         }
-        return;
-      }
 
-      await sleep(1000);
+        const tx = await this.buildTransaction(wallet, params, amount);
+        if (tx) {
+          tx.sign([wallet.keypair]);
+          signedTxs.push(tx);
+          walletResults.push({
+            walletId: wallet.id,
+            publicKey: wallet.publicKey,
+            success: false,
+            solAmount: params.action === 'buy' ? amount : undefined,
+            tokenAmount: params.action === 'sell' ? amount : undefined,
+          });
+        }
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        errors.push(`${wallet.id}: ${errMsg}`);
+        walletResults.push({ walletId: wallet.id, publicKey: wallet.publicKey, success: false, error: errMsg });
+      }
     }
 
-    throw new Error('Confirmation timeout');
+    return { signedTxs, walletResults, tipWallet: wallets[0] };
   }
-
-  // --------------------------------------------------------------------------
-  // Transaction Building
-  // --------------------------------------------------------------------------
 
   private async buildTransaction(
     wallet: SwarmWallet,
@@ -751,11 +828,57 @@ export class PumpFunSwarm extends EventEmitter {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`PumpPortal error ${response.status}: ${text.slice(0, 200)}`);
+      throw new Error(`PumpPortal ${response.status}: ${text.slice(0, 100)}`);
     }
 
     const txData = await response.arrayBuffer();
     return VersionedTransaction.deserialize(new Uint8Array(txData));
+  }
+
+  private async buildTipTransaction(wallet: SwarmWallet): Promise<VersionedTransaction> {
+    const tipAccount = new PublicKey(
+      JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)]
+    );
+
+    const { blockhash } = await this.connection.getLatestBlockhash();
+
+    const instruction = SystemProgram.transfer({
+      fromPubkey: wallet.keypair.publicKey,
+      toPubkey: tipAccount,
+      lamports: this.config.jitoTipLamports,
+    });
+
+    const messageV0 = new TransactionMessage({
+      payerKey: wallet.keypair.publicKey,
+      recentBlockhash: blockhash,
+      instructions: [instruction],
+    }).compileToV0Message();
+
+    return new VersionedTransaction(messageV0);
+  }
+
+  private async submitJitoBundle(transactions: VersionedTransaction[]): Promise<string> {
+    const serializedTxs = transactions.map(tx => bs58.encode(tx.serialize()));
+
+    const response = await fetch(`${JITO_BLOCK_ENGINE}/api/v1/bundles`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'sendBundle',
+        params: [serializedTxs],
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Jito ${response.status}: ${text}`);
+    }
+
+    const result = await response.json() as { result?: string; error?: { message: string } };
+    if (result.error) throw new Error(`Jito: ${result.error.message}`);
+    return result.result || 'bundle_submitted';
   }
 
   // --------------------------------------------------------------------------
@@ -771,23 +894,18 @@ export class PumpFunSwarm extends EventEmitter {
     return this.getEnabledWallets();
   }
 
-  private calculateAmount(
-    baseAmount: number | string,
-    wallet: SwarmWallet,
-    mint: string
-  ): number {
+  private calculateAmount(baseAmount: number | string, wallet: SwarmWallet, mint: string): number {
     let amount: number;
 
     if (typeof baseAmount === 'string' && baseAmount.endsWith('%')) {
-      // Percentage of position (for sells)
       const pct = parseFloat(baseAmount) / 100;
       const position = wallet.positions.get(mint) || 0;
-      amount = Math.floor(position * pct); // Floor to avoid rounding issues
+      amount = Math.floor(position * pct);
     } else {
       amount = typeof baseAmount === 'string' ? parseFloat(baseAmount) : baseAmount;
     }
 
-    // Apply variance (only for buys, not percentage sells)
+    // Apply variance (only for buys)
     if (this.config.amountVariancePct > 0 && !(typeof baseAmount === 'string' && baseAmount.endsWith('%'))) {
       const variance = amount * (this.config.amountVariancePct / 100);
       amount += (Math.random() - 0.5) * 2 * variance;
@@ -795,10 +913,82 @@ export class PumpFunSwarm extends EventEmitter {
 
     return Math.max(0, amount);
   }
+
+  private async confirmWithTimeout(signature: string, timeoutMs: number): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const status = await this.connection.getSignatureStatus(signature);
+      if (status.value?.confirmationStatus === 'confirmed' || status.value?.confirmationStatus === 'finalized') {
+        if (status.value.err) throw new Error(`TX failed: ${JSON.stringify(status.value.err)}`);
+        return;
+      }
+      await sleep(1000);
+    }
+    throw new Error('Timeout');
+  }
+
+  private confirmAllAsync(signatures: string[]): void {
+    // Fire and forget - confirms in background
+    for (const sig of signatures) {
+      this.confirmWithTimeout(sig, this.config.confirmTimeoutMs).catch(() => {});
+    }
+  }
+
+  private chunkArray<T>(array: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
+    }
+    return chunks;
+  }
+
+  private emptyResult(
+    params: SwarmTradeParams,
+    action: 'buy' | 'sell',
+    startTime: number,
+    errors: string[],
+    defaultError: string
+  ): SwarmTradeResult {
+    return {
+      success: false,
+      mint: params.mint,
+      action,
+      walletResults: [],
+      executionTimeMs: Date.now() - startTime,
+      executionMode: 'parallel',
+      errors: errors.length > 0 ? errors : [defaultError],
+    };
+  }
+
+  private buildResult(
+    params: SwarmTradeParams,
+    walletResults: WalletTradeResult[],
+    startTime: number,
+    errors: string[],
+    mode: ExecutionMode,
+    bundleIds?: string[]
+  ): SwarmTradeResult {
+    const successCount = walletResults.filter(r => r.success).length;
+    const totalSol = walletResults
+      .filter(r => r.success && r.solAmount)
+      .reduce((sum, r) => sum + (r.solAmount || 0), 0);
+
+    return {
+      success: successCount > 0,
+      mint: params.mint,
+      action: params.action,
+      walletResults,
+      bundleIds: bundleIds && bundleIds.length > 0 ? bundleIds : undefined,
+      totalSolSpent: params.action === 'buy' ? totalSol : undefined,
+      executionTimeMs: Date.now() - startTime,
+      executionMode: mode,
+      errors: errors.length > 0 ? errors : undefined,
+    };
+  }
 }
 
 // ============================================================================
-// Utility Functions
+// Utilities
 // ============================================================================
 
 function sleep(ms: number): Promise<void> {
@@ -806,7 +996,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ============================================================================
-// Factory Function
+// Factory
 // ============================================================================
 
 let swarmInstance: PumpFunSwarm | null = null;

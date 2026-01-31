@@ -4887,14 +4887,14 @@ function buildTools(): ToolDefinition[] {
     },
     {
       name: 'swarm_buy',
-      description: 'Execute coordinated buy across all swarm wallets on Pump.fun.',
+      description: 'Execute coordinated buy across up to 20 swarm wallets on Pump.fun.',
       input_schema: {
         type: 'object',
         properties: {
           mint: { type: 'string', description: 'Token mint address' },
           amount_per_wallet: { type: 'number', description: 'SOL amount per wallet' },
           wallet_ids: { type: 'array', items: { type: 'string' }, description: 'Specific wallet IDs (optional)' },
-          use_bundle: { type: 'boolean', description: 'Use Jito bundle for atomic execution' },
+          execution_mode: { type: 'string', enum: ['parallel', 'bundle', 'multi-bundle', 'sequential'], description: 'Execution mode: parallel (fastest), bundle (atomic ≤5), multi-bundle (atomic >5), sequential (stealthy)' },
           slippage_bps: { type: 'number', description: 'Slippage in basis points' },
           pool: { type: 'string', description: 'Pool: pump, raydium, auto' },
         },
@@ -4903,14 +4903,14 @@ function buildTools(): ToolDefinition[] {
     },
     {
       name: 'swarm_sell',
-      description: 'Execute coordinated sell across all swarm wallets on Pump.fun.',
+      description: 'Execute coordinated sell across up to 20 swarm wallets on Pump.fun.',
       input_schema: {
         type: 'object',
         properties: {
           mint: { type: 'string', description: 'Token mint address' },
           amount_per_wallet: { type: 'string', description: 'Amount per wallet (number or "100%" for full sell)' },
           wallet_ids: { type: 'array', items: { type: 'string' }, description: 'Specific wallet IDs (optional)' },
-          use_bundle: { type: 'boolean', description: 'Use Jito bundle for atomic execution' },
+          execution_mode: { type: 'string', enum: ['parallel', 'bundle', 'multi-bundle', 'sequential'], description: 'Execution mode: parallel (fastest), bundle (atomic ≤5), multi-bundle (atomic >5), sequential (stealthy)' },
           slippage_bps: { type: 'number', description: 'Slippage in basis points' },
           pool: { type: 'string', description: 'Pool: pump, raydium, auto' },
         },

@@ -10,6 +10,7 @@ import {
   SwarmTradeParams,
   SwarmTradeResult,
   SwarmWallet,
+  ExecutionMode,
 } from '../../../solana/pump-swarm';
 
 // ============================================================================
@@ -44,8 +45,14 @@ function formatTradeResult(result: SwarmTradeResult): string {
   }
   output += `Time: ${result.executionTimeMs}ms\n`;
 
-  if (result.bundleId) {
-    output += `Bundle: \`${result.bundleId.slice(0, 20)}...\`\n`;
+  output += `Mode: ${result.executionMode}\n`;
+
+  if (result.bundleIds && result.bundleIds.length > 0) {
+    if (result.bundleIds.length === 1) {
+      output += `Bundle: \`${result.bundleIds[0].slice(0, 20)}...\`\n`;
+    } else {
+      output += `Bundles: ${result.bundleIds.length} submitted\n`;
+    }
   }
 
   if (result.errors && result.errors.length > 0) {
@@ -193,15 +200,17 @@ async function handleBuy(args: string[]): Promise<string> {
 
 **Options:**
   --wallets <id1,id2,...>  Use specific wallets only
-  --bundle                 Force Jito bundle (atomic)
-  --sequential             Force sequential execution
+  --parallel               Parallel execution (fastest, default >5 wallets)
+  --bundle                 Single Jito bundle (atomic, max 5 wallets)
+  --multi-bundle           Multiple Jito bundles in parallel (>5 wallets)
+  --sequential             Sequential execution (staggered, stealthy)
   --slippage <bps>         Slippage tolerance (default: 500 = 5%)
   --pool <pool>            Pool: pump, raydium, auto
 
 **Examples:**
   /swarm buy ABC123... 0.1
   /swarm buy ABC123... 0.05 --wallets wallet_0,wallet_1
-  /swarm buy ABC123... 0.1 --bundle --slippage 1000`;
+  /swarm buy ABC123... 0.1 --multi-bundle --slippage 1000`;
   }
 
   const mint = args[0];
@@ -217,17 +226,21 @@ async function handleBuy(args: string[]): Promise<string> {
 
   // Parse options
   let walletIds: string[] | undefined;
-  let useBundle: boolean | undefined;
+  let executionMode: ExecutionMode | undefined;
   let slippageBps: number | undefined;
   let pool: string | undefined;
 
   for (let i = 2; i < args.length; i++) {
     if (args[i] === '--wallets' && args[i + 1]) {
       walletIds = parseWalletIds(args[++i]);
+    } else if (args[i] === '--parallel') {
+      executionMode = 'parallel';
     } else if (args[i] === '--bundle') {
-      useBundle = true;
+      executionMode = 'bundle';
+    } else if (args[i] === '--multi-bundle') {
+      executionMode = 'multi-bundle';
     } else if (args[i] === '--sequential') {
-      useBundle = false;
+      executionMode = 'sequential';
     } else if (args[i] === '--slippage' && args[i + 1]) {
       slippageBps = parseInt(args[++i]);
     } else if (args[i] === '--pool' && args[i + 1]) {
@@ -242,13 +255,13 @@ async function handleBuy(args: string[]): Promise<string> {
     return '❌ No enabled wallets. Run `/swarm wallets` to check status.';
   }
 
-  const totalSol = amountPerWallet * (walletIds?.length || counts.enabled);
+  const walletCount = walletIds?.length || counts.enabled;
+  const totalSol = amountPerWallet * walletCount;
   let output = `**Swarm Buy**\n\n`;
   output += `Token: \`${mint}\`\n`;
   output += `Amount: **${formatSol(amountPerWallet)} SOL** per wallet\n`;
-  output += `Wallets: ${walletIds?.length || counts.enabled}\n`;
-  output += `Max Total: ~${formatSol(totalSol)} SOL\n`;
-  output += `Mode: ${useBundle === false ? 'Sequential (staggered)' : 'Jito Bundle (atomic)'}\n\n`;
+  output += `Wallets: ${walletCount}\n`;
+  output += `Max Total: ~${formatSol(totalSol)} SOL\n\n`;
   output += `_Executing..._\n\n`;
 
   const result = await swarm.coordinatedBuy({
@@ -258,7 +271,7 @@ async function handleBuy(args: string[]): Promise<string> {
     denominatedInSol: true,
     slippageBps,
     pool,
-    useBundle,
+    executionMode,
     walletIds,
   });
 
@@ -275,14 +288,16 @@ async function handleSell(args: string[]): Promise<string> {
 
 **Options:**
   --wallets <id1,id2,...>  Use specific wallets only
-  --bundle                 Force Jito bundle (atomic)
-  --sequential             Force sequential execution
+  --parallel               Parallel execution (fastest, default >5 wallets)
+  --bundle                 Single Jito bundle (atomic, max 5 wallets)
+  --multi-bundle           Multiple Jito bundles in parallel (>5 wallets)
+  --sequential             Sequential execution (staggered, stealthy)
   --slippage <bps>         Slippage tolerance (default: 500 = 5%)
   --pool <pool>            Pool: pump, raydium, auto
 
 **Examples:**
   /swarm sell ABC123... 100%
-  /swarm sell ABC123... 50% --bundle
+  /swarm sell ABC123... 50% --multi-bundle
   /swarm sell ABC123... 1000000 --sequential`;
   }
 
@@ -291,17 +306,21 @@ async function handleSell(args: string[]): Promise<string> {
 
   // Parse options
   let walletIds: string[] | undefined;
-  let useBundle: boolean | undefined;
+  let executionMode: ExecutionMode | undefined;
   let slippageBps: number | undefined;
   let pool: string | undefined;
 
   for (let i = 2; i < args.length; i++) {
     if (args[i] === '--wallets' && args[i + 1]) {
       walletIds = parseWalletIds(args[++i]);
+    } else if (args[i] === '--parallel') {
+      executionMode = 'parallel';
     } else if (args[i] === '--bundle') {
-      useBundle = true;
+      executionMode = 'bundle';
+    } else if (args[i] === '--multi-bundle') {
+      executionMode = 'multi-bundle';
     } else if (args[i] === '--sequential') {
-      useBundle = false;
+      executionMode = 'sequential';
     } else if (args[i] === '--slippage' && args[i + 1]) {
       slippageBps = parseInt(args[++i]);
     } else if (args[i] === '--pool' && args[i + 1]) {
@@ -313,8 +332,7 @@ async function handleSell(args: string[]): Promise<string> {
 
   let output = `**Swarm Sell**\n\n`;
   output += `Token: \`${mint}\`\n`;
-  output += `Amount: **${amountArg}** per wallet\n`;
-  output += `Mode: ${useBundle === false ? 'Sequential (staggered)' : 'Jito Bundle (atomic)'}\n\n`;
+  output += `Amount: **${amountArg}** per wallet\n\n`;
   output += `_Fetching positions and executing..._\n\n`;
 
   const result = await swarm.coordinatedSell({
@@ -324,7 +342,7 @@ async function handleSell(args: string[]): Promise<string> {
     denominatedInSol: false,
     slippageBps,
     pool,
-    useBundle,
+    executionMode,
     walletIds,
   });
 
@@ -364,7 +382,7 @@ Run \`/swarm refresh ${mint}\` to fetch from chain.`;
 async function handleHelp(): Promise<string> {
   return `**Pump.fun Swarm Trading**
 
-Coordinate multiple wallets for synchronized trading.
+Coordinate up to 20 wallets for synchronized trading.
 
 **Wallet Management:**
   /swarm wallets              List all swarm wallets
@@ -378,25 +396,28 @@ Coordinate multiple wallets for synchronized trading.
   /swarm position <mint>      Check cached positions
   /swarm refresh <mint>       Fetch fresh positions from chain
 
-**Common Options:**
+**Execution Modes:**
+  --parallel      All wallets in parallel (fastest, default >5 wallets)
+  --bundle        Single Jito bundle (atomic, max 5 wallets)
+  --multi-bundle  Multiple Jito bundles in parallel (for 6-20 wallets)
+  --sequential    Staggered execution with delays (stealthy)
+
+**Other Options:**
   --wallets <id1,id2>   Trade with specific wallets only
-  --bundle              Force Jito bundle (atomic, all-or-nothing)
-  --sequential          Force sequential (staggered timing)
   --slippage <bps>      Slippage in basis points (500 = 5%)
   --pool <pool>         Pool: pump, raydium, auto
 
 **Setup (env vars):**
   SOLANA_PRIVATE_KEY     Main wallet (wallet_0)
   SOLANA_SWARM_KEY_1     Swarm wallet 1
-  SOLANA_SWARM_KEY_2     Swarm wallet 2
   ...                    Up to SOLANA_SWARM_KEY_20
   SOLANA_RPC_URL         Custom RPC (optional)
   PUMPPORTAL_API_KEY     PumpPortal API key (optional)
 
 **Examples:**
-  /swarm buy ABC... 0.1                    # 0.1 SOL per wallet
-  /swarm sell ABC... 100% --bundle         # Sell all atomically
-  /swarm buy ABC... 0.05 --wallets wallet_0,wallet_1`;
+  /swarm buy ABC... 0.1                      # 0.1 SOL per wallet (auto mode)
+  /swarm sell ABC... 100% --multi-bundle     # Sell all with Jito bundles
+  /swarm buy ABC... 0.05 --sequential        # Staggered buy for stealth`;
 }
 
 // ============================================================================
