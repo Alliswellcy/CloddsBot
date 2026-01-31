@@ -117,6 +117,7 @@ Supported platforms:
 - Smarkets
 - Opinion.trade
 - Virtuals Protocol (AI agents)
+- Hyperliquid (perp DEX)
 
 These are stored encrypted in the database and loaded at runtime.
 
@@ -439,6 +440,46 @@ MEV protection is automatically enabled for swaps:
 - **Ethereum**: Flashbots Protect, MEV Blocker
 - **Solana**: Jito bundles
 - **L2s**: Sequencer protection (built-in)
+
+### Hyperliquid DEX
+
+Trade perpetual futures on Hyperliquid (69% market share, 130+ markets, up to 50x leverage).
+
+**Setup:**
+```bash
+export HYPERLIQUID_WALLET="0x..."
+export HYPERLIQUID_PRIVATE_KEY="0x..."
+```
+
+**Quick Commands:**
+```
+/hl balance              # Positions & balances
+/hl long BTC 0.1         # Open long 0.1 BTC
+/hl short ETH 1 3000     # Short 1 ETH at $3000
+/hl close BTC            # Close BTC position
+/hl closeall             # Close all positions
+/hl portfolio            # PnL breakdown
+/hl funding BTC          # Funding rates
+/hl orders               # Open orders
+```
+
+**TWAP & Advanced:**
+```
+/hl twap buy BTC 1 60    # Buy 1 BTC over 60 minutes
+/hl leverage BTC 10      # Set 10x leverage
+/hl hlp deposit 1000     # Deposit to HLP vault
+/hl transfer spot2perp 500  # Move to perps
+```
+
+**Database Tracking:**
+All trades are logged to SQLite with full PnL tracking:
+```
+/hl trades [coin] [limit]     # Trade history
+/hl dbstats [coin] [period]   # Win rate, profit factor
+/hl dbfunding [coin]          # Funding payments
+```
+
+**Shortcuts:** `/hl b` (balance), `/hl l` (long), `/hl s` (short), `/hl p` (price), `/hl f` (funding)
 
 ## Telegram Mini App
 

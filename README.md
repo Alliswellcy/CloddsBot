@@ -1201,7 +1201,7 @@ Shortcuts: `/hl b` (balance), `/hl l` (long), `/hl s` (short), `/hl p` (price), 
 
 ## Skills System
 
-### Bundled Skills (62)
+### Bundled Skills (64)
 
 **Trading & Markets**
 - `trading-polymarket` — Polymarket trading
@@ -1260,6 +1260,7 @@ Shortcuts: `/hl b` (balance), `/hl l` (long), `/hl s` (short), `/hl p` (price), 
 - `credentials` — Secure credential management
 - `pairing` — User pairing and trust management
 - `identity` — OAuth and device management
+- `verify` — ERC-8004 on-chain agent identity verification
 - `permissions` — Command approvals and security
 - `sessions` — Session management and checkpoints
 - `presence` — Online status and activity
@@ -1503,7 +1504,7 @@ docker compose up --build
 | Messaging Channels | **22** |
 | Prediction Markets | **9** |
 | AI Tools | **21** |
-| Skills | **62** |
+| Skills | **64** |
 | LLM Providers | **6** |
 | Solana DEX Protocols | **5** |
 | Trading Strategies | **3** |
