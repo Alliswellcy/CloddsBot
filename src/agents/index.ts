@@ -4788,6 +4788,87 @@ function buildTools(): ToolDefinition[] {
       },
     },
     {
+      name: 'pumpfun_koth',
+      description: 'Get King of the Hill tokens on Pump.fun (30-35K mcap range).',
+      input_schema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'pumpfun_for_you',
+      description: 'Get personalized token recommendations on Pump.fun.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'pumpfun_similar',
+      description: 'Get tokens similar to a given Pump.fun token.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          mint: { type: 'string', description: 'Token mint address to find similar tokens for' },
+        },
+        required: ['mint'],
+      },
+    },
+    {
+      name: 'pumpfun_user_coins',
+      description: 'Get all tokens created by a specific wallet address on Pump.fun.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          address: { type: 'string', description: 'Wallet address of the creator' },
+        },
+        required: ['address'],
+      },
+    },
+    {
+      name: 'pumpfun_metas',
+      description: 'Get trending narratives/metas (popular keywords) on Pump.fun.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'pumpfun_latest_trades',
+      description: 'Get latest trades across all tokens on Pump.fun platform.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: 'Number of results (default 50)' },
+        },
+      },
+    },
+    {
+      name: 'pumpfun_sol_price',
+      description: 'Get current SOL price from Pump.fun.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'pumpfun_ipfs_upload',
+      description: 'Upload token metadata to IPFS for Pump.fun token creation.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Token name' },
+          symbol: { type: 'string', description: 'Token symbol' },
+          description: { type: 'string', description: 'Token description' },
+          image_url: { type: 'string', description: 'Image URL to upload' },
+          twitter: { type: 'string', description: 'Twitter URL' },
+          telegram: { type: 'string', description: 'Telegram URL' },
+          website: { type: 'string', description: 'Website URL' },
+        },
+        required: ['name', 'symbol', 'description'],
+      },
+    },
+    {
       name: 'meteora_dlmm_swap',
       description: 'Swap tokens on Meteora DLMM using direct on-chain transaction.',
       input_schema: {

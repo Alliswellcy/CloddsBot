@@ -628,6 +628,193 @@ async function handleChart(args: string[]): Promise<string> {
 }
 
 // ============================================================================
+// Additional Discovery Handlers
+// ============================================================================
+
+async function handleForYou(): Promise<string> {
+  try {
+    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/for-you?limit=20');
+    if (!tokens?.length) return 'No personalized recommendations available.';
+
+    let output = '**For You - Personalized Recommendations**\n\n';
+    for (const t of tokens.slice(0, 10)) {
+      output += `**${t.name}** (${t.symbol})\n`;
+      output += `  Mint: \`${t.mint.slice(0, 20)}...\`\n`;
+      if (t.marketCap) output += `  MCap: ${formatMarketCap(t.marketCap)}`;
+      if (t.volume24h) output += ` | Vol: ${formatMarketCap(t.volume24h)}`;
+      output += '\n\n';
+    }
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleMetas(): Promise<string> {
+  try {
+    const metas = await pumpFrontendRequest<Array<{ word: string; count: number; trending?: boolean }>>('/metas/current');
+    if (!metas?.length) return 'No trending metas available.';
+
+    let output = '**Trending Metas/Narratives**\n\n';
+    for (const m of metas.slice(0, 20)) {
+      const trendIcon = m.trending ? '🔥 ' : '';
+      output += `${trendIcon}**${m.word}** - ${m.count} tokens\n`;
+    }
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleSimilar(mint: string): Promise<string> {
+  if (!mint) return 'Usage: /pump similar <mint>';
+
+  try {
+    const tokens = await pumpFrontendRequest<PumpToken[]>(`/coins/similar?mint=${mint}&limit=10`);
+    if (!tokens?.length) return 'No similar tokens found.';
+
+    let output = `**Similar Tokens**\n\nSource: \`${mint.slice(0, 20)}...\`\n\n`;
+    for (const t of tokens) {
+      output += `**${t.name}** (${t.symbol})\n`;
+      output += `  Mint: \`${t.mint.slice(0, 20)}...\`\n`;
+      if (t.marketCap) output += `  MCap: ${formatMarketCap(t.marketCap)}\n`;
+      output += '\n';
+    }
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleUserCoins(address: string): Promise<string> {
+  if (!address) return 'Usage: /pump user-coins <wallet-address>';
+
+  try {
+    const coins = await pumpFrontendRequest<PumpToken[]>(`/coins/user-created-coins/${address}`);
+    if (!coins?.length) return 'No tokens created by this wallet.';
+
+    let output = `**Tokens Created by Wallet**\n\nWallet: \`${address.slice(0, 20)}...\`\n\n`;
+    for (const t of coins.slice(0, 15)) {
+      const status = t.graduated ? '🎓' : '📈';
+      output += `${status} **${t.name}** (${t.symbol})\n`;
+      output += `  Mint: \`${t.mint.slice(0, 20)}...\`\n`;
+      if (t.marketCap) output += `  MCap: ${formatMarketCap(t.marketCap)}\n`;
+      output += '\n';
+    }
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleIpfsUpload(args: string[]): Promise<string> {
+  if (args.length < 3) {
+    return `Usage: /pump ipfs-upload <name> <symbol> <description> [options]
+
+Options:
+  --image <url>      Image URL to upload
+  --twitter <url>    Twitter link
+  --telegram <url>   Telegram link
+  --website <url>    Website link
+
+Returns: metadataUri for use in token creation`;
+  }
+
+  const name = args[0];
+  const symbol = args[1];
+  const description = args.slice(2).join(' ').split('--')[0].trim();
+
+  let imageUrl: string | undefined;
+  let twitter: string | undefined;
+  let telegram: string | undefined;
+  let website: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--image' && args[i + 1]) { imageUrl = args[++i]; }
+    if (args[i] === '--twitter' && args[i + 1]) { twitter = args[++i]; }
+    if (args[i] === '--telegram' && args[i + 1]) { telegram = args[++i]; }
+    if (args[i] === '--website' && args[i + 1]) { website = args[++i]; }
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append('name', name);
+    formData.append('symbol', symbol);
+    formData.append('description', description);
+    if (twitter) formData.append('twitter', twitter);
+    if (telegram) formData.append('telegram', telegram);
+    if (website) formData.append('website', website);
+    formData.append('showName', 'true');
+
+    if (imageUrl) {
+      const imgResponse = await fetch(imageUrl);
+      if (imgResponse.ok) {
+        const blob = await imgResponse.blob();
+        formData.append('file', blob, 'image.png');
+      }
+    }
+
+    const response = await fetch('https://pump.fun/api/ipfs', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) throw new Error(`IPFS upload failed: ${response.status}`);
+    const result = await response.json() as { metadata: Record<string, unknown>; metadataUri: string };
+
+    return `**IPFS Upload Successful**
+
+Name: ${name}
+Symbol: ${symbol}
+Description: ${description.slice(0, 50)}...
+
+**Metadata URI:** \`${result.metadataUri}\`
+
+Use this URI when creating your token.`;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+// ============================================================================
+// Platform Data Handlers
+// ============================================================================
+
+async function handleLatestTrades(args: string[]): Promise<string> {
+  let limit = 20;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--limit' && args[i + 1]) { limit = parseInt(args[++i]); }
+  }
+
+  try {
+    const trades = await pumpFrontendRequest<Array<PumpTrade & { name?: string; symbol?: string }>>(`/trades/latest?limit=${limit}`);
+    if (!trades?.length) return 'No recent trades.';
+
+    let output = '**Latest Trades (Platform-wide)**\n\n';
+    for (const t of trades.slice(0, 15)) {
+      const action = t.type === 'buy' ? '🟢' : '🔴';
+      const time = new Date(t.timestamp * 1000).toLocaleTimeString();
+      output += `${action} ${t.solAmount.toFixed(3)} SOL | \`${t.mint.slice(0, 12)}...\`\n`;
+      output += `   ${time} | \`${t.wallet.slice(0, 8)}...\`\n`;
+    }
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleSolPrice(): Promise<string> {
+  try {
+    const result = await pumpFrontendRequest<{ price: number; priceUsd: number }>('/sol-price');
+    return `**SOL Price**
+
+Price: $${result.priceUsd?.toFixed(2) || result.price?.toFixed(2) || 'N/A'}`;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+// ============================================================================
 // Creation Handlers
 // ============================================================================
 
@@ -854,9 +1041,29 @@ export async function execute(args: string): Promise<string> {
     case 'snipe':
       return handleSnipe(rest[0]);
 
+    // Additional Discovery
+    case 'for-you':
+      return handleForYou();
+    case 'metas':
+      return handleMetas();
+    case 'similar':
+      return handleSimilar(rest[0]);
+
+    // Creator Tools
+    case 'user-coins':
+      return handleUserCoins(rest[0]);
+    case 'ipfs-upload':
+      return handleIpfsUpload(rest);
+
+    // Platform Data
+    case 'latest-trades':
+      return handleLatestTrades(rest);
+    case 'sol-price':
+      return handleSolPrice();
+
     case 'help':
     default:
-      return `**Pump.fun - Complete Memecoin Launchpad**
+      return `**Pump.fun - Complete API (22 Commands)**
 
 **Trading:**
   /pump buy <mint> <SOL> [--pool X] [--slippage X]
@@ -871,6 +1078,8 @@ export async function execute(args: string): Promise<string> {
   /pump search <query>              Search tokens
   /pump volatile                    High volatility
   /pump koth                        King of the Hill (30-35K)
+  /pump for-you                     Personalized recommendations
+  /pump metas                       Trending narratives
 
 **Token Data:**
   /pump token <mint>                Full token info
@@ -878,20 +1087,27 @@ export async function execute(args: string): Promise<string> {
   /pump holders <mint>              Top holders
   /pump trades <mint> [--limit N]   Recent trades
   /pump chart <mint> [--interval X] OHLCV chart
+  /pump similar <mint>              Find similar tokens
 
-**Creation:**
+**Creator Tools:**
+  /pump user-coins <address>        Tokens created by wallet
   /pump create <name> <symbol> <desc> [options]
   /pump claim <mint>                Claim creator fees
+  /pump ipfs-upload <name> <sym> <desc>  Upload metadata
+
+**Platform:**
+  /pump latest-trades [--limit N]   Platform-wide trades
+  /pump sol-price                   Current SOL price
 
 **Monitoring:**
   /pump watch <mint>                Watch for trades
   /pump snipe <symbol>              Wait for token launch
 
-**Pools:** pump, raydium, pump-amm, launchlab, bonk, auto
+**Pools:** pump, raydium, pump-amm, launchlab, raydium-cpmm, bonk, auto
 
 **Setup:**
   export SOLANA_PRIVATE_KEY="your-key"
-  export PUMPPORTAL_API_KEY="your-key"  # Optional, for trading API`;
+  export PUMPPORTAL_API_KEY="your-key"  # Optional`;
   }
 }
 

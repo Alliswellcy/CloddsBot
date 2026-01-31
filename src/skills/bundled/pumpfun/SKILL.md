@@ -8,7 +8,7 @@ gates:
     - SOLANA_PRIVATE_KEY
 ---
 
-# Pump.fun - Complete API Coverage
+# Pump.fun - Complete API Coverage (22 Tools)
 
 Pump.fun is the leading Solana memecoin launchpad with bonding curve trading.
 
@@ -43,6 +43,8 @@ Pump.fun is the leading Solana memecoin launchpad with bonding curve trading.
 /pump search <query>         Search tokens by name/symbol
 /pump volatile               High volatility tokens
 /pump koth                   King of the Hill (30-35K mcap)
+/pump for-you                Personalized recommendations
+/pump metas                  Trending narratives/keywords
 ```
 
 ## Token Data
@@ -51,17 +53,20 @@ Pump.fun is the leading Solana memecoin launchpad with bonding curve trading.
 /pump token <mint>                      Full token info
 /pump price <mint>                      Current price + 24h stats
 /pump holders <mint>                    Top holders list
-/pump trades <mint> [--limit N]         Recent trades
+/pump trades <mint> [--limit N]         Recent trades for token
 /pump chart <mint> [--interval X]       OHLCV price chart
+/pump similar <mint>                    Find similar tokens
 ```
 
 **Intervals:** 1m, 5m, 15m, 1h, 4h, 1d
 
-## Token Creation
+## Creator Tools
 
 ```
-/pump create <name> <symbol> <desc> [options]   Launch new token
-/pump claim <mint>                              Claim creator fees
+/pump user-coins <address>              Tokens created by wallet
+/pump create <name> <symbol> <desc>     Launch new token
+/pump claim <mint>                      Claim creator fees
+/pump ipfs-upload <name> <symbol> <desc>  Upload metadata to IPFS
 ```
 
 **Create Options:**
@@ -70,6 +75,13 @@ Pump.fun is the leading Solana memecoin launchpad with bonding curve trading.
 - `--telegram <url>` - Telegram link
 - `--website <url>` - Website link
 - `--initial <SOL>` - Initial buy amount
+
+## Platform Data
+
+```
+/pump latest-trades [--limit N]         Latest trades platform-wide
+/pump sol-price                         Current SOL price
+```
 
 ## Monitoring (WebSocket)
 
@@ -94,22 +106,38 @@ export SOLANA_RPC_URL="your-rpc-url"         # Optional, custom RPC
 | `raydium` | Raydium AMM (graduated tokens) |
 | `pump-amm` | Pump.fun native AMM |
 | `launchlab` | LaunchLab pools |
+| `raydium-cpmm` | Raydium CPMM pools |
 | `bonk` | Bonk pools |
 | `auto` | Automatic best route |
 
 ## API Sources
 
 - **Trading:** PumpPortal (pumpportal.fun) - 0.5% fee
-- **Data:** Pump.fun Frontend API (frontend-api-v3.pump.fun)
+- **Data:** Pump.fun Frontend API v3 (frontend-api-v3.pump.fun)
+- **Analytics:** Advanced API v2 (advanced-api-v2.pump.fun)
+- **Volatility:** Volatility API v2 (volatility-api-v2.pump.fun)
 - **WebSocket:** wss://pumpportal.fun/api/data
+
+## Complete Tool List (22 Tools)
+
+| Category | Tools |
+|----------|-------|
+| **Trading** | trade (buy/sell), quote |
+| **Discovery** | trending, new, live, graduated, search, volatile, koth, for-you, metas |
+| **Token Data** | token, price, holders, trades, chart, similar |
+| **Creator** | user-coins, create, claim, ipfs-upload |
+| **Platform** | latest-trades, sol-price |
 
 ## Features
 
 - Bonding curve trading with automatic graduation
-- Multi-pool routing (Pump, Raydium, etc.)
-- Token creation with metadata
+- Multi-pool routing (Pump, Raydium, CPMM, etc.)
+- Token creation with IPFS metadata upload
 - Creator fee claiming
-- Real-time trade streaming
+- Real-time trade streaming via WebSocket
 - Token sniping support
 - OHLCV charts and analytics
 - Holder analysis
+- Trending metas/narratives discovery
+- Similar token recommendations
+- Platform-wide trade feed

@@ -448,6 +448,110 @@ async function pumpfunClaimHandler(toolInput: ToolInput): Promise<HandlerResult>
   }, 'Fee claim failed. Ensure SOLANA_PRIVATE_KEY is set.');
 }
 
+async function pumpfunKothHandler(): Promise<HandlerResult> {
+  return safeHandler(async () => {
+    const tokens = await pumpFrontendRequest<Array<{
+      mint: string; name: string; symbol: string; marketCap?: number; bondingCurveProgress?: number;
+    }>>('/coins/king-of-the-hill');
+    return { tokens };
+  });
+}
+
+async function pumpfunForYouHandler(): Promise<HandlerResult> {
+  return safeHandler(async () => {
+    const tokens = await pumpFrontendRequest<Array<{
+      mint: string; name: string; symbol: string; marketCap?: number; volume24h?: number;
+    }>>('/coins/for-you?limit=20');
+    return { tokens };
+  });
+}
+
+async function pumpfunSimilarHandler(toolInput: ToolInput): Promise<HandlerResult> {
+  const mint = toolInput.mint as string;
+  return safeHandler(async () => {
+    const tokens = await pumpFrontendRequest<Array<{
+      mint: string; name: string; symbol: string; marketCap?: number; similarity?: number;
+    }>>(`/coins/similar?mint=${mint}&limit=20`);
+    return { tokens };
+  });
+}
+
+async function pumpfunUserCoinsHandler(toolInput: ToolInput): Promise<HandlerResult> {
+  const address = toolInput.address as string;
+  return safeHandler(async () => {
+    const coins = await pumpFrontendRequest<Array<{
+      mint: string; name: string; symbol: string; marketCap?: number; graduated?: boolean;
+    }>>(`/coins/user-created-coins/${address}`);
+    return { coins };
+  });
+}
+
+async function pumpfunMetasHandler(): Promise<HandlerResult> {
+  return safeHandler(async () => {
+    const metas = await pumpFrontendRequest<Array<{
+      word: string; count: number; trending?: boolean;
+    }>>('/metas/current');
+    return { metas };
+  });
+}
+
+async function pumpfunLatestTradesHandler(toolInput: ToolInput): Promise<HandlerResult> {
+  const limit = (toolInput.limit as number) || 50;
+  return safeHandler(async () => {
+    const trades = await pumpFrontendRequest<Array<{
+      mint: string; signature: string; type: 'buy' | 'sell'; solAmount: number;
+      tokenAmount: number; wallet: string; timestamp: number;
+    }>>(`/trades/latest?limit=${limit}`);
+    return { trades };
+  });
+}
+
+async function pumpfunSolPriceHandler(): Promise<HandlerResult> {
+  return safeHandler(async () => {
+    const result = await pumpFrontendRequest<{ price: number; priceUsd: number }>('/sol-price');
+    return result;
+  });
+}
+
+async function pumpfunIpfsUploadHandler(toolInput: ToolInput): Promise<HandlerResult> {
+  const name = toolInput.name as string;
+  const symbol = toolInput.symbol as string;
+  const description = toolInput.description as string;
+  const imageUrl = toolInput.image_url as string | undefined;
+  const twitter = toolInput.twitter as string | undefined;
+  const telegram = toolInput.telegram as string | undefined;
+  const website = toolInput.website as string | undefined;
+
+  return safeHandler(async () => {
+    const formData = new FormData();
+    formData.append('name', name);
+    formData.append('symbol', symbol);
+    formData.append('description', description);
+    if (twitter) formData.append('twitter', twitter);
+    if (telegram) formData.append('telegram', telegram);
+    if (website) formData.append('website', website);
+    formData.append('showName', 'true');
+
+    // If imageUrl provided, fetch and attach as file
+    if (imageUrl) {
+      const imgResponse = await fetch(imageUrl);
+      if (imgResponse.ok) {
+        const blob = await imgResponse.blob();
+        formData.append('file', blob, 'image.png');
+      }
+    }
+
+    const response = await fetch('https://pump.fun/api/ipfs', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) throw new Error(`IPFS upload failed: ${response.status}`);
+    const result = await response.json() as { metadata: Record<string, unknown>; metadataUri: string };
+    return result;
+  });
+}
+
 // ============================================================================
 // Drift Handlers
 // ============================================================================
@@ -1146,6 +1250,14 @@ export const solanaHandlers: HandlersMap = {
   pumpfun_chart: pumpfunChartHandler,
   pumpfun_create: pumpfunCreateHandler,
   pumpfun_claim: pumpfunClaimHandler,
+  pumpfun_koth: pumpfunKothHandler,
+  pumpfun_for_you: pumpfunForYouHandler,
+  pumpfun_similar: pumpfunSimilarHandler,
+  pumpfun_user_coins: pumpfunUserCoinsHandler,
+  pumpfun_metas: pumpfunMetasHandler,
+  pumpfun_latest_trades: pumpfunLatestTradesHandler,
+  pumpfun_sol_price: pumpfunSolPriceHandler,
+  pumpfun_ipfs_upload: pumpfunIpfsUploadHandler,
 
   // Drift
   drift_direct_place_order: driftPlaceOrderHandler,
