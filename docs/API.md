@@ -253,6 +253,98 @@ Response:
 }
 ```
 
+### GET /api/features/:platform/:marketId
+
+Get computed trading features for a specific market.
+
+Query parameters:
+- `outcomeId` (string, optional): specific outcome
+
+Response:
+```json
+{
+  "features": {
+    "timestamp": 1706500000000,
+    "platform": "polymarket",
+    "marketId": "0x123",
+    "outcomeId": "yes",
+    "tick": {
+      "price": 0.55,
+      "priceChange": 0.01,
+      "priceChangePct": 1.85,
+      "momentum": 0.03,
+      "velocity": 0.001,
+      "volatility": 0.015,
+      "volatilityPct": 1.5,
+      "tickCount": 150,
+      "tickIntensity": 2.5,
+      "vwap": null
+    },
+    "orderbook": {
+      "spread": 0.02,
+      "spreadPct": 3.6,
+      "midPrice": 0.55,
+      "bidDepth": 5000,
+      "askDepth": 4500,
+      "totalDepth": 9500,
+      "imbalance": 0.053,
+      "imbalanceRatio": 1.11,
+      "bestBid": 0.54,
+      "bestAsk": 0.56,
+      "bestBidSize": 1000,
+      "bestAskSize": 800,
+      "weightedBidPrice": 0.535,
+      "weightedAskPrice": 0.565,
+      "bidDepthAt1Pct": 2000,
+      "askDepthAt1Pct": 1800,
+      "bidDepthAt5Pct": 4500,
+      "askDepthAt5Pct": 4000
+    },
+    "signals": {
+      "buyPressure": 0.62,
+      "sellPressure": 0.38,
+      "trendStrength": 0.15,
+      "liquidityScore": 0.72
+    }
+  }
+}
+```
+
+### GET /api/features
+
+Get all computed features for all tracked markets.
+
+Response:
+```json
+{
+  "snapshots": [
+    {
+      "timestamp": 1706500000000,
+      "platform": "polymarket",
+      "marketId": "0x123",
+      "outcomeId": "yes",
+      "features": { ... }
+    }
+  ],
+  "count": 15
+}
+```
+
+### GET /api/features/stats
+
+Get feature engineering service statistics.
+
+Response:
+```json
+{
+  "stats": {
+    "marketsTracked": 15,
+    "ticksProcessed": 45000,
+    "orderbooksProcessed": 12000
+  }
+}
+```
+
 ## WebSocket endpoints
 
 ### WS /ws

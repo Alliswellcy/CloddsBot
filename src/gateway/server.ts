@@ -16,6 +16,7 @@ import {
   type HealthStatus,
 } from '../utils/production';
 import type { TickStreamer } from '../services/tick-streamer';
+import type { FeatureEngineering } from '../services/feature-engineering';
 
 export interface GatewayServer {
   start(): Promise<void>;
@@ -32,6 +33,7 @@ export interface GatewayServer {
   setOrderbookHistoryHandler(handler: OrderbookHistoryHandler | null): void;
   setTickRecorderStatsHandler(handler: TickRecorderStatsHandler | null): void;
   setTickStreamer(streamer: TickStreamer | null): void;
+  setFeatureEngineering(service: FeatureEngineering | null): void;
 }
 
 export type ChannelWebhookHandler = (
@@ -174,6 +176,7 @@ export function createServer(
   let orderbookHistoryHandler: OrderbookHistoryHandler | null = null;
   let tickRecorderStatsHandler: TickRecorderStatsHandler | null = null;
   let tickStreamer: TickStreamer | null = null;
+  let featureEngineering: FeatureEngineering | null = null;
 
   // Auth middleware for sensitive endpoints
   const authToken = process.env.CLODDS_TOKEN;
@@ -377,6 +380,9 @@ export function createServer(
         metrics: '/metrics',
         dashboard: '/dashboard',
         tickStreamerStats: '/api/tick-streamer/stats',
+        features: '/api/features/:platform/:marketId',
+        featuresAll: '/api/features',
+        featuresStats: '/api/features/stats',
       },
     });
   });
@@ -844,6 +850,45 @@ export function createServer(
     }
 
     const stats = tickStreamer.getStats();
+    res.json({ stats });
+  });
+
+  // Feature engineering endpoints
+  app.get('/api/features/:platform/:marketId', (req, res) => {
+    if (!featureEngineering) {
+      res.status(404).json({ error: 'Feature engineering not enabled' });
+      return;
+    }
+
+    const { platform, marketId } = req.params;
+    const outcomeId = typeof req.query.outcomeId === 'string' ? req.query.outcomeId : undefined;
+
+    const features = featureEngineering.getFeatures(platform, marketId, outcomeId);
+    if (!features) {
+      res.status(404).json({ error: 'No features available for this market' });
+      return;
+    }
+
+    res.json({ features });
+  });
+
+  app.get('/api/features', (_req, res) => {
+    if (!featureEngineering) {
+      res.status(404).json({ error: 'Feature engineering not enabled' });
+      return;
+    }
+
+    const snapshots = featureEngineering.getAllFeatures();
+    res.json({ snapshots, count: snapshots.length });
+  });
+
+  app.get('/api/features/stats', (_req, res) => {
+    if (!featureEngineering) {
+      res.status(404).json({ error: 'Feature engineering not enabled' });
+      return;
+    }
+
+    const stats = featureEngineering.getStats();
     res.json({ stats });
   });
 
@@ -1421,6 +1466,9 @@ export function createServer(
     },
     setTickStreamer(streamer: TickStreamer | null): void {
       tickStreamer = streamer;
+    },
+    setFeatureEngineering(service: FeatureEngineering | null): void {
+      featureEngineering = service;
     },
   };
 }

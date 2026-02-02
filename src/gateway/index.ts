@@ -46,6 +46,7 @@ import { createRealtimeAlertsService, connectWhaleTracker, connectOpportunityFin
 import { createOpportunityExecutor, type OpportunityExecutor } from '../opportunity/executor';
 import { createTickRecorder, type TickRecorder } from '../services/tick-recorder';
 import { createTickStreamer, type TickStreamer } from '../services/tick-streamer';
+import { createFeatureEngineering, type FeatureEngineering } from '../services/feature-engineering';
 import chokidar, { FSWatcher } from 'chokidar';
 import path from 'path';
 import { loadConfig, CONFIG_FILE } from '../utils/config';
@@ -620,6 +621,9 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   // Tick streamer for real-time WebSocket streaming
   let tickStreamer: TickStreamer | null = null;
 
+  // Feature engineering for computing trading indicators
+  let featureEngine: FeatureEngineering | null = null;
+
   const sendMessage = async (message: OutgoingMessage): Promise<string | null> => {
     if (!channels) {
       logger.warn({ platform: message.platform }, 'Channel manager not ready; dropping message');
@@ -776,6 +780,43 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   });
 
   logger.info('Tick streamer initialized for real-time WebSocket streaming');
+
+  // Initialize feature engineering for computing trading indicators
+  featureEngine = createFeatureEngineering({
+    tickWindowSize: 100,
+    orderbookWindowSize: 50,
+    momentumLookback: 20,
+    volatilityLookback: 50,
+  });
+
+  // Wire feed events to feature engineering
+  feeds.on('price', (update) => {
+    if (featureEngine && update.outcomeId) {
+      featureEngine.processTick({
+        platform: update.platform,
+        marketId: update.marketId,
+        outcomeId: update.outcomeId,
+        price: update.price,
+        prevPrice: update.prevPrice ?? null,
+        timestamp: update.timestamp,
+      });
+    }
+  });
+
+  feeds.on('orderbook', (update) => {
+    if (featureEngine) {
+      featureEngine.processOrderbook({
+        platform: update.platform,
+        marketId: update.marketId,
+        outcomeId: update.outcomeId,
+        bids: update.bids,
+        asks: update.asks,
+        timestamp: update.timestamp,
+      });
+    }
+  });
+
+  logger.info('Feature engineering initialized for trading indicators');
 
   const startMonitoring = () => {
     monitoring?.stop();
@@ -1761,6 +1802,9 @@ export async function createGateway(config: Config): Promise<AppGateway> {
 
   // Set tick streamer for WebSocket streaming endpoint
   httpGateway.setTickStreamer(tickStreamer);
+
+  // Set feature engineering for REST API
+  httpGateway.setFeatureEngineering(featureEngine);
 
   return {
     async start(): Promise<void> {

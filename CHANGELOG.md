@@ -26,9 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Subscription management with per-client limits (100 max)
 - Stats endpoint: `/api/tick-streamer/stats`
 
+#### Feature Engineering Pipeline
+- Real-time computation of trading indicators from tick/orderbook data
+- Tick features: price change, momentum, velocity, volatility, tick intensity
+- Orderbook features: spread, imbalance, depth, weighted prices
+- Derived signals: buy pressure, sell pressure, trend strength, liquidity score
+- Batch computation for historical data analysis
+- REST endpoints: `/api/features/:platform/:marketId`, `/api/features`, `/api/features/stats`
+
 #### Feed Improvements
 - Orderbook events now emitted from Polymarket feed
-- Feed events wired to both tick recorder and tick streamer
+- Feed events wired to tick recorder, tick streamer, and feature engineering
 
 ### Configuration
 
