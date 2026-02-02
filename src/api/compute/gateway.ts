@@ -8,13 +8,16 @@ import { randomBytes, createHmac } from 'crypto';
 import { EventEmitter } from 'eventemitter3';
 import { logger } from '../../utils/logger';
 import { createPersistenceLayer, type PersistenceLayer } from './persistence';
-import type {
-  ComputeService,
-  ComputeRequest,
-  ComputeResponse,
-  ComputeUsage,
-  ComputePricing,
-  PaymentProof,
+import {
+  PRIORITY_MULTIPLIERS,
+  PRIORITY_ORDER,
+  type ComputeService,
+  type ComputeRequest,
+  type ComputeResponse,
+  type ComputeUsage,
+  type ComputePricing,
+  type PaymentProof,
+  type ComputePriority,
 } from './types';
 
 // =============================================================================
@@ -32,6 +35,8 @@ export interface ComputeGateway {
   cancelJob(jobId: string, wallet: string): Promise<boolean>;
   /** Get pricing for a service */
   getPricing(service: ComputeService): ComputePricing;
+  /** Estimate cost for a request (without executing) */
+  estimateCost(service: ComputeService, payload: unknown): CostEstimate;
   /** Get wallet balance/credits */
   getBalance(wallet: string): Promise<WalletBalance>;
   /** Deposit credits */
@@ -44,8 +49,24 @@ export interface ComputeGateway {
   checkRateLimit(wallet: string, ip: string): RateLimitResult;
   /** Get metrics */
   getMetrics(): GatewayMetrics;
+  /** Get admin metrics (detailed) */
+  getAdminMetrics(): AdminMetrics;
   /** Event emitter for job updates */
   events: EventEmitter;
+  /** Get spending limits for wallet */
+  getSpendingLimits(wallet: string): Promise<SpendingLimits>;
+  /** Set spending limits for wallet */
+  setSpendingLimits(wallet: string, limits: Partial<SpendingLimits>): Promise<void>;
+  /** Check if spending would exceed limits */
+  checkSpendingLimits(wallet: string, amount: number): SpendingLimitCheck;
+  /** Create an API key for a wallet */
+  createApiKey(wallet: string, name: string): Promise<{ apiKey: string; wallet: string; name: string }>;
+  /** Get API key (returns wallet if valid, null if not) */
+  getApiKeyWallet(apiKey: string): string | null;
+  /** List API keys for a wallet */
+  listApiKeys(wallet: string): Array<{ apiKey: string; name: string; createdAt: number; lastUsedAt: number | null; revoked: boolean }>;
+  /** Revoke an API key */
+  revokeApiKey(wallet: string, apiKey: string): boolean;
   /** Shutdown */
   shutdown(): void;
 }
@@ -59,6 +80,16 @@ export interface ComputeGatewayConfig {
   jobTimeout?: number;
   /** Max concurrent jobs per wallet (default: 10) */
   maxConcurrent?: number;
+  /** Max retries for transient failures (default: 3) */
+  maxRetries?: number;
+  /** Initial retry delay in ms (default: 1000) */
+  retryDelayMs?: number;
+  /** Retry backoff multiplier (default: 2) */
+  retryBackoffMultiplier?: number;
+  /** Circuit breaker failure threshold (default: 5) */
+  circuitBreakerThreshold?: number;
+  /** Circuit breaker reset timeout in ms (default: 30000) */
+  circuitBreakerResetMs?: number;
   /** USDC contract address on Base */
   usdcAddress?: string;
   /** Treasury wallet for payments */
@@ -117,6 +148,58 @@ export interface GatewayMetrics {
   requestsByService: Record<string, number>;
 }
 
+export interface AdminMetrics extends GatewayMetrics {
+  circuitBreakers: Record<ComputeService, {
+    state: 'closed' | 'open' | 'half-open';
+    failures: number;
+    lastFailure: number | null;
+    cooldownUntil: number | null;
+  }>;
+  recentErrors: Array<{ service: ComputeService; error: string; timestamp: number }>;
+  systemInfo: {
+    nodeVersion: string;
+    platform: string;
+    memoryUsageMB: number;
+    cpuUsagePercent: number;
+  };
+}
+
+export interface CostEstimate {
+  service: ComputeService;
+  estimatedCost: number;
+  breakdown: {
+    base: number;
+    usage: number;
+    subtotal?: number;
+    priorityMultiplier?: number;
+    total: number;
+  };
+  units: number;
+  unitType: string;
+  minCharge: number;
+  maxCharge: number;
+  priority?: ComputePriority;
+}
+
+export interface SpendingLimits {
+  wallet: string;
+  dailyLimit: number | null;
+  monthlyLimit: number | null;
+  dailySpent: number;
+  monthlySpent: number;
+  dailyRemaining: number | null;
+  monthlyRemaining: number | null;
+}
+
+export interface SpendingLimitCheck {
+  allowed: boolean;
+  reason?: string;
+  dailyLimit?: number;
+  dailySpent?: number;
+  monthlyLimit?: number;
+  monthlySpent?: number;
+}
+
 // =============================================================================
 // CONSTANTS
 // =============================================================================
@@ -125,6 +208,11 @@ const DEFAULT_CONFIG: Required<ComputeGatewayConfig> = {
   minBalance: 0.001,
   jobTimeout: 300000,
   maxConcurrent: 10,
+  maxRetries: 3,
+  retryDelayMs: 1000,
+  retryBackoffMultiplier: 2,
+  circuitBreakerThreshold: 5,
+  circuitBreakerResetMs: 30000,
   usdcAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
   treasuryWallet: process.env.CLODDS_TREASURY_WALLET || '',
   walletRateLimit: 60, // 60 requests per minute
@@ -132,6 +220,22 @@ const DEFAULT_CONFIG: Required<ComputeGatewayConfig> = {
   dbPath: '',
   supportedNetworks: ['base', 'ethereum', 'polygon'],
 };
+
+// Transient errors that should trigger retry
+const RETRYABLE_ERRORS = [
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'socket hang up',
+  'network error',
+  'rate limit',
+  '429',
+  '502',
+  '503',
+  '504',
+];
 
 // RPC endpoints for payment verification
 const RPC_ENDPOINTS: Record<string, string> = {
@@ -171,6 +275,86 @@ export function createComputeGateway(
   // In-memory job tracking for active jobs
   const activeJobs = new Map<string, { wallet: string; startedAt: number }>();
 
+  // Circuit breaker state per service
+  type CircuitState = 'closed' | 'open' | 'half-open';
+  const circuitBreakers = new Map<ComputeService, {
+    state: CircuitState;
+    failures: number;
+    lastFailure: number;
+    lastSuccess: number;
+  }>();
+
+  // Recent errors tracking (keep last 100)
+  const recentErrors: Array<{ service: ComputeService; error: string; timestamp: number }> = [];
+  const MAX_RECENT_ERRORS = 100;
+
+  function recordError(service: ComputeService, error: string) {
+    recentErrors.push({ service, error, timestamp: Date.now() });
+    if (recentErrors.length > MAX_RECENT_ERRORS) {
+      recentErrors.shift();
+    }
+  }
+
+  function getCircuitBreaker(service: ComputeService) {
+    if (!circuitBreakers.has(service)) {
+      circuitBreakers.set(service, {
+        state: 'closed',
+        failures: 0,
+        lastFailure: 0,
+        lastSuccess: Date.now(),
+      });
+    }
+    return circuitBreakers.get(service)!;
+  }
+
+  function checkCircuitBreaker(service: ComputeService): { allowed: boolean; reason?: string } {
+    const cb = getCircuitBreaker(service);
+
+    if (cb.state === 'closed') {
+      return { allowed: true };
+    }
+
+    if (cb.state === 'open') {
+      // Check if reset timeout has passed
+      if (Date.now() - cb.lastFailure > cfg.circuitBreakerResetMs) {
+        cb.state = 'half-open';
+        logger.info({ service }, 'Circuit breaker entering half-open state');
+        return { allowed: true };
+      }
+      return {
+        allowed: false,
+        reason: `Service ${service} is temporarily unavailable (circuit breaker open). Retry after ${Math.ceil((cfg.circuitBreakerResetMs - (Date.now() - cb.lastFailure)) / 1000)}s`,
+      };
+    }
+
+    // half-open - allow one request through
+    return { allowed: true };
+  }
+
+  function recordCircuitSuccess(service: ComputeService): void {
+    const cb = getCircuitBreaker(service);
+    cb.failures = 0;
+    cb.lastSuccess = Date.now();
+    if (cb.state === 'half-open') {
+      cb.state = 'closed';
+      logger.info({ service }, 'Circuit breaker closed after successful request');
+    }
+  }
+
+  function recordCircuitFailure(service: ComputeService): void {
+    const cb = getCircuitBreaker(service);
+    cb.failures++;
+    cb.lastFailure = Date.now();
+
+    if (cb.state === 'half-open') {
+      cb.state = 'open';
+      logger.warn({ service, failures: cb.failures }, 'Circuit breaker re-opened after failure in half-open state');
+    } else if (cb.failures >= cfg.circuitBreakerThreshold) {
+      cb.state = 'open';
+      logger.warn({ service, failures: cb.failures, threshold: cfg.circuitBreakerThreshold }, 'Circuit breaker opened');
+    }
+  }
+
   // Metrics
   let totalRequests = 0;
   let totalRevenue = 0;
@@ -184,6 +368,45 @@ export function createComputeGateway(
   function registerHandler(service: ComputeService, handler: ServiceHandler): void {
     handlers.set(service, handler);
     logger.info({ service }, 'Service handler registered');
+  }
+
+  function isRetryableError(error: unknown): boolean {
+    const errorStr = String(error).toLowerCase();
+    return RETRYABLE_ERRORS.some(e => errorStr.includes(e.toLowerCase()));
+  }
+
+  async function withRetry<T>(
+    fn: () => Promise<T>,
+    context: { jobId: string; service: ComputeService }
+  ): Promise<T> {
+    let lastError: unknown;
+    let delay = cfg.retryDelayMs;
+
+    for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+
+        if (attempt < cfg.maxRetries && isRetryableError(error)) {
+          logger.warn({
+            jobId: context.jobId,
+            service: context.service,
+            attempt: attempt + 1,
+            maxRetries: cfg.maxRetries,
+            error: String(error),
+            nextRetryMs: delay,
+          }, 'Retrying after transient error');
+
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= cfg.retryBackoffMultiplier;
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError;
   }
 
   function getOrCreateBalance(wallet: string): WalletBalance {
@@ -216,10 +439,7 @@ export function createComputeGateway(
     );
   }
 
-  function estimateCost(service: ComputeService, payload: unknown): number {
-    const price = pricing[service];
-    if (!price) return 0;
-
+  function calculateUnits(service: ComputeService, payload: unknown): number {
     let units = 1;
 
     if (service === 'llm') {
@@ -232,10 +452,70 @@ export function createComputeGateway(
     } else if (service === 'storage') {
       const content = (payload as { content?: string })?.content || '';
       units = Math.max(1, Math.ceil(content.length / 1024 / 1024));
+    } else if (service === 'data') {
+      units = 1;
+    } else if (service === 'web') {
+      units = 1;
+    } else if (service === 'trade') {
+      units = 1;
     }
 
-    const cost = price.basePrice + (units * price.pricePerUnit);
-    return Math.min(Math.max(cost, price.minCharge), price.maxCharge);
+    return units;
+  }
+
+  function estimateCostInternal(service: ComputeService, payload: unknown, priority: ComputePriority = 'normal'): number {
+    const price = pricing[service];
+    if (!price) return 0;
+
+    const units = calculateUnits(service, payload);
+    const baseCost = price.basePrice + (units * price.pricePerUnit);
+    const clampedCost = Math.min(Math.max(baseCost, price.minCharge), price.maxCharge);
+    // Apply priority multiplier
+    const priorityMultiplier = PRIORITY_MULTIPLIERS[priority];
+    return clampedCost * priorityMultiplier;
+  }
+
+  function estimateCost(service: ComputeService, payload: unknown): CostEstimate {
+    const price = pricing[service];
+    // Extract priority from payload if present
+    const priority: ComputePriority = (payload as Record<string, unknown>)?.priority as ComputePriority || 'normal';
+    const priorityMultiplier = PRIORITY_MULTIPLIERS[priority] || 1.0;
+
+    if (!price) {
+      return {
+        service,
+        estimatedCost: 0,
+        breakdown: { base: 0, usage: 0, total: 0, priorityMultiplier },
+        units: 0,
+        unitType: 'unknown',
+        minCharge: 0,
+        maxCharge: 0,
+        priority,
+      };
+    }
+
+    const units = calculateUnits(service, payload);
+    const baseCost = price.basePrice;
+    const usageCost = units * price.pricePerUnit;
+    const subtotal = Math.min(Math.max(baseCost + usageCost, price.minCharge), price.maxCharge);
+    const total = subtotal * priorityMultiplier;
+
+    return {
+      service,
+      estimatedCost: total,
+      breakdown: {
+        base: baseCost,
+        usage: usageCost,
+        subtotal,
+        priorityMultiplier,
+        total,
+      },
+      units,
+      unitType: price.unit,
+      minCharge: price.minCharge * priorityMultiplier,
+      maxCharge: price.maxCharge * priorityMultiplier,
+      priority,
+    };
   }
 
   async function verifyPayment(proof: PaymentProof): Promise<{ valid: boolean; amount: number; error?: string }> {
@@ -394,9 +674,24 @@ export function createComputeGateway(
         };
       }
 
-      // Check balance
+      // Check circuit breaker
+      const cbCheck = checkCircuitBreaker(request.service);
+      if (!cbCheck.allowed) {
+        return {
+          id: request.id,
+          jobId,
+          service: request.service,
+          status: 'failed',
+          error: cbCheck.reason || 'Service temporarily unavailable',
+          cost: 0,
+          timestamp: startTime,
+        };
+      }
+
+      // Check balance (with priority pricing)
       const balance = getOrCreateBalance(request.wallet);
-      const estimatedCost = estimateCost(request.service, request.payload);
+      const priority: ComputePriority = request.priority || 'normal';
+      const estimatedCost = estimateCostInternal(request.service, request.payload, priority);
 
       if (balance.available < estimatedCost) {
         // Check for payment proof
@@ -437,6 +732,20 @@ export function createComputeGateway(
             timestamp: startTime,
           };
         }
+      }
+
+      // Check spending limits
+      const spendingCheck = checkSpendingLimits(request.wallet, estimatedCost);
+      if (!spendingCheck.allowed) {
+        return {
+          id: request.id,
+          jobId,
+          service: request.service,
+          status: 'failed',
+          error: spendingCheck.reason || 'Spending limit exceeded',
+          cost: 0,
+          timestamp: startTime,
+        };
       }
 
       // Reserve balance
@@ -506,7 +815,7 @@ export function createComputeGateway(
     jobsByStatus.processing++;
 
     activeJobs.set(jobId, { wallet: request.wallet, startedAt });
-    events.emit('job:started', { jobId, service: request.service });
+    events.emit('job:started', { jobId, wallet: request.wallet, service: request.service });
 
     try {
       const handler = handlers.get(request.service);
@@ -514,13 +823,16 @@ export function createComputeGateway(
         throw new Error(`No handler for service: ${request.service}`);
       }
 
-      // Execute with timeout
-      const result = await Promise.race([
-        handler(request),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Job timeout')), cfg.jobTimeout)
-        ),
-      ]);
+      // Execute with timeout and retry
+      const result = await withRetry(
+        () => Promise.race([
+          handler(request),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Job timeout')), cfg.jobTimeout)
+          ),
+        ]),
+        { jobId, service: request.service }
+      );
 
       const completedAt = Date.now();
       const durationMs = completedAt - startedAt;
@@ -555,7 +867,7 @@ export function createComputeGateway(
       totalRevenue += actualCost;
 
       activeJobs.delete(jobId);
-      events.emit('job:completed', { jobId, service: request.service, cost: actualCost });
+      events.emit('job:completed', { jobId, wallet: request.wallet, service: request.service, cost: actualCost });
 
       // Send callback if configured
       if (request.callbackUrl) {
@@ -579,9 +891,15 @@ export function createComputeGateway(
         cost: actualCost,
         durationMs,
       }, 'Job completed');
+
+      // Record success for circuit breaker
+      recordCircuitSuccess(request.service);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       const completedAt = Date.now();
+
+      // Track error for admin metrics
+      recordError(request.service, errorMsg);
 
       // Refund on failure
       const balance = getOrCreateBalance(request.wallet);
@@ -600,7 +918,12 @@ export function createComputeGateway(
       jobsByStatus.failed++;
 
       activeJobs.delete(jobId);
-      events.emit('job:failed', { jobId, error: errorMsg });
+      events.emit('job:failed', { jobId, wallet: request.wallet, error: errorMsg });
+
+      // Record failure for circuit breaker (only for non-user errors)
+      if (isRetryableError(error)) {
+        recordCircuitFailure(request.service);
+      }
 
       logger.error({ jobId, error: errorMsg }, 'Job failed');
     }
@@ -730,7 +1053,7 @@ export function createComputeGateway(
     jobsByStatus.pending--;
     jobsByStatus.failed++;
 
-    events.emit('job:cancelled', { jobId });
+    events.emit('job:cancelled', { jobId, wallet });
     return true;
   }
 
@@ -813,8 +1136,123 @@ export function createComputeGateway(
     };
   }
 
+  function getAdminMetrics(): AdminMetrics {
+    const base = getMetrics();
+
+    // Build circuit breaker status for all services
+    const cbStatus: Record<string, {
+      state: 'closed' | 'open' | 'half-open';
+      failures: number;
+      lastFailure: number | null;
+      cooldownUntil: number | null;
+    }> = {};
+
+    for (const service of Object.keys(pricing) as ComputeService[]) {
+      const cb = circuitBreakers.get(service);
+      if (cb) {
+        cbStatus[service] = {
+          state: cb.state,
+          failures: cb.failures,
+          lastFailure: cb.lastFailure || null,
+          cooldownUntil: cb.state === 'open' && cb.lastFailure
+            ? cb.lastFailure + cfg.circuitBreakerResetMs
+            : null,
+        };
+      } else {
+        cbStatus[service] = {
+          state: 'closed',
+          failures: 0,
+          lastFailure: null,
+          cooldownUntil: null,
+        };
+      }
+    }
+
+    // Get system info
+    const memUsage = process.memoryUsage();
+
+    return {
+      ...base,
+      circuitBreakers: cbStatus as Record<ComputeService, {
+        state: 'closed' | 'open' | 'half-open';
+        failures: number;
+        lastFailure: number | null;
+        cooldownUntil: number | null;
+      }>,
+      recentErrors: [...recentErrors].reverse().slice(0, 50), // Most recent first
+      systemInfo: {
+        nodeVersion: process.version,
+        platform: process.platform,
+        memoryUsageMB: Math.round(memUsage.heapUsed / 1024 / 1024),
+        cpuUsagePercent: 0, // Would need async measurement
+      },
+    };
+  }
+
   function shutdown(): void {
     db.close();
+  }
+
+  async function getSpendingLimits(wallet: string): Promise<SpendingLimits> {
+    const limits = db.getSpendingLimits(wallet);
+    const dailySpent = db.getSpentInPeriod(wallet, 86400000); // 24 hours
+    const monthlySpent = db.getSpentInPeriod(wallet, 2592000000); // 30 days
+
+    return {
+      wallet: wallet.toLowerCase(),
+      dailyLimit: limits?.daily_limit ?? null,
+      monthlyLimit: limits?.monthly_limit ?? null,
+      dailySpent,
+      monthlySpent,
+      dailyRemaining: limits?.daily_limit != null ? Math.max(0, limits.daily_limit - dailySpent) : null,
+      monthlyRemaining: limits?.monthly_limit != null ? Math.max(0, limits.monthly_limit - monthlySpent) : null,
+    };
+  }
+
+  async function setSpendingLimits(wallet: string, limits: Partial<SpendingLimits>): Promise<void> {
+    const current = db.getSpendingLimits(wallet);
+    db.setSpendingLimits(
+      wallet,
+      limits.dailyLimit !== undefined ? limits.dailyLimit : (current?.daily_limit ?? null),
+      limits.monthlyLimit !== undefined ? limits.monthlyLimit : (current?.monthly_limit ?? null)
+    );
+    logger.info({ wallet, limits }, 'Spending limits updated');
+  }
+
+  function checkSpendingLimits(wallet: string, amount: number): SpendingLimitCheck {
+    const limits = db.getSpendingLimits(wallet);
+    if (!limits) {
+      return { allowed: true };
+    }
+
+    const dailySpent = db.getSpentInPeriod(wallet, 86400000);
+    const monthlySpent = db.getSpentInPeriod(wallet, 2592000000);
+
+    if (limits.daily_limit != null && dailySpent + amount > limits.daily_limit) {
+      return {
+        allowed: false,
+        reason: `Daily spending limit exceeded. Limit: $${limits.daily_limit}, spent: $${dailySpent.toFixed(4)}, requested: $${amount.toFixed(4)}`,
+        dailyLimit: limits.daily_limit,
+        dailySpent,
+      };
+    }
+
+    if (limits.monthly_limit != null && monthlySpent + amount > limits.monthly_limit) {
+      return {
+        allowed: false,
+        reason: `Monthly spending limit exceeded. Limit: $${limits.monthly_limit}, spent: $${monthlySpent.toFixed(4)}, requested: $${amount.toFixed(4)}`,
+        monthlyLimit: limits.monthly_limit,
+        monthlySpent,
+      };
+    }
+
+    return {
+      allowed: true,
+      dailyLimit: limits.daily_limit ?? undefined,
+      dailySpent,
+      monthlyLimit: limits.monthly_limit ?? undefined,
+      monthlySpent,
+    };
   }
 
   // Cleanup old jobs periodically (keep 7 days)
@@ -825,19 +1263,68 @@ export function createComputeGateway(
     }
   }, 3600000); // Every hour
 
+  // ==========================================================================
+  // API KEY MANAGEMENT
+  // ==========================================================================
+
+  async function createApiKey(wallet: string, name: string): Promise<{ apiKey: string; wallet: string; name: string }> {
+    const apiKey = `clodds_${randomBytes(24).toString('hex')}`;
+    db.createApiKey(apiKey, wallet, name);
+    logger.info({ wallet, name }, 'API key created');
+    return { apiKey, wallet: wallet.toLowerCase(), name };
+  }
+
+  function getApiKeyWallet(apiKey: string): string | null {
+    const row = db.getApiKey(apiKey);
+    return row?.wallet || null;
+  }
+
+  function listApiKeys(wallet: string): Array<{ apiKey: string; name: string; createdAt: number; lastUsedAt: number | null; revoked: boolean }> {
+    const rows = db.getApiKeysByWallet(wallet);
+    return rows.map(row => ({
+      apiKey: row.api_key.slice(0, 12) + '...' + row.api_key.slice(-4), // Masked
+      name: row.name,
+      createdAt: row.created_at,
+      lastUsedAt: row.last_used_at,
+      revoked: row.revoked_at != null,
+    }));
+  }
+
+  function revokeApiKey(wallet: string, apiKey: string): boolean {
+    // Verify the key belongs to this wallet
+    const row = db.getApiKey(apiKey);
+    if (!row || row.wallet.toLowerCase() !== wallet.toLowerCase()) {
+      return false;
+    }
+    const success = db.revokeApiKey(apiKey);
+    if (success) {
+      logger.info({ wallet, apiKey: apiKey.slice(0, 12) }, 'API key revoked');
+    }
+    return success;
+  }
+
   return {
     submit,
     getJob,
     getJobsByWallet,
     cancelJob,
     getPricing,
+    estimateCost,
     getBalance,
     depositCredits,
     getUsage,
+    getSpendingLimits,
+    setSpendingLimits,
+    checkSpendingLimits,
     registerHandler,
     checkRateLimit,
     getMetrics,
+    getAdminMetrics,
     events,
+    createApiKey,
+    getApiKeyWallet,
+    listApiKeys,
+    revokeApiKey,
     shutdown,
   };
 }

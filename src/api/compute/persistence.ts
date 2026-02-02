@@ -38,7 +38,34 @@ export interface PersistenceLayer {
   getIpRequestCount(ip: string, windowMs: number): number;
   recordRequest(wallet: string, ip: string): void;
 
+  // Spending limits
+  getSpendingLimits(wallet: string): SpendingLimitsRow | null;
+  setSpendingLimits(wallet: string, dailyLimit: number | null, monthlyLimit: number | null): void;
+  getSpentInPeriod(wallet: string, periodMs: number): number;
+
+  // API keys
+  createApiKey(apiKey: string, wallet: string, name: string): void;
+  getApiKey(apiKey: string): ApiKeyRow | null;
+  getApiKeysByWallet(wallet: string): ApiKeyRow[];
+  revokeApiKey(apiKey: string): boolean;
+
   close(): void;
+}
+
+export interface ApiKeyRow {
+  api_key: string;
+  wallet: string;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
+}
+
+export interface SpendingLimitsRow {
+  wallet: string;
+  daily_limit: number | null;
+  monthly_limit: number | null;
+  updated_at: number;
 }
 
 export interface WalletBalanceRow {
@@ -149,6 +176,23 @@ export function createPersistenceLayer(dbPath?: string): PersistenceLayer {
     );
     CREATE INDEX IF NOT EXISTS idx_rate_wallet ON rate_limit_requests(wallet, requested_at);
     CREATE INDEX IF NOT EXISTS idx_rate_ip ON rate_limit_requests(ip, requested_at);
+
+    CREATE TABLE IF NOT EXISTS spending_limits (
+      wallet TEXT PRIMARY KEY,
+      daily_limit REAL,
+      monthly_limit REAL,
+      updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+    );
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      api_key TEXT PRIMARY KEY,
+      wallet TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+      last_used_at INTEGER,
+      revoked_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_apikeys_wallet ON api_keys(wallet);
   `);
 
   // Prepared statements
@@ -190,6 +234,23 @@ export function createPersistenceLayer(dbPath?: string): PersistenceLayer {
     getIpRequestCount: db.prepare('SELECT COUNT(*) as cnt FROM rate_limit_requests WHERE ip = ? AND requested_at > ?'),
     recordRequest: db.prepare('INSERT INTO rate_limit_requests (wallet, ip) VALUES (?, ?)'),
     cleanupRateLimit: db.prepare('DELETE FROM rate_limit_requests WHERE requested_at < ?'),
+
+    getSpendingLimits: db.prepare('SELECT * FROM spending_limits WHERE wallet = ?'),
+    setSpendingLimits: db.prepare(`
+      INSERT INTO spending_limits (wallet, daily_limit, monthly_limit, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(wallet) DO UPDATE SET
+        daily_limit = excluded.daily_limit,
+        monthly_limit = excluded.monthly_limit,
+        updated_at = excluded.updated_at
+    `),
+    getSpentInPeriod: db.prepare('SELECT COALESCE(SUM(cost), 0) as total FROM usage_stats WHERE wallet = ? AND recorded_at > ?'),
+
+    createApiKey: db.prepare('INSERT INTO api_keys (api_key, wallet, name) VALUES (?, ?, ?)'),
+    getApiKey: db.prepare('SELECT * FROM api_keys WHERE api_key = ? AND revoked_at IS NULL'),
+    getApiKeysByWallet: db.prepare('SELECT * FROM api_keys WHERE wallet = ? ORDER BY created_at DESC'),
+    revokeApiKey: db.prepare('UPDATE api_keys SET revoked_at = ? WHERE api_key = ?'),
+    updateApiKeyLastUsed: db.prepare('UPDATE api_keys SET last_used_at = ? WHERE api_key = ?'),
   };
 
   // Cleanup old rate limit entries periodically
@@ -287,6 +348,42 @@ export function createPersistenceLayer(dbPath?: string): PersistenceLayer {
 
     recordRequest(wallet: string, ip: string): void {
       stmts.recordRequest.run(wallet?.toLowerCase() || '', ip || '');
+    },
+
+    getSpendingLimits(wallet: string): SpendingLimitsRow | null {
+      return stmts.getSpendingLimits.get(wallet.toLowerCase()) as SpendingLimitsRow | null;
+    },
+
+    setSpendingLimits(wallet: string, dailyLimit: number | null, monthlyLimit: number | null): void {
+      stmts.setSpendingLimits.run(wallet.toLowerCase(), dailyLimit, monthlyLimit, Date.now());
+    },
+
+    getSpentInPeriod(wallet: string, periodMs: number): number {
+      const cutoff = Date.now() - periodMs;
+      const result = stmts.getSpentInPeriod.get(wallet.toLowerCase(), cutoff) as { total: number };
+      return result.total;
+    },
+
+    createApiKey(apiKey: string, wallet: string, name: string): void {
+      stmts.createApiKey.run(apiKey, wallet.toLowerCase(), name);
+    },
+
+    getApiKey(apiKey: string): ApiKeyRow | null {
+      const row = stmts.getApiKey.get(apiKey) as ApiKeyRow | null;
+      if (row) {
+        // Update last used timestamp
+        stmts.updateApiKeyLastUsed.run(Date.now(), apiKey);
+      }
+      return row;
+    },
+
+    getApiKeysByWallet(wallet: string): ApiKeyRow[] {
+      return stmts.getApiKeysByWallet.all(wallet.toLowerCase()) as ApiKeyRow[];
+    },
+
+    revokeApiKey(apiKey: string): boolean {
+      const result = stmts.revokeApiKey.run(Date.now(), apiKey);
+      return result.changes > 0;
     },
 
     close(): void {

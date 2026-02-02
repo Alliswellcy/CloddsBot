@@ -1,0 +1,800 @@
+openapi: 3.0.3
+info:
+  title: Clodds Compute API
+  description: |
+    Agent compute marketplace - pay USDC for compute resources.
+    No API keys required, just a wallet address.
+
+    ## Authentication
+    Two methods supported:
+    1. **Bearer Token**: Use API key in Authorization header
+    2. **Wallet in Body**: Include wallet address in request body
+
+    ## Priority Pricing
+    Requests support priority levels with different pricing:
+    - `low` (0.8x) - 20% discount, processed last
+    - `normal` (1.0x) - Standard pricing
+    - `high` (1.5x) - 50% premium, faster processing
+    - `urgent` (2.5x) - 150% premium, highest priority
+
+    ## Payment Networks
+    Supports USDC deposits on Base, Ethereum, and Polygon.
+  version: 1.0.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.clodds.com/v1
+    description: Production
+  - url: http://localhost:3456/v1
+    description: Local development
+
+tags:
+  - name: Health
+    description: Health and status endpoints
+  - name: Compute
+    description: Core compute operations
+  - name: Wallet
+    description: Wallet balance and deposits
+  - name: Jobs
+    description: Job management
+  - name: API Keys
+    description: API key management
+  - name: Limits
+    description: Spending limits
+  - name: Admin
+    description: Admin operations (protected)
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: clodds-compute
+                  version:
+                    type: string
+                    example: v1
+
+  /pricing:
+    get:
+      tags: [Health]
+      summary: Get service pricing
+      responses:
+        '200':
+          description: Pricing for all services
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: '#/components/schemas/ServicePricing'
+
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Get API metrics
+      responses:
+        '200':
+          description: API metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metrics'
+
+  /admin/metrics:
+    get:
+      tags: [Admin]
+      summary: Get detailed admin metrics
+      security:
+        - AdminToken: []
+      responses:
+        '200':
+          description: Detailed admin metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminMetrics'
+        '401':
+          description: Invalid or missing admin token
+
+  /balance/{wallet}:
+    get:
+      tags: [Wallet]
+      summary: Get wallet balance
+      parameters:
+        - name: wallet
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^0x[a-fA-F0-9]{40}$'
+      responses:
+        '200':
+          description: Wallet balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletBalance'
+
+  /deposit:
+    post:
+      tags: [Wallet]
+      summary: Deposit credits
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wallet, paymentProof]
+              properties:
+                wallet:
+                  type: string
+                  pattern: '^0x[a-fA-F0-9]{40}$'
+                paymentProof:
+                  $ref: '#/components/schemas/PaymentProof'
+      responses:
+        '200':
+          description: Deposit successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositResult'
+
+  /estimate:
+    post:
+      tags: [Compute]
+      summary: Estimate cost for a request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service]
+              properties:
+                service:
+                  $ref: '#/components/schemas/ComputeService'
+                payload:
+                  type: object
+                priority:
+                  $ref: '#/components/schemas/Priority'
+      responses:
+        '200':
+          description: Cost estimate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostEstimate'
+
+  /compute/{service}:
+    post:
+      tags: [Compute]
+      summary: Submit compute request
+      security:
+        - BearerAuth: []
+        - {}
+      parameters:
+        - name: service
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ComputeService'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComputeRequest'
+      responses:
+        '202':
+          description: Request accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputeResponse'
+        '400':
+          description: Invalid request
+        '402':
+          description: Insufficient balance
+        '429':
+          description: Rate limit exceeded
+
+  /batch:
+    post:
+      tags: [Compute]
+      summary: Submit batch of compute requests
+      security:
+        - BearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wallet, requests]
+              properties:
+                wallet:
+                  type: string
+                  description: Only required if not using Bearer token
+                requests:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: object
+                    required: [service]
+                    properties:
+                      service:
+                        $ref: '#/components/schemas/ComputeService'
+                      payload:
+                        type: object
+                      priority:
+                        $ref: '#/components/schemas/Priority'
+      responses:
+        '200':
+          description: Batch results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+
+  /stream/llm:
+    post:
+      tags: [Compute]
+      summary: Streaming LLM inference (SSE)
+      security:
+        - BearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LLMRequest'
+      responses:
+        '200':
+          description: SSE stream of LLM response
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /jobs/{wallet}:
+    get:
+      tags: [Jobs]
+      summary: List jobs for wallet
+      parameters:
+        - name: wallet
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+      responses:
+        '200':
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ComputeResponse'
+                  count:
+                    type: integer
+
+  /job/{jobId}:
+    get:
+      tags: [Jobs]
+      summary: Get job status
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputeResponse'
+        '404':
+          description: Job not found
+    delete:
+      tags: [Jobs]
+      summary: Cancel job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Wallet-Address
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job cancelled
+        '400':
+          description: Cannot cancel job
+
+  /limits/{wallet}:
+    get:
+      tags: [Limits]
+      summary: Get spending limits
+      parameters:
+        - name: wallet
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Spending limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpendingLimits'
+    post:
+      tags: [Limits]
+      summary: Set spending limits
+      parameters:
+        - name: wallet
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dailyLimit:
+                  type: number
+                  nullable: true
+                monthlyLimit:
+                  type: number
+                  nullable: true
+      responses:
+        '200':
+          description: Updated spending limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpendingLimits'
+
+  /apikeys:
+    post:
+      tags: [API Keys]
+      summary: Create API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wallet]
+              properties:
+                wallet:
+                  type: string
+                name:
+                  type: string
+                  maxLength: 50
+                  default: Default
+      responses:
+        '201':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apiKey:
+                    type: string
+                    description: The full API key (only shown once)
+                  wallet:
+                    type: string
+                  name:
+                    type: string
+
+  /apikeys/{wallet}:
+    get:
+      tags: [API Keys]
+      summary: List API keys for wallet
+      parameters:
+        - name: wallet
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of API keys (masked)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apiKeys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        apiKey:
+                          type: string
+                          description: Masked API key
+                        name:
+                          type: string
+                        createdAt:
+                          type: integer
+                        lastUsedAt:
+                          type: integer
+                          nullable: true
+                        revoked:
+                          type: boolean
+                  count:
+                    type: integer
+
+  /apikeys/{wallet}/{apiKey}:
+    delete:
+      tags: [API Keys]
+      summary: Revoke API key
+      parameters:
+        - name: wallet
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: apiKey
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: API key revoked
+        '404':
+          description: API key not found
+
+  /cache/stats:
+    get:
+      tags: [Health]
+      summary: Get LLM cache statistics
+      responses:
+        '200':
+          description: Cache statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hits:
+                    type: integer
+                  misses:
+                    type: integer
+                  size:
+                    type: integer
+                  hitRate:
+                    type: number
+
+  /cache:
+    delete:
+      tags: [Admin]
+      summary: Clear LLM cache
+      responses:
+        '200':
+          description: Cache cleared
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: API key authentication
+    AdminToken:
+      type: http
+      scheme: bearer
+      description: Admin token for protected endpoints
+
+  schemas:
+    ComputeService:
+      type: string
+      enum: [llm, code, web, data, storage, trade]
+
+    Priority:
+      type: string
+      enum: [low, normal, high, urgent]
+      default: normal
+
+    ServicePricing:
+      type: object
+      properties:
+        basePrice:
+          type: number
+        pricePerUnit:
+          type: number
+        unit:
+          type: string
+        minCharge:
+          type: number
+        maxCharge:
+          type: number
+
+    WalletBalance:
+      type: object
+      properties:
+        wallet:
+          type: string
+        available:
+          type: number
+        pending:
+          type: number
+        totalDeposited:
+          type: number
+        totalSpent:
+          type: number
+
+    PaymentProof:
+      type: object
+      required: [txHash, network, amountUsd]
+      properties:
+        txHash:
+          type: string
+          pattern: '^0x[a-fA-F0-9]{64}$'
+        network:
+          type: string
+          enum: [base, ethereum, polygon]
+        amountUsd:
+          type: number
+        token:
+          type: string
+          default: USDC
+        timestamp:
+          type: integer
+
+    DepositResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        newBalance:
+          type: number
+        deposited:
+          type: number
+        error:
+          type: string
+
+    CostEstimate:
+      type: object
+      properties:
+        service:
+          $ref: '#/components/schemas/ComputeService'
+        estimatedCost:
+          type: number
+        breakdown:
+          type: object
+          properties:
+            base:
+              type: number
+            usage:
+              type: number
+            subtotal:
+              type: number
+            priorityMultiplier:
+              type: number
+            total:
+              type: number
+        units:
+          type: integer
+        unitType:
+          type: string
+        minCharge:
+          type: number
+        maxCharge:
+          type: number
+        priority:
+          $ref: '#/components/schemas/Priority'
+
+    ComputeRequest:
+      type: object
+      properties:
+        wallet:
+          type: string
+          description: Required if not using Bearer token
+        payload:
+          type: object
+        priority:
+          $ref: '#/components/schemas/Priority'
+        callbackUrl:
+          type: string
+        meta:
+          type: object
+
+    ComputeResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        jobId:
+          type: string
+        service:
+          $ref: '#/components/schemas/ComputeService'
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        result:
+          type: object
+        error:
+          type: string
+        cost:
+          type: number
+        timestamp:
+          type: integer
+
+    BatchResponse:
+      type: object
+      properties:
+        batchId:
+          type: string
+        total:
+          type: integer
+        successful:
+          type: integer
+        failed:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComputeResponse'
+
+    LLMRequest:
+      type: object
+      properties:
+        wallet:
+          type: string
+        payload:
+          type: object
+          properties:
+            model:
+              type: string
+              enum: [claude-sonnet-4-20250514, claude-3-5-haiku-latest, claude-opus-4-20250514, gpt-4o, gpt-4o-mini, llama-3.1-70b, llama-3.1-8b, mixtral-8x7b]
+            messages:
+              type: array
+              items:
+                type: object
+                properties:
+                  role:
+                    type: string
+                    enum: [user, assistant, system]
+                  content:
+                    type: string
+            maxTokens:
+              type: integer
+            temperature:
+              type: number
+
+    Metrics:
+      type: object
+      properties:
+        uptime:
+          type: integer
+          description: Uptime in milliseconds
+        totalRequests:
+          type: integer
+        totalRevenue:
+          type: number
+        activeJobs:
+          type: integer
+        jobsByStatus:
+          type: object
+          additionalProperties:
+            type: integer
+        requestsByService:
+          type: object
+          additionalProperties:
+            type: integer
+
+    AdminMetrics:
+      allOf:
+        - $ref: '#/components/schemas/Metrics'
+        - type: object
+          properties:
+            circuitBreakers:
+              type: object
+              additionalProperties:
+                type: object
+                properties:
+                  state:
+                    type: string
+                    enum: [closed, open, half-open]
+                  failures:
+                    type: integer
+                  lastFailure:
+                    type: integer
+                    nullable: true
+                  cooldownUntil:
+                    type: integer
+                    nullable: true
+            recentErrors:
+              type: array
+              items:
+                type: object
+                properties:
+                  service:
+                    type: string
+                  error:
+                    type: string
+                  timestamp:
+                    type: integer
+            systemInfo:
+              type: object
+              properties:
+                nodeVersion:
+                  type: string
+                platform:
+                  type: string
+                memoryUsageMB:
+                  type: integer
+                cpuUsagePercent:
+                  type: number
+            llmCache:
+              type: object
+              properties:
+                hits:
+                  type: integer
+                misses:
+                  type: integer
+                size:
+                  type: integer
+                hitRate:
+                  type: number
+
+    SpendingLimits:
+      type: object
+      properties:
+        wallet:
+          type: string
+        dailyLimit:
+          type: number
+          nullable: true
+        monthlyLimit:
+          type: number
+          nullable: true
+        dailySpent:
+          type: number
+        monthlySpent:
+          type: number
+        dailyRemaining:
+          type: number
+          nullable: true
+        monthlyRemaining:
+          type: number
+          nullable: true

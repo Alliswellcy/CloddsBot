@@ -27,6 +27,10 @@ export interface LLMService {
   getModels(): LLMModel[];
   /** Check model availability */
   isAvailable(model: LLMModel): boolean;
+  /** Get cache statistics */
+  getCacheStats(): { hits: number; misses: number; size: number; hitRate: number };
+  /** Clear the cache */
+  clearCache(): void;
 }
 
 export interface LLMStreamChunk {
@@ -55,6 +59,18 @@ export interface LLMServiceConfig {
   defaultMaxTokens?: number;
   /** Default temperature */
   defaultTemperature?: number;
+  /** Enable response caching (default: true) */
+  cacheEnabled?: boolean;
+  /** Cache TTL in ms (default: 300000 = 5 minutes) */
+  cacheTtlMs?: number;
+  /** Max cache entries (default: 1000) */
+  cacheMaxEntries?: number;
+}
+
+interface CacheEntry {
+  response: LLMResponse;
+  timestamp: number;
+  hits: number;
 }
 
 // =============================================================================
@@ -93,6 +109,74 @@ export function createLLMService(config: LLMServiceConfig = {}): LLMService {
 
   // Initialize clients
   const anthropic = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
+
+  // Cache configuration
+  const cacheEnabled = config.cacheEnabled !== false;
+  const cacheTtlMs = config.cacheTtlMs || 300000; // 5 minutes default
+  const cacheMaxEntries = config.cacheMaxEntries || 1000;
+
+  // LRU cache implementation
+  const cache = new Map<string, CacheEntry>();
+  let cacheStats = { hits: 0, misses: 0 };
+
+  function getCacheKey(model: LLMModel, messages: Array<{ role: string; content: string }>, system?: string, maxTokens?: number, temperature?: number): string {
+    const data = JSON.stringify({ model, messages, system, maxTokens, temperature });
+    // Simple hash function
+    let hash = 0;
+    for (let i = 0; i < data.length; i++) {
+      const char = data.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return `llm_${model}_${hash}`;
+  }
+
+  function getFromCache(key: string): LLMResponse | null {
+    if (!cacheEnabled) return null;
+
+    const entry = cache.get(key);
+    if (!entry) {
+      cacheStats.misses++;
+      return null;
+    }
+
+    // Check if expired
+    if (Date.now() - entry.timestamp > cacheTtlMs) {
+      cache.delete(key);
+      cacheStats.misses++;
+      return null;
+    }
+
+    entry.hits++;
+    cacheStats.hits++;
+    return entry.response;
+  }
+
+  function setInCache(key: string, response: LLMResponse): void {
+    if (!cacheEnabled) return;
+
+    // Evict oldest entries if at capacity
+    if (cache.size >= cacheMaxEntries) {
+      const oldestKey = cache.keys().next().value;
+      if (oldestKey) cache.delete(oldestKey);
+    }
+
+    cache.set(key, {
+      response,
+      timestamp: Date.now(),
+      hits: 0,
+    });
+  }
+
+  // Cleanup expired cache entries periodically
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of cache.entries()) {
+      if (now - entry.timestamp > cacheTtlMs) {
+        cache.delete(key);
+      }
+    }
+  }, 60000); // Every minute
 
   function getEnv(key: string): string | undefined {
     if (typeof globalThis !== 'undefined' && 'process' in globalThis) {
@@ -139,6 +223,25 @@ export function createLLMService(config: LLMServiceConfig = {}): LLMService {
       throw new Error(`Model ${model} is not available. Configure the appropriate API key.`);
     }
 
+    // Check cache (only for non-streaming, deterministic requests)
+    // Don't cache if temperature > 0 as results will vary
+    const shouldCache = cacheEnabled && temperature === 0 && !payload.stream;
+    const cacheKey = shouldCache
+      ? getCacheKey(model, payload.messages, payload.system, maxTokens, temperature)
+      : '';
+
+    if (shouldCache) {
+      const cached = getFromCache(cacheKey);
+      if (cached) {
+        logger.info({
+          requestId: request.id,
+          model,
+          cacheHit: true,
+        }, 'LLM cache hit');
+        return { ...cached, _cached: true } as LLMResponse;
+      }
+    }
+
     const provider = MODEL_PROVIDERS[model];
 
     logger.info({
@@ -146,18 +249,30 @@ export function createLLMService(config: LLMServiceConfig = {}): LLMService {
       model,
       provider,
       messageCount: payload.messages.length,
+      cacheEnabled: shouldCache,
     }, 'Executing LLM request');
 
+    let result: LLMResponse;
     switch (provider) {
       case 'anthropic':
-        return executeAnthropic(payload, model, maxTokens, temperature);
+        result = await executeAnthropic(payload, model, maxTokens, temperature);
+        break;
       case 'openai':
-        return executeOpenAI(payload, model, maxTokens, temperature);
+        result = await executeOpenAI(payload, model, maxTokens, temperature);
+        break;
       case 'together':
-        return executeTogether(payload, model, maxTokens, temperature);
+        result = await executeTogether(payload, model, maxTokens, temperature);
+        break;
       default:
         throw new Error(`Unknown provider for model: ${model}`);
     }
+
+    // Store in cache
+    if (shouldCache) {
+      setInCache(cacheKey, result);
+    }
+
+    return result;
   }
 
   async function executeAnthropic(
@@ -654,10 +769,28 @@ export function createLLMService(config: LLMServiceConfig = {}): LLMService {
     };
   }
 
+  function getCacheStats(): { hits: number; misses: number; size: number; hitRate: number } {
+    const total = cacheStats.hits + cacheStats.misses;
+    return {
+      hits: cacheStats.hits,
+      misses: cacheStats.misses,
+      size: cache.size,
+      hitRate: total > 0 ? cacheStats.hits / total : 0,
+    };
+  }
+
+  function clearCache(): void {
+    cache.clear();
+    cacheStats = { hits: 0, misses: 0 };
+    logger.info('LLM cache cleared');
+  }
+
   return {
     execute,
     executeStream,
     getModels,
     isAvailable,
+    getCacheStats,
+    clearCache,
   };
 }

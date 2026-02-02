@@ -103,6 +103,29 @@ export const COMPUTE_PRICING: Record<ComputeService, ComputePricing> = {
 };
 
 // =============================================================================
+// PRIORITY
+// =============================================================================
+
+/** Priority level for compute requests */
+export type ComputePriority = 'low' | 'normal' | 'high' | 'urgent';
+
+/** Priority pricing multipliers */
+export const PRIORITY_MULTIPLIERS: Record<ComputePriority, number> = {
+  low: 0.8,      // 20% discount, processed last
+  normal: 1.0,   // Standard pricing
+  high: 1.5,     // 50% premium, faster processing
+  urgent: 2.5,   // 150% premium, highest priority
+};
+
+/** Priority queue order (higher = processed first) */
+export const PRIORITY_ORDER: Record<ComputePriority, number> = {
+  low: 0,
+  normal: 1,
+  high: 2,
+  urgent: 3,
+};
+
+// =============================================================================
 // REQUESTS & RESPONSES
 // =============================================================================
 
@@ -119,6 +142,8 @@ export interface ComputeRequest {
   paymentProof?: PaymentProof;
   /** Callback URL for async results */
   callbackUrl?: string;
+  /** Priority level (default: normal) */
+  priority?: ComputePriority;
   /** Metadata */
   meta?: Record<string, unknown>;
 }

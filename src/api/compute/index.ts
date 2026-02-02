@@ -12,7 +12,7 @@
  * No API keys needed - just a wallet.
  */
 
-export { createComputeGateway, type ComputeGateway, type ComputeGatewayConfig, type WalletBalance, type DepositResult, type UsageStats } from './gateway';
+export { createComputeGateway, type ComputeGateway, type ComputeGatewayConfig, type WalletBalance, type DepositResult, type UsageStats, type CostEstimate, type SpendingLimits, type SpendingLimitCheck, type AdminMetrics, type GatewayMetrics } from './gateway';
 export { createLLMService, type LLMService, type LLMServiceConfig, type LLMStreamChunk } from './llm';
 export { createCodeRunner, type CodeRunner, type CodeRunnerConfig } from './code';
 export { createWebScraper, type WebScraper, type WebScraperConfig } from './web';
