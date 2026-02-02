@@ -4891,7 +4891,7 @@ function buildTools(): ToolDefinition[] {
     },
     {
       name: 'swarm_buy',
-      description: 'Execute coordinated buy across up to 20 swarm wallets on Pump.fun.',
+      description: 'Execute coordinated buy across up to 20 swarm wallets. Supports Pump.fun (default), Bags.fm, and Meteora DLMM.',
       input_schema: {
         type: 'object',
         properties: {
@@ -4900,15 +4900,17 @@ function buildTools(): ToolDefinition[] {
           wallet_ids: { type: 'array', items: { type: 'string' }, description: 'Specific wallet IDs (optional)' },
           execution_mode: { type: 'string', enum: ['parallel', 'bundle', 'multi-bundle', 'sequential'], description: 'Execution mode: parallel (fastest), bundle (atomic ≤5), multi-bundle (atomic >5), sequential (stealthy)' },
           slippage_bps: { type: 'number', description: 'Slippage in basis points' },
-          pool: { type: 'string', description: 'Pool: pump, raydium, auto' },
+          pool: { type: 'string', description: 'Pool: pump, raydium, auto (for pumpfun only)' },
           preset: { type: 'string', description: 'Preset name to apply (fast, atomic, stealth, aggressive, safe, or custom)' },
+          dex: { type: 'string', enum: ['pumpfun', 'bags', 'meteora', 'auto'], description: 'DEX to use: pumpfun (default), bags (Bags.fm), meteora (DLMM), or auto' },
+          pool_address: { type: 'string', description: 'Specific pool address (for Meteora)' },
         },
         required: ['mint', 'amount_per_wallet'],
       },
     },
     {
       name: 'swarm_sell',
-      description: 'Execute coordinated sell across up to 20 swarm wallets on Pump.fun.',
+      description: 'Execute coordinated sell across up to 20 swarm wallets. Supports Pump.fun (default), Bags.fm, and Meteora DLMM.',
       input_schema: {
         type: 'object',
         properties: {
@@ -4917,8 +4919,10 @@ function buildTools(): ToolDefinition[] {
           wallet_ids: { type: 'array', items: { type: 'string' }, description: 'Specific wallet IDs (optional)' },
           execution_mode: { type: 'string', enum: ['parallel', 'bundle', 'multi-bundle', 'sequential'], description: 'Execution mode: parallel (fastest), bundle (atomic ≤5), multi-bundle (atomic >5), sequential (stealthy)' },
           slippage_bps: { type: 'number', description: 'Slippage in basis points' },
-          pool: { type: 'string', description: 'Pool: pump, raydium, auto' },
+          pool: { type: 'string', description: 'Pool: pump, raydium, auto (for pumpfun only)' },
           preset: { type: 'string', description: 'Preset name to apply (fast, atomic, stealth, aggressive, safe, or custom)' },
+          dex: { type: 'string', enum: ['pumpfun', 'bags', 'meteora', 'auto'], description: 'DEX to use: pumpfun (default), bags (Bags.fm), meteora (DLMM), or auto' },
+          pool_address: { type: 'string', description: 'Specific pool address (for Meteora)' },
         },
         required: ['mint', 'amount_per_wallet'],
       },
@@ -4988,6 +4992,8 @@ function buildTools(): ToolDefinition[] {
               executionMode: { type: 'string', enum: ['parallel', 'bundle', 'multi-bundle', 'sequential'], description: 'Execution mode' },
               walletIds: { type: 'array', items: { type: 'string' }, description: 'Wallet IDs for wallet_group presets' },
               amountVariancePct: { type: 'number', description: 'Random variance percentage for amounts' },
+              dex: { type: 'string', enum: ['pumpfun', 'bags', 'meteora', 'auto'], description: 'DEX to use: pumpfun (default), bags, meteora, auto' },
+              poolAddress: { type: 'string', description: 'Specific pool address (for Meteora)' },
             },
           },
           user_id: { type: 'string', description: 'User ID (optional, defaults to agent_user)' },

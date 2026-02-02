@@ -35,9 +35,29 @@ import {
   Strategy,
   StrategyResult,
 } from '../../../solana/swarm-strategies';
+import {
+  SwarmCopyTrader,
+  getSwarmCopyTrader,
+  CopyTarget,
+  CopyConfig,
+  CopyResult,
+} from '../../../solana/swarm-copytrade';
+import { Connection } from '@solana/web3.js';
 
 // Default user ID for CLI usage
 const CLI_USER_ID = 'cli_user';
+
+// Lazy-loaded copytrader instance
+let copyTraderInstance: SwarmCopyTrader | null = null;
+function getCopyTrader(): SwarmCopyTrader {
+  if (!copyTraderInstance) {
+    const swarm = getSwarm();
+    const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    copyTraderInstance = getSwarmCopyTrader(connection, swarm);
+  }
+  return copyTraderInstance;
+}
 
 // ============================================================================
 // Helpers
@@ -232,13 +252,17 @@ async function handleBuy(args: string[]): Promise<string> {
   --multi-bundle           Multiple Jito bundles in parallel (>5 wallets)
   --sequential             Sequential execution (staggered, stealthy)
   --slippage <bps>         Slippage tolerance (default: 500 = 5%)
-  --pool <pool>            Pool: pump, raydium, auto
+  --pool <pool>            Pool: pump, raydium, auto (pumpfun only)
+  --dex <dex>              DEX: pumpfun (default), bags, meteora
+  --pool-address <addr>    Specific pool address (for Meteora)
 
 **Examples:**
   /swarm buy ABC123... 0.1
   /swarm buy ABC123... 0.05 --wallets wallet_0,wallet_1
   /swarm buy ABC123... 0.1 --multi-bundle --slippage 1000
-  /swarm buy ABC123... 0.1 --preset stealth`;
+  /swarm buy ABC123... 0.1 --preset stealth
+  /swarm buy ABC123... 0.1 --dex bags
+  /swarm buy ABC123... 0.1 --dex meteora --pool-address <pool>`;
   }
 
   const mint = args[0];
@@ -258,6 +282,8 @@ async function handleBuy(args: string[]): Promise<string> {
   let slippageBps: number | undefined;
   let pool: string | undefined;
   let presetName: string | undefined;
+  let dex: 'pumpfun' | 'bags' | 'meteora' | 'auto' | undefined;
+  let poolAddress: string | undefined;
 
   for (let i = 2; i < args.length; i++) {
     if (args[i] === '--wallets' && args[i + 1]) {
@@ -276,6 +302,13 @@ async function handleBuy(args: string[]): Promise<string> {
       slippageBps = parseInt(args[++i]);
     } else if (args[i] === '--pool' && args[i + 1]) {
       pool = args[++i];
+    } else if (args[i] === '--dex' && args[i + 1]) {
+      const d = args[++i].toLowerCase();
+      if (d === 'pumpfun' || d === 'bags' || d === 'meteora' || d === 'auto') {
+        dex = d;
+      }
+    } else if ((args[i] === '--pool-address' || args[i] === '--pool_address') && args[i + 1]) {
+      poolAddress = args[++i];
     }
   }
 
@@ -296,6 +329,8 @@ async function handleBuy(args: string[]): Promise<string> {
     pool,
     executionMode,
     walletIds,
+    dex,
+    poolAddress,
   };
 
   // Apply preset if specified
@@ -315,6 +350,9 @@ async function handleBuy(args: string[]): Promise<string> {
   output += `Amount: **${formatSol(typeof params.amountPerWallet === 'number' ? params.amountPerWallet : parseFloat(params.amountPerWallet as string))} SOL** per wallet\n`;
   output += `Wallets: ${walletCount}\n`;
   output += `Max Total: ~${formatSol(totalSol)} SOL\n`;
+  if (params.dex && params.dex !== 'pumpfun') {
+    output += `DEX: **${params.dex}**\n`;
+  }
   if (presetName) {
     output += `Preset: **${presetName}**\n`;
   }
@@ -341,13 +379,16 @@ async function handleSell(args: string[]): Promise<string> {
   --multi-bundle           Multiple Jito bundles in parallel (>5 wallets)
   --sequential             Sequential execution (staggered, stealthy)
   --slippage <bps>         Slippage tolerance (default: 500 = 5%)
-  --pool <pool>            Pool: pump, raydium, auto
+  --pool <pool>            Pool: pump, raydium, auto (pumpfun only)
+  --dex <dex>              DEX: pumpfun (default), bags, meteora
+  --pool-address <addr>    Specific pool address (for Meteora)
 
 **Examples:**
   /swarm sell ABC123... 100%
   /swarm sell ABC123... 50% --multi-bundle
   /swarm sell ABC123... 1000000 --sequential
-  /swarm sell ABC123... 100% --preset stealth`;
+  /swarm sell ABC123... 100% --preset stealth
+  /swarm sell ABC123... 100% --dex bags`;
   }
 
   const mint = args[0];
@@ -359,6 +400,8 @@ async function handleSell(args: string[]): Promise<string> {
   let slippageBps: number | undefined;
   let pool: string | undefined;
   let presetName: string | undefined;
+  let dex: 'pumpfun' | 'bags' | 'meteora' | 'auto' | undefined;
+  let poolAddress: string | undefined;
 
   for (let i = 2; i < args.length; i++) {
     if (args[i] === '--wallets' && args[i + 1]) {
@@ -377,6 +420,13 @@ async function handleSell(args: string[]): Promise<string> {
       slippageBps = parseInt(args[++i]);
     } else if (args[i] === '--pool' && args[i + 1]) {
       pool = args[++i];
+    } else if (args[i] === '--dex' && args[i + 1]) {
+      const d = args[++i].toLowerCase();
+      if (d === 'pumpfun' || d === 'bags' || d === 'meteora' || d === 'auto') {
+        dex = d;
+      }
+    } else if ((args[i] === '--pool-address' || args[i] === '--pool_address') && args[i + 1]) {
+      poolAddress = args[++i];
     }
   }
 
@@ -392,6 +442,8 @@ async function handleSell(args: string[]): Promise<string> {
     pool,
     executionMode,
     walletIds,
+    dex,
+    poolAddress,
   };
 
   // Apply preset if specified
@@ -407,6 +459,9 @@ async function handleSell(args: string[]): Promise<string> {
   let output = `**Swarm Sell**\n\n`;
   output += `Token: \`${mint}\`\n`;
   output += `Amount: **${amountArg}** per wallet\n`;
+  if (params.dex && params.dex !== 'pumpfun') {
+    output += `DEX: **${params.dex}**\n`;
+  }
   if (presetName) {
     output += `Preset: **${presetName}**\n`;
   }
@@ -522,6 +577,8 @@ async function handlePresetSave(args: string[]): Promise<string> {
   let pool: 'pump' | 'raydium' | 'auto' | undefined;
   let executionMode: ExecutionMode | undefined;
   let walletIds: string[] | undefined;
+  let dex: 'pumpfun' | 'bags' | 'meteora' | 'auto' | undefined;
+  let poolAddress: string | undefined;
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -550,6 +607,13 @@ async function handlePresetSave(args: string[]): Promise<string> {
       }
     } else if (arg === '--wallets' && args[i + 1]) {
       walletIds = parseWalletIds(args[++i]);
+    } else if (arg === '--dex' && args[i + 1]) {
+      const d = args[++i].toLowerCase();
+      if (d === 'pumpfun' || d === 'bags' || d === 'meteora' || d === 'auto') {
+        dex = d;
+      }
+    } else if (arg === '--pool-address' && args[i + 1]) {
+      poolAddress = args[++i];
     } else if (arg === '--parallel') {
       executionMode = 'parallel';
     } else if (arg === '--bundle') {
@@ -569,9 +633,11 @@ async function handlePresetSave(args: string[]): Promise<string> {
   if (pool) config.pool = pool;
   if (executionMode) config.executionMode = executionMode;
   if (walletIds && walletIds.length > 0) config.walletIds = walletIds;
+  if (dex) config.dex = dex;
+  if (poolAddress) config.poolAddress = poolAddress;
 
   if (Object.keys(config).length === 0) {
-    return '❌ No configuration provided. Use --slippage, --mode, --pool, etc.';
+    return '❌ No configuration provided. Use --slippage, --mode, --pool, --dex, etc.';
   }
 
   const presetService = getSwarmPresetService();
@@ -1307,15 +1373,28 @@ Coordinate up to 20 wallets for synchronized trading.
   /swarm strategy list               List active strategies
   /swarm strategy cancel <id>        Cancel a running strategy
 
+**Copytrading (Amplified Wallet Following):**
+  /swarm copy add <address> [options]    Follow a wallet with all swarm wallets
+  /swarm copy list                       List copied wallets
+  /swarm copy remove <id>                Stop copying
+  /swarm copy stats [id]                 View copy statistics
+
 **Execution Modes:**
   --parallel      All wallets in parallel (fastest)
   --bundle        Single Jito bundle (atomic, max 5)
   --multi-bundle  Multiple Jito bundles (6-20 wallets)
   --sequential    Staggered execution (stealthy)
 
+**Multi-DEX Support:**
+  --dex pumpfun   Pump.fun via PumpPortal (default)
+  --dex bags      Bags.fm (requires BAGS_API_KEY)
+  --dex meteora   Meteora DLMM pools
+
 **Examples:**
   /swarm distribute 0.1                     # Send 0.1 SOL to each wallet
   /swarm buy ABC... 0.1 --preset stealth    # Buy with preset
+  /swarm buy ABC... 0.1 --dex bags          # Buy on Bags.fm
+  /swarm copy add 7xKX... --multiplier 2    # Copy wallet with 2x size
   /swarm stop-loss ABC... 0.00001 50        # Sell 50% if price drops
   /swarm strategy snipe ABC... 0.5 50 20    # Snipe with 50% TP, 20% SL`;
 }
@@ -1582,18 +1661,36 @@ Simulate a trade without executing. Shows what would happen.`;
 
 async function handleStopLoss(args: string[]): Promise<string> {
   if (args.length < 3) {
-    return `**Usage:** /swarm stop-loss <mint> <trigger_price> <sell_percent>
+    return `**Usage:** /swarm stop-loss <mint> <trigger_price> <sell_percent> [options]
 
 Set a stop loss that automatically sells when price drops.
 
+**Options:**
+  --dex <dex>           DEX to use: pumpfun (default), bags, meteora
+  --pool-address <addr> Specific pool address (for Meteora)
+
 **Examples:**
   /swarm stop-loss ABC... 0.00001 100    # Sell 100% if price drops to 0.00001
-  /swarm stop-loss ABC... 0.00002 50     # Sell 50% at 0.00002`;
+  /swarm stop-loss ABC... 0.00002 50 --dex bags    # Sell on Bags.fm`;
   }
 
   const mint = args[0];
   const triggerPrice = parseFloat(args[1]);
   const sellPercent = parseFloat(args[2]);
+
+  // Parse options
+  let dex: 'pumpfun' | 'bags' | 'meteora' | undefined;
+  let poolAddress: string | undefined;
+  for (let i = 3; i < args.length; i++) {
+    if (args[i] === '--dex' && args[i + 1]) {
+      const d = args[++i].toLowerCase();
+      if (d === 'pumpfun' || d === 'bags' || d === 'meteora') {
+        dex = d;
+      }
+    } else if (args[i] === '--pool-address' && args[i + 1]) {
+      poolAddress = args[++i];
+    }
+  }
 
   if (isNaN(triggerPrice) || triggerPrice <= 0) {
     return '❌ Invalid trigger price.';
@@ -1609,30 +1706,51 @@ Set a stop loss that automatically sells when price drops.
     triggerPrice,
     sellPercent,
     enabled: true,
+    dex,
+    poolAddress,
   });
 
   return `✅ **Stop Loss Set**
 
 Token: \`${mint.slice(0, 20)}...\`
 Trigger: ${triggerPrice}
-Sell: ${sellPercent}%
+Sell: ${sellPercent}%${dex ? `\nDEX: ${dex}` : ''}
 
 _Monitoring active. Will auto-sell if price drops to trigger._`;
 }
 
 async function handleTakeProfit(args: string[]): Promise<string> {
   if (args.length < 3) {
-    return `**Usage:** /swarm take-profit <mint> <trigger_price> <sell_percent>
+    return `**Usage:** /swarm take-profit <mint> <trigger_price> <sell_percent> [options]
 
 Set a take profit that automatically sells when price rises.
 
+**Options:**
+  --dex <dex>           DEX to use: pumpfun (default), bags, meteora
+  --pool-address <addr> Specific pool address (for Meteora)
+
 **Examples:**
-  /swarm take-profit ABC... 0.001 50     # Sell 50% when price hits 0.001`;
+  /swarm take-profit ABC... 0.001 50     # Sell 50% when price hits 0.001
+  /swarm take-profit ABC... 0.002 100 --dex bags    # Sell on Bags.fm`;
   }
 
   const mint = args[0];
   const triggerPrice = parseFloat(args[1]);
   const sellPercent = parseFloat(args[2]);
+
+  // Parse options
+  let dex: 'pumpfun' | 'bags' | 'meteora' | undefined;
+  let poolAddress: string | undefined;
+  for (let i = 3; i < args.length; i++) {
+    if (args[i] === '--dex' && args[i + 1]) {
+      const d = args[++i].toLowerCase();
+      if (d === 'pumpfun' || d === 'bags' || d === 'meteora') {
+        dex = d;
+      }
+    } else if (args[i] === '--pool-address' && args[i + 1]) {
+      poolAddress = args[++i];
+    }
+  }
 
   if (isNaN(triggerPrice) || triggerPrice <= 0) {
     return '❌ Invalid trigger price.';
@@ -1648,13 +1766,15 @@ Set a take profit that automatically sells when price rises.
     triggerPrice,
     sellPercent,
     enabled: true,
+    dex,
+    poolAddress,
   });
 
   return `✅ **Take Profit Set**
 
 Token: \`${mint.slice(0, 20)}...\`
 Trigger: ${triggerPrice}
-Sell: ${sellPercent}%
+Sell: ${sellPercent}%${dex ? `\nDEX: ${dex}` : ''}
 
 _Monitoring active. Will auto-sell if price rises to trigger._`;
 }
@@ -1736,21 +1856,39 @@ function parseInterval(str: string): number {
 
 async function handleDCA(args: string[]): Promise<string> {
   if (args.length < 4) {
-    return `**Usage:** /swarm dca <mint> <sol_per_interval> <interval> <count>
+    return `**Usage:** /swarm dca <mint> <sol_per_interval> <interval> <count> [options]
 
 Schedule DCA (Dollar Cost Averaging) buys.
 
 **Interval formats:** 30s, 5m, 1h, 1d
 
+**Options:**
+  --dex <dex>           DEX to use: pumpfun (default), bags, meteora
+  --pool-address <addr> Specific pool address (for Meteora)
+
 **Examples:**
   /swarm dca ABC... 0.05 1h 10    # Buy 0.05 SOL every hour, 10 times
-  /swarm dca ABC... 0.1 30m 20    # Buy 0.1 SOL every 30 min, 20 times`;
+  /swarm dca ABC... 0.1 30m 20 --dex bags    # DCA on Bags.fm`;
   }
 
   const mint = args[0];
   const amountPerInterval = parseFloat(args[1]);
   const intervalMs = parseInterval(args[2]);
   const totalIntervals = parseInt(args[3]);
+
+  // Parse options
+  let dex: 'pumpfun' | 'bags' | 'meteora' | undefined;
+  let poolAddress: string | undefined;
+  for (let i = 4; i < args.length; i++) {
+    if (args[i] === '--dex' && args[i + 1]) {
+      const d = args[++i].toLowerCase();
+      if (d === 'pumpfun' || d === 'bags' || d === 'meteora') {
+        dex = d;
+      }
+    } else if (args[i] === '--pool-address' && args[i + 1]) {
+      poolAddress = args[++i];
+    }
+  }
 
   if (isNaN(amountPerInterval) || amountPerInterval <= 0) {
     return '❌ Invalid amount.';
@@ -1771,6 +1909,8 @@ Schedule DCA (Dollar Cost Averaging) buys.
     intervalMs,
     totalIntervals,
     enabled: true,
+    dex,
+    poolAddress,
   });
 
   const totalSol = amountPerInterval * totalIntervals;
@@ -1782,7 +1922,7 @@ Token: \`${mint.slice(0, 20)}...\`
 Per interval: ${formatSol(amountPerInterval)} SOL
 Interval: ${args[2]}
 Count: ${totalIntervals}
-Total SOL: ${formatSol(totalSol)}
+Total SOL: ${formatSol(totalSol)}${dex ? `\nDEX: ${dex}` : ''}
 
 _First buy in ${args[2]}. Use \`/swarm dca-cancel ${config.id}\` to stop._`;
 }
@@ -1984,6 +2124,11 @@ export async function execute(args: string): Promise<string> {
       case 'strat':
         return await handleStrategy(rest);
 
+      // Copytrading
+      case 'copy':
+      case 'copytrade':
+        return await handleCopytrade(rest);
+
       case 'help':
       default:
         return await handleHelp();
@@ -1992,6 +2137,311 @@ export async function execute(args: string): Promise<string> {
     const msg = error instanceof Error ? error.message : String(error);
     return `❌ **Error:** ${msg}`;
   }
+}
+
+// ============================================================================
+// Copytrading Handlers
+// ============================================================================
+
+async function handleCopytrade(args: string[]): Promise<string> {
+  if (args.length === 0) {
+    return handleCopytradeHelp();
+  }
+
+  const [subCmd, ...rest] = args;
+
+  switch (subCmd.toLowerCase()) {
+    case 'add':
+      return await handleCopytradeAdd(rest);
+    case 'remove':
+    case 'rm':
+      return await handleCopytradeRemove(rest[0]);
+    case 'list':
+    case 'ls':
+      return handleCopytradeList();
+    case 'enable':
+      return handleCopytradeEnable(rest[0]);
+    case 'disable':
+      return handleCopytradeDisable(rest[0]);
+    case 'config':
+      return await handleCopytradeConfig(rest);
+    case 'stats':
+      return handleCopytradeStats(rest[0]);
+    default:
+      return handleCopytradeHelp();
+  }
+}
+
+function handleCopytradeHelp(): string {
+  return `**Swarm Copytrading**
+
+Follow wallets and replicate their trades across ALL your swarm wallets.
+
+**Commands:**
+  /swarm copy add <address> [options]   Add wallet to copy
+  /swarm copy remove <id>               Stop copying a wallet
+  /swarm copy list                      List copied wallets
+  /swarm copy enable <id>               Enable copying
+  /swarm copy disable <id>              Pause copying
+  /swarm copy config <id> [options]     Update copy settings
+  /swarm copy stats [id]                View copy statistics
+
+**Add Options:**
+  --name "Whale 1"         Friendly name
+  --multiplier <n>         Size multiplier (1.0 = same, 2.0 = 2x)
+  --max-sol <n>            Max SOL per trade (default: 1.0)
+  --min-sol <n>            Min SOL to copy (default: 0.01)
+  --delay <ms>             Delay before copying (stealth)
+  --buys-only              Only copy buys
+  --sells-only             Only copy sells
+  --dex <dex>              DEX for execution
+  --mode <mode>            Execution mode
+
+**Examples:**
+  /swarm copy add 7xKX...abc --name "Alpha Whale" --multiplier 0.5
+  /swarm copy add 9zYZ...xyz --buys-only --max-sol 0.5 --delay 1000
+  /swarm copy list
+  /swarm copy stats`;
+}
+
+async function handleCopytradeAdd(args: string[]): Promise<string> {
+  if (args.length === 0) {
+    return '❌ Usage: /swarm copy add <wallet_address> [options]';
+  }
+
+  const address = args[0];
+
+  // Parse options
+  let name: string | undefined;
+  let multiplier = 1.0;
+  let maxSolPerTrade = 1.0;
+  let minSolPerTrade = 0.01;
+  let delayMs = 0;
+  let copyBuys = true;
+  let copySells = true;
+  let dex: 'pumpfun' | 'bags' | 'meteora' | 'auto' | undefined;
+  let executionMode: 'parallel' | 'bundle' | 'multi-bundle' | 'sequential' | undefined;
+  let slippageBps = 500;
+
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--name' && args[i + 1]) {
+      name = args[++i];
+    } else if (arg === '--multiplier' && args[i + 1]) {
+      multiplier = parseFloat(args[++i]);
+    } else if (arg === '--max-sol' && args[i + 1]) {
+      maxSolPerTrade = parseFloat(args[++i]);
+    } else if (arg === '--min-sol' && args[i + 1]) {
+      minSolPerTrade = parseFloat(args[++i]);
+    } else if (arg === '--delay' && args[i + 1]) {
+      delayMs = parseInt(args[++i]);
+    } else if (arg === '--buys-only') {
+      copySells = false;
+    } else if (arg === '--sells-only') {
+      copyBuys = false;
+    } else if (arg === '--dex' && args[i + 1]) {
+      const d = args[++i].toLowerCase();
+      if (d === 'pumpfun' || d === 'bags' || d === 'meteora' || d === 'auto') {
+        dex = d;
+      }
+    } else if (arg === '--mode' && args[i + 1]) {
+      const m = args[++i].toLowerCase();
+      if (m === 'parallel' || m === 'bundle' || m === 'multi-bundle' || m === 'sequential') {
+        executionMode = m;
+      }
+    } else if (arg === '--slippage' && args[i + 1]) {
+      slippageBps = parseInt(args[++i]);
+    }
+  }
+
+  const copyTrader = getCopyTrader();
+  const target = copyTrader.addTarget(address, {
+    multiplier,
+    maxSolPerTrade,
+    minSolPerTrade,
+    delayMs,
+    copyBuys,
+    copySells,
+    dex,
+    executionMode,
+    slippageBps,
+  }, name);
+
+  return `✅ **Copytrading Target Added**
+
+ID: \`${target.id}\`
+Address: \`${address.slice(0, 20)}...\`${name ? `\nName: ${name}` : ''}
+Multiplier: ${multiplier}x
+Max per trade: ${maxSolPerTrade} SOL
+Copy: ${copyBuys && copySells ? 'Buys & Sells' : copyBuys ? 'Buys only' : 'Sells only'}
+Delay: ${delayMs}ms${dex ? `\nDEX: ${dex}` : ''}
+
+_Now monitoring for trades..._`;
+}
+
+async function handleCopytradeRemove(id: string): Promise<string> {
+  if (!id) {
+    return '❌ Usage: /swarm copy remove <id>';
+  }
+
+  const copyTrader = getCopyTrader();
+  const removed = copyTrader.removeTarget(id);
+
+  return removed
+    ? `✅ Removed copytrading target \`${id}\``
+    : `❌ Target \`${id}\` not found`;
+}
+
+function handleCopytradeList(): string {
+  const copyTrader = getCopyTrader();
+  const targets = copyTrader.listTargets();
+
+  if (targets.length === 0) {
+    return 'No copytrading targets. Add one with `/swarm copy add <address>`.';
+  }
+
+  let output = `**Copytrading Targets** (${targets.length})\n\n`;
+
+  for (const target of targets) {
+    const status = target.enabled ? '🟢' : '⏸️';
+    const addr = target.address.slice(0, 12) + '...';
+    output += `${status} **${target.name || addr}**\n`;
+    output += `   ID: \`${target.id}\`\n`;
+    output += `   Address: \`${target.address.slice(0, 20)}...\`\n`;
+    output += `   Multiplier: ${target.config.multiplier}x | Max: ${target.config.maxSolPerTrade} SOL\n`;
+    output += `   Trades: ${target.stats.totalTradesCopied} | PnL: ${formatSol(target.stats.pnlSol)} SOL\n\n`;
+  }
+
+  return output;
+}
+
+function handleCopytradeEnable(id: string): string {
+  if (!id) return '❌ Usage: /swarm copy enable <id>';
+
+  const copyTrader = getCopyTrader();
+  const enabled = copyTrader.enableTarget(id);
+
+  return enabled
+    ? `✅ Enabled copytrading for \`${id}\``
+    : `❌ Target \`${id}\` not found`;
+}
+
+function handleCopytradeDisable(id: string): string {
+  if (!id) return '❌ Usage: /swarm copy disable <id>';
+
+  const copyTrader = getCopyTrader();
+  const disabled = copyTrader.disableTarget(id);
+
+  return disabled
+    ? `⏸️ Paused copytrading for \`${id}\``
+    : `❌ Target \`${id}\` not found`;
+}
+
+async function handleCopytradeConfig(args: string[]): Promise<string> {
+  if (args.length < 2) {
+    return `**Usage:** /swarm copy config <id> [options]
+
+Update configuration for a copy target.
+
+**Options:**
+  --multiplier <n>    Size multiplier
+  --max-sol <n>       Max SOL per trade
+  --min-sol <n>       Min SOL to copy
+  --delay <ms>        Delay before copying
+  --buys <on|off>     Copy buys
+  --sells <on|off>    Copy sells
+  --dex <dex>         DEX for execution`;
+  }
+
+  const id = args[0];
+  const copyTrader = getCopyTrader();
+  const target = copyTrader.getTarget(id);
+
+  if (!target) {
+    return `❌ Target \`${id}\` not found`;
+  }
+
+  const config: Partial<CopyConfig> = {};
+
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--multiplier' && args[i + 1]) {
+      config.multiplier = parseFloat(args[++i]);
+    } else if (arg === '--max-sol' && args[i + 1]) {
+      config.maxSolPerTrade = parseFloat(args[++i]);
+    } else if (arg === '--min-sol' && args[i + 1]) {
+      config.minSolPerTrade = parseFloat(args[++i]);
+    } else if (arg === '--delay' && args[i + 1]) {
+      config.delayMs = parseInt(args[++i]);
+    } else if (arg === '--buys' && args[i + 1]) {
+      config.copyBuys = args[++i].toLowerCase() === 'on';
+    } else if (arg === '--sells' && args[i + 1]) {
+      config.copySells = args[++i].toLowerCase() === 'on';
+    } else if (arg === '--dex' && args[i + 1]) {
+      const d = args[++i].toLowerCase();
+      if (d === 'pumpfun' || d === 'bags' || d === 'meteora' || d === 'auto') {
+        config.dex = d;
+      }
+    }
+  }
+
+  copyTrader.updateTargetConfig(id, config);
+
+  return `✅ Updated config for \`${id}\`\n\n${JSON.stringify(config, null, 2)}`;
+}
+
+function handleCopytradeStats(id?: string): string {
+  const copyTrader = getCopyTrader();
+
+  if (id) {
+    const target = copyTrader.getTarget(id);
+    if (!target) {
+      return `❌ Target \`${id}\` not found`;
+    }
+
+    const stats = target.stats;
+    return `**Copytrade Stats: ${target.name || target.address.slice(0, 12)}**
+
+Total Trades: ${stats.totalTradesCopied}
+Successful: ${stats.successfulTrades}
+Failed: ${stats.failedTrades}
+Success Rate: ${stats.totalTradesCopied > 0 ? ((stats.successfulTrades / stats.totalTradesCopied) * 100).toFixed(1) : 0}%
+
+SOL Spent: ${formatSol(stats.totalSolSpent)}
+SOL Received: ${formatSol(stats.totalSolReceived)}
+**PnL: ${formatSol(stats.pnlSol)} SOL**
+
+Today: ${stats.todayTrades} trades, ${formatSol(stats.todaySol)} SOL${stats.lastTradeAt ? `\nLast trade: ${new Date(stats.lastTradeAt).toLocaleString()}` : ''}`;
+  }
+
+  // Aggregate stats
+  const targets = copyTrader.listTargets();
+  if (targets.length === 0) {
+    return 'No copytrading targets.';
+  }
+
+  let totalTrades = 0;
+  let totalSuccess = 0;
+  let totalSpent = 0;
+  let totalReceived = 0;
+
+  for (const t of targets) {
+    totalTrades += t.stats.totalTradesCopied;
+    totalSuccess += t.stats.successfulTrades;
+    totalSpent += t.stats.totalSolSpent;
+    totalReceived += t.stats.totalSolReceived;
+  }
+
+  const pnl = totalReceived - totalSpent;
+
+  return `**Copytrade Summary (${targets.length} targets)**
+
+Total Trades: ${totalTrades}
+Success Rate: ${totalTrades > 0 ? ((totalSuccess / totalTrades) * 100).toFixed(1) : 0}%
+
+SOL Spent: ${formatSol(totalSpent)}
+SOL Received: ${formatSol(totalReceived)}
+**Total PnL: ${formatSol(pnl)} SOL**`;
 }
 
 export default { execute };

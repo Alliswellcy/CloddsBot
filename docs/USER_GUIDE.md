@@ -160,6 +160,16 @@ Supported platforms:
 
 These are stored encrypted in the database and loaded at runtime.
 
+### Environment Variables for New Skills
+
+| Skill | Required Env Vars |
+|-------|-------------------|
+| Copy Trading (Solana) | `SOLANA_PRIVATE_KEY` |
+| Signal Trading | `SOLANA_PRIVATE_KEY` |
+| AI Strategy | `SOLANA_PRIVATE_KEY` |
+| Weather Betting | `POLY_API_KEY`, `POLY_API_SECRET` |
+| Pump.fun Swarm | `SOLANA_PRIVATE_KEY`, optionally `SOLANA_SWARM_KEY_1..20` |
+
 ## Risk management
 
 Use `/risk` to control guardrails:
@@ -436,7 +446,7 @@ Configure thresholds in `clodds.json`:
 }
 ```
 
-### Copy Trading
+### Copy Trading (Polymarket)
 
 Automatically mirror trades from successful wallets with automatic stop-loss and take-profit:
 
@@ -453,6 +463,164 @@ Automatically mirror trades from successful wallets with automatic stop-loss and
 - Positions are monitored every 5 seconds
 - Automatic exit when stop-loss or take-profit triggers
 - Notifications sent when positions are closed
+
+### Copy Trading (Solana)
+
+Monitor Solana wallets and automatically copy their trades using Jupiter aggregator:
+
+```
+/copy add <wallet> [--mult 1.0] [--max 0.5]   Follow a wallet
+/copy add 7xKXtg... --name "whale1"           With friendly name
+/copy remove <wallet>                          Stop following
+/copy list                                     List followed wallets
+/copy pause <wallet>                           Pause copying
+/copy resume <wallet>                          Resume copying
+/copy history [wallet]                         View trade history
+/copy stats                                    View overall stats
+/copy config <wallet> --mult 0.5               Update multiplier
+```
+
+**Configuration Options:**
+- `--mult <number>`: Position size multiplier (0.5 = half, 2.0 = double)
+- `--max <sol>`: Maximum SOL per trade (default: 0.5)
+- `--min <sol>`: Minimum trade to copy (default: 0.01)
+- `--delay <ms>`: Delay before copying (stealth mode)
+- `--slippage <bps>`: Slippage tolerance in basis points
+- `--buys-only` / `--sells-only`: Filter trade direction
+
+**Features:**
+- Real-time monitoring via Solana WebSocket
+- Auto-detects trades on Pump.fun, Raydium, Jupiter, Orca, Meteora
+- Configurable position sizing with multiplier and max cap
+- Trade history and P&L tracking
+
+### Signal Trading
+
+Monitor external signals from RSS feeds, Twitter, and webhooks to trigger automatic trades:
+
+```
+/signal add rss <url> --name "news"       Add RSS feed
+/signal add twitter whale_alert           Add Twitter/X account
+/signal add webhook --name "custom"       Get webhook URL
+/signal list                              List all sources
+/signal remove <id>                       Remove source
+/signal pause <id>                        Pause source
+/signal resume <id>                       Resume source
+/signal history [source]                  View signal history
+/signal filter <id> add keyword "pump" buy   Add filter rule
+/signal config <id> --amount 0.1         Set SOL per trade
+```
+
+**Signal Sources:**
+- **RSS Feeds**: Monitor any RSS/Atom feed (polls every 30s)
+- **Twitter/X**: Monitor tweets via Nitter proxy
+- **Webhooks**: Receive signals via HTTP POST
+
+**Filters:**
+- `keyword`: Match text content → action (buy/sell)
+- `sentiment`: Match bullish/bearish
+- `regex`: Custom regex patterns
+- `mint`: Match specific token address
+
+**Webhook payload:**
+```json
+{
+  "content": "Buy BONK now! 5BqXr...",
+  "author": "trader",
+  "secret": "your-secret"
+}
+```
+
+### AI Strategy
+
+Convert natural language descriptions into executable trading strategies:
+
+```
+/strategy "buy $100 of SOL if it drops 5%"
+/strategy "sell half my BONK when it hits $0.00003"
+/strategy "DCA $50 into JUP every hour for 12 hours"
+/strategy "set stop loss at 20% for my SOL position"
+/strategies                      List active strategies
+/strategy status <id>            Check strategy status
+/strategy cancel <id>            Cancel strategy
+/strategy templates              List templates
+/execute buy 0.5 SOL of TOKEN... Execute immediately
+```
+
+**Strategy Types:**
+- **Price Triggers**: Buy/sell when price crosses threshold
+- **DCA**: Dollar cost average over time intervals
+- **Take Profit / Stop Loss**: Automatic exit at targets
+- **Scale In/Out**: Buy/sell in tranches
+- **Ladder Orders**: Multiple orders at different price levels
+
+**Templates:** `dip-buy`, `take-profit`, `dca-daily`, `stop-loss`, `ladder-buy`, `scale-out`
+
+**Monitoring:** Strategies checked every 5 seconds via Jupiter/Birdeye prices.
+
+### Weather Betting
+
+Use NOAA weather forecasts to find edge on Polymarket weather markets:
+
+```
+/weather scan                    Scan all weather markets for edge
+/weather forecast "New York"     Get NOAA forecast
+/weather markets                 List active weather markets
+/weather edge <market-id>        Calculate edge for specific market
+/weather bet <market-id> 10      Execute $10 bet
+/weather auto --threshold 15     Auto-bet when edge >= 15%
+/weather history                 View bet history
+```
+
+**How It Works:**
+1. Fetch NOAA forecast (free, no API key)
+2. Match to Polymarket weather markets
+3. Compare NOAA probability to market YES price
+4. Bet if significant edge exists
+
+**Edge Calculation:**
+```
+Edge = NOAA Probability - Market Price
+Example: NOAA 80% rain, Market 65% → +15% edge → Bet YES
+```
+
+**Supported Market Types:** Temperature, precipitation, snow, record highs
+
+**Position Sizing:** Quarter-Kelly criterion, capped at 10% of bankroll.
+
+### Pump.fun Swarm Trading
+
+Coordinate up to 20 wallets for synchronized trades on Pump.fun tokens:
+
+```
+/swarm wallets                   List all swarm wallets
+/swarm balances                  Refresh SOL balances from chain
+/swarm enable <wallet_id>        Enable a wallet
+/swarm disable <wallet_id>       Disable a wallet
+/swarm buy <mint> 0.1            Buy 0.1 SOL on each wallet
+/swarm sell <mint> 100%          Sell all positions
+/swarm position <mint>           Show cached positions
+/swarm refresh <mint>            Fetch fresh positions
+/swarm preset list               List saved presets
+/swarm preset save <name>        Save a preset
+```
+
+**Execution Modes:**
+- `--parallel`: All wallets simultaneously (fastest)
+- `--bundle`: Jito bundle, all-or-nothing (≤5 wallets)
+- `--multi-bundle`: Multiple Jito bundles (6-20 wallets)
+- `--sequential`: Staggered 200-400ms delays (stealth)
+
+**Built-in Presets:** `fast`, `atomic`, `stealth`, `aggressive`, `safe`
+
+**Multi-DEX Support:** Pump.fun (default), Bags.fm (`--dex bags`), Meteora (`--dex meteora`)
+
+**Setup:**
+```bash
+export SOLANA_PRIVATE_KEY="wallet_0"
+export SOLANA_SWARM_KEY_1="wallet_1"
+# ... up to SOLANA_SWARM_KEY_20
+```
 
 ### Smart Order Routing
 

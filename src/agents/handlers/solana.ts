@@ -594,6 +594,8 @@ async function swarmBuyHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const slippageBps = toolInput.slippage_bps as number | undefined;
   const pool = toolInput.pool as string | undefined;
   const presetName = toolInput.preset as string | undefined;
+  const dex = toolInput.dex as 'pumpfun' | 'bags' | 'meteora' | 'auto' | undefined;
+  const poolAddress = toolInput.pool_address as string | undefined;
 
   return safeHandler(async () => {
     const { getSwarm } = await import('../../solana/pump-swarm');
@@ -605,6 +607,8 @@ async function swarmBuyHandler(toolInput: ToolInput): Promise<HandlerResult> {
     let finalPool = pool;
     let finalMode = executionMode;
     let finalWalletIds = walletIds;
+    let finalDex = dex;
+    let finalPoolAddress = poolAddress;
 
     // Apply preset if specified
     if (presetName) {
@@ -631,6 +635,8 @@ async function swarmBuyHandler(toolInput: ToolInput): Promise<HandlerResult> {
       pool: finalPool,
       executionMode: finalMode,
       walletIds: finalWalletIds,
+      dex: finalDex,
+      poolAddress: finalPoolAddress,
     });
 
     return {
@@ -641,6 +647,7 @@ async function swarmBuyHandler(toolInput: ToolInput): Promise<HandlerResult> {
       executionTimeMs: result.executionTimeMs,
       bundleIds: result.bundleIds,
       presetApplied: presetName,
+      dex: finalDex || 'pumpfun',
       walletResults: result.walletResults.map(wr => ({
         walletId: wr.walletId,
         success: wr.success,
@@ -659,6 +666,8 @@ async function swarmSellHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const slippageBps = toolInput.slippage_bps as number | undefined;
   const pool = toolInput.pool as string | undefined;
   const presetName = toolInput.preset as string | undefined;
+  const dex = toolInput.dex as 'pumpfun' | 'bags' | 'meteora' | 'auto' | undefined;
+  const poolAddress = toolInput.pool_address as string | undefined;
 
   return safeHandler(async () => {
     const { getSwarm } = await import('../../solana/pump-swarm');
@@ -670,6 +679,8 @@ async function swarmSellHandler(toolInput: ToolInput): Promise<HandlerResult> {
     let finalPool = pool;
     let finalMode = executionMode;
     let finalWalletIds = walletIds;
+    let finalDex = dex;
+    let finalPoolAddress = poolAddress;
 
     // Apply preset if specified
     if (presetName) {
@@ -696,6 +707,8 @@ async function swarmSellHandler(toolInput: ToolInput): Promise<HandlerResult> {
       pool: finalPool,
       executionMode: finalMode,
       walletIds: finalWalletIds,
+      dex: finalDex,
+      poolAddress: finalPoolAddress,
     });
 
     return {
@@ -706,6 +719,7 @@ async function swarmSellHandler(toolInput: ToolInput): Promise<HandlerResult> {
       executionTimeMs: result.executionTimeMs,
       bundleIds: result.bundleIds,
       presetApplied: presetName,
+      dex: finalDex || 'pumpfun',
       walletResults: result.walletResults.map(wr => ({
         walletId: wr.walletId,
         success: wr.success,

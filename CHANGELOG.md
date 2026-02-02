@@ -5,6 +5,86 @@ All notable changes to Clodds will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-02-02
+
+### Added
+
+#### Copy Trading (Solana)
+- Real-time Solana wallet monitoring via WebSocket (`connection.onLogs()`)
+- Auto-detect trades on 6 DEXes: Pump.fun, Raydium, Jupiter, Orca, Meteora, Bags
+- Configurable position sizing with multiplier and max cap
+- Trade execution via Jupiter aggregator (best route)
+- Trade history and P&L tracking
+- Stealth mode with configurable delay
+- New skill: `copy-trading-solana` with `/copy` commands
+
+#### Signal Trading
+- Monitor RSS feeds, Twitter/X accounts, and webhooks for trading signals
+- Auto-detect token mint addresses in signal content
+- Filter rules: keyword, sentiment (bullish/bearish), regex
+- Trade execution via Jupiter Swap API
+- Cooldown support to prevent spam trading
+- New skill: `signals` with `/signal` commands
+
+#### Weather Betting
+- NOAA weather forecast integration (free, no API key)
+- Polymarket weather market discovery via Gamma API
+- Edge calculation: NOAA probability vs market YES price
+- Quarter-Kelly position sizing (capped at 10% of bankroll)
+- Auto-bet mode with configurable edge threshold
+- Supported markets: temperature, precipitation, snow, record highs
+- New skill: `weather` with `/weather` commands
+
+#### AI Strategy
+- Natural language to executable trading strategies
+- Strategy types: price triggers, DCA, take-profit, stop-loss, scale in/out, ladder orders
+- Built-in templates: `dip-buy`, `take-profit`, `dca-daily`, `stop-loss`, `ladder-buy`, `scale-out`
+- Price monitoring every 5 seconds via Jupiter/Birdeye
+- Immediate execution mode with `/execute` command
+- New skill: `ai-strategy` with `/strategy` commands
+
+#### Pump.fun Swarm Enhancements
+- Multi-DEX support: Pump.fun, Bags.fm, Meteora DLMM
+- Preset system: save/load trading configurations (`/swarm preset`)
+- Built-in presets: `fast`, `atomic`, `stealth`, `aggressive`, `safe`
+- Multi-bundle mode for 6-20 wallets (chunks of 5 for Jito)
+- Sequential mode with 200-400ms delays (stealth)
+
+### Changed
+- Skills count increased from 80 to 84
+- Updated README.md and USER_GUIDE.md with new skill documentation
+
+## [0.3.3] - 2026-02-02
+
+### Added
+
+#### SPL Token Escrow
+- Full support for SPL token escrow (USDC, USDT, any SPL token)
+- Automatic creation of Associated Token Accounts (ATAs) when needed
+- Token balance tracking and full balance transfer on release/refund
+- Uses `@solana/spl-token` for proper token operations
+
+#### Oracle Conditions
+- **Pyth Network** price feed support for on-chain price data
+- **HTTP Oracle** support for any REST API price feed
+- JSON path extraction for nested API responses (e.g., `data.price`)
+- Built-in price feeds: BTC/USD, ETH/USD, SOL/USD, USDC/USD, MATIC/USD
+- Comparison operators: gt, lt, gte, lte, eq
+- Format: `pyth:BTC/USD:gt:50000` or `http:https://api.example.com:lt:100:data.price`
+
+#### Custom Conditions
+- Callback registry for custom escrow release/refund conditions
+- `registerCustomCondition()` - register handlers by name
+- `unregisterCustomCondition()` - remove handlers
+- `listCustomConditions()` - list registered handlers
+- Built-in conditions: `always_true`, `always_false`, `time_window`, `min_age`
+- Async handlers receive full escrow context
+
+### Improved
+
+- Better error messages for condition checks with debug logging
+- Escrow operations now support both native SOL and SPL tokens seamlessly
+
 ## [0.3.2] - 2026-02-02
 
 ### Security

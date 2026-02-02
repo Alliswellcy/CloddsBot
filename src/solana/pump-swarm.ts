@@ -62,6 +62,8 @@ export interface SwarmTradeParams {
   pool?: string;
   executionMode?: ExecutionMode; // User can specify
   walletIds?: string[];
+  dex?: 'pumpfun' | 'bags' | 'meteora' | 'auto'; // DEX to use (default: pumpfun)
+  poolAddress?: string; // Specific pool address (for Meteora)
 }
 
 export interface SwarmTradeResult {
@@ -150,6 +152,8 @@ export interface StopLossConfig {
   sellPercent: number;
   walletIds?: string[];
   enabled: boolean;
+  dex?: DexType;
+  poolAddress?: string;
 }
 
 export interface TakeProfitConfig {
@@ -158,6 +162,8 @@ export interface TakeProfitConfig {
   sellPercent: number;
   walletIds?: string[];
   enabled: boolean;
+  dex?: DexType;
+  poolAddress?: string;
 }
 
 export interface DCAConfig {
@@ -171,6 +177,8 @@ export interface DCAConfig {
   executionMode?: ExecutionMode;
   enabled: boolean;
   nextExecutionAt: number;
+  dex?: DexType;
+  poolAddress?: string;
 }
 
 export interface SimulationResult {
@@ -207,6 +215,18 @@ export interface RebalanceResult {
   }>;
   errors?: string[];
 }
+
+// ============================================================================
+// Builder Imports
+// ============================================================================
+
+import {
+  SwarmTransactionBuilder,
+  getBuilder,
+  BuilderOptions,
+  DexType,
+  SwarmWallet as BuilderSwarmWallet,
+} from './swarm-builders';
 
 // ============================================================================
 // Constants
@@ -920,33 +940,37 @@ export class PumpFunSwarm extends EventEmitter {
     params: SwarmTradeParams,
     amount: number
   ): Promise<VersionedTransaction | null> {
-    const apiKey = process.env.PUMPPORTAL_API_KEY;
-    const url = apiKey
-      ? `${PUMPPORTAL_API}/trade-local?api-key=${apiKey}`
-      : `${PUMPPORTAL_API}/trade-local`;
+    // Get the appropriate builder for the DEX
+    const dex: DexType = params.dex ?? 'pumpfun';
+    const builder = getBuilder(dex);
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        publicKey: wallet.publicKey,
-        action: params.action,
-        mint: params.mint,
-        amount: amount,
-        denominatedInSol: params.denominatedInSol ?? (params.action === 'buy'),
-        slippage: (params.slippageBps ?? this.config.defaultSlippageBps) / 100,
-        priorityFee: params.priorityFeeLamports ?? 10000,
-        pool: params.pool ?? 'auto',
-      }),
-    });
+    const options: BuilderOptions = {
+      slippageBps: params.slippageBps ?? this.config.defaultSlippageBps,
+      priorityFeeLamports: params.priorityFeeLamports,
+      poolAddress: params.poolAddress,
+      pool: params.pool,
+    };
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`PumpPortal ${response.status}: ${text.slice(0, 100)}`);
+    // Cast wallet to builder's expected type (they're compatible)
+    const builderWallet = wallet as unknown as BuilderSwarmWallet;
+
+    if (params.action === 'buy') {
+      return builder.buildBuyTransaction(
+        this.connection,
+        builderWallet,
+        params.mint,
+        amount,
+        options
+      );
+    } else {
+      return builder.buildSellTransaction(
+        this.connection,
+        builderWallet,
+        params.mint,
+        amount,
+        options
+      );
     }
-
-    const txData = await response.arrayBuffer();
-    return VersionedTransaction.deserialize(new Uint8Array(txData));
   }
 
   private async buildTipTransaction(wallet: SwarmWallet): Promise<VersionedTransaction> {
@@ -1307,7 +1331,8 @@ export class PumpFunSwarm extends EventEmitter {
    */
   async consolidateTokens(
     mint: string,
-    toWalletId: string = 'wallet_0'
+    toWalletId: string = 'wallet_0',
+    options?: { dex?: DexType; poolAddress?: string }
   ): Promise<ConsolidateResult> {
     const toWallet = this.wallets.get(toWalletId);
     if (!toWallet) {
@@ -1356,6 +1381,8 @@ export class PumpFunSwarm extends EventEmitter {
           amountPerWallet: tokenAmount,
           denominatedInSol: false,
           slippageBps: this.config.defaultSlippageBps,
+          dex: options?.dex,
+          poolAddress: options?.poolAddress,
         }, tokenAmount);
 
         if (sellResult.success) {
@@ -1449,6 +1476,10 @@ export class PumpFunSwarm extends EventEmitter {
     let totalPriceImpact = 0;
     let priceImpactCount = 0;
 
+    // Get the builder for the specified DEX
+    const dex: DexType = params.dex ?? 'pumpfun';
+    const builder = getBuilder(dex);
+
     for (const wallet of wallets) {
       try {
         const amount = this.calculateAmount(params.amountPerWallet, wallet, params.mint);
@@ -1457,45 +1488,45 @@ export class PumpFunSwarm extends EventEmitter {
           continue;
         }
 
-        // Get quote from PumpPortal API
-        const apiKey = process.env.PUMPPORTAL_API_KEY;
-        const url = apiKey
-          ? `${PUMPPORTAL_API}/quote?api-key=${apiKey}`
-          : `${PUMPPORTAL_API}/quote`;
+        // Use builder's getQuote if available, otherwise fallback to estimate
+        if (builder.getQuote) {
+          try {
+            const quoteResult = await builder.getQuote(
+              this.connection,
+              params.mint,
+              amount,
+              params.action === 'buy',
+              {
+                slippageBps: params.slippageBps ?? this.config.defaultSlippageBps,
+                poolAddress: params.poolAddress,
+                pool: params.pool,
+              }
+            );
 
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            publicKey: wallet.publicKey,
-            action: params.action,
-            mint: params.mint,
-            amount: amount,
-            denominatedInSol: params.denominatedInSol ?? (params.action === 'buy'),
-            slippage: (params.slippageBps ?? this.config.defaultSlippageBps) / 100,
-            pool: params.pool ?? 'auto',
-          }),
-        });
-
-        if (response.ok) {
-          const quoteData = await response.json() as {
-            inputAmount?: number;
-            outputAmount?: number;
-            priceImpact?: number;
-          };
-          const inputAmount = quoteData.inputAmount || amount;
-          const outputAmount = quoteData.outputAmount || 0;
-          const priceImpact = quoteData.priceImpact;
-
-          quotes.push({ walletId: wallet.id, inputAmount, outputAmount, priceImpact });
-          totalInput += inputAmount;
-          totalOutput += outputAmount;
-          if (priceImpact !== undefined) {
-            totalPriceImpact += priceImpact;
-            priceImpactCount++;
+            quotes.push({
+              walletId: wallet.id,
+              inputAmount: quoteResult.inputAmount,
+              outputAmount: quoteResult.outputAmount,
+              priceImpact: quoteResult.priceImpact,
+            });
+            totalInput += quoteResult.inputAmount;
+            totalOutput += quoteResult.outputAmount;
+            if (quoteResult.priceImpact !== undefined) {
+              totalPriceImpact += quoteResult.priceImpact;
+              priceImpactCount++;
+            }
+          } catch (quoteError) {
+            quotes.push({
+              walletId: wallet.id,
+              inputAmount: amount,
+              outputAmount: 0,
+              error: `Quote failed: ${quoteError instanceof Error ? quoteError.message : String(quoteError)}`,
+            });
+            totalInput += amount;
           }
         } else {
-          quotes.push({ walletId: wallet.id, inputAmount: amount, outputAmount: 0, error: `Quote failed: ${response.status}` });
+          // Builder doesn't support quotes, use input amount as estimate
+          quotes.push({ walletId: wallet.id, inputAmount: amount, outputAmount: 0, error: 'Quotes not supported for this DEX' });
           totalInput += amount;
         }
       } catch (e) {
@@ -1741,6 +1772,8 @@ export class PumpFunSwarm extends EventEmitter {
             amountPerWallet: `${slConfig.sellPercent}%`,
             walletIds: slConfig.walletIds,
             slippageBps: 1000, // Higher slippage for stop loss
+            dex: slConfig.dex,
+            poolAddress: slConfig.poolAddress,
           });
         }
 
@@ -1757,6 +1790,8 @@ export class PumpFunSwarm extends EventEmitter {
             amountPerWallet: `${tpConfig.sellPercent}%`,
             walletIds: tpConfig.walletIds,
             slippageBps: 500,
+            dex: tpConfig.dex,
+            poolAddress: tpConfig.poolAddress,
           });
         }
       } catch (e) {
@@ -1865,6 +1900,8 @@ export class PumpFunSwarm extends EventEmitter {
           denominatedInSol: true,
           walletIds: config.walletIds,
           executionMode: config.executionMode,
+          dex: config.dex,
+          poolAddress: config.poolAddress,
         });
 
         config.completedIntervals++;
@@ -1944,7 +1981,11 @@ export class PumpFunSwarm extends EventEmitter {
   /**
    * Rebalance token positions across wallets to target equal distribution
    */
-  async rebalance(mint: string, targetWalletIds?: string[]): Promise<RebalanceResult> {
+  async rebalance(
+    mint: string,
+    targetWalletIds?: string[],
+    options?: { dex?: DexType; poolAddress?: string }
+  ): Promise<RebalanceResult> {
     await this.refreshTokenPositions(mint);
 
     const wallets = targetWalletIds
@@ -2010,6 +2051,8 @@ export class PumpFunSwarm extends EventEmitter {
           amountPerWallet: Math.floor(excessAmount),
           denominatedInSol: false,
           slippageBps: this.config.defaultSlippageBps,
+          dex: options?.dex,
+          poolAddress: options?.poolAddress,
         }, Math.floor(excessAmount));
 
         if (sellResult.success) {
@@ -2026,6 +2069,8 @@ export class PumpFunSwarm extends EventEmitter {
               amountPerWallet: solToSpend,
               denominatedInSol: true,
               slippageBps: this.config.defaultSlippageBps,
+              dex: options?.dex,
+              poolAddress: options?.poolAddress,
             }, solToSpend);
 
             transfers.push({

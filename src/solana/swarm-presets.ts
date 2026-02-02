@@ -29,6 +29,10 @@ export interface SwarmPresetConfig {
   pool?: 'pump' | 'raydium' | 'auto';
   executionMode?: ExecutionMode;
 
+  // Multi-DEX support
+  dex?: 'pumpfun' | 'bags' | 'meteora' | 'auto';
+  poolAddress?: string;
+
   // Wallet selection
   walletIds?: string[];
 
@@ -357,6 +361,13 @@ export function createSwarmPresetService(): SwarmPresetService {
       }
       if (config.walletIds && config.walletIds.length > 0 && !result.walletIds) {
         result.walletIds = config.walletIds;
+      }
+      // Multi-DEX support
+      if (config.dex && !result.dex) {
+        result.dex = config.dex;
+      }
+      if (config.poolAddress && !result.poolAddress) {
+        result.poolAddress = config.poolAddress;
       }
 
       return result;

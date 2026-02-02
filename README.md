@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.3.4-blue" alt="Version">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node.js">
   <img src="https://img.shields.io/badge/typescript-5.3-blue" alt="TypeScript">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT License"></a>
@@ -774,7 +774,7 @@ Shortcuts: `/hl b` (balance), `/hl l` (long), `/hl s` (short), `/hl p` (price), 
 /compare eth 1 ETH to USDC       Compare Uniswap vs 1inch
 ```
 
-### Copy Trading
+### Copy Trading (Polymarket)
 ```
 /copy follow 0x1234...           Follow wallet
 /copy follow 0x1234... --size 100 Fixed $100 per trade
@@ -782,6 +782,63 @@ Shortcuts: `/hl b` (balance), `/hl l` (long), `/hl s` (short), `/hl p` (price), 
 /copy list                       List followed wallets
 /copy top 10                     Top 10 traders to copy
 /copy status                     Copy trading status
+```
+
+### Copy Trading (Solana)
+```
+/copy add <wallet> [--mult 1.0]  Follow Solana wallet
+/copy add <wallet> --max 0.5     Max SOL per trade
+/copy remove <wallet>            Stop following
+/copy list                       List followed wallets
+/copy pause <wallet>             Pause copying
+/copy resume <wallet>            Resume copying
+/copy history [wallet]           View trade history
+/copy stats                      Overall copy stats
+```
+
+### Signal Trading
+```
+/signal add rss <url>            Add RSS feed source
+/signal add twitter <username>   Add Twitter/X account
+/signal add webhook              Get webhook URL for custom signals
+/signal list                     List all signal sources
+/signal remove <id>              Remove source
+/signal pause <id>               Pause source
+/signal history [source]         View signal history
+/signal filter <id> add <rule>   Add filter rule (keyword, sentiment, regex)
+```
+
+### AI Strategy
+```
+/strategy "<description>"        Create from natural language
+/strategies                      List active strategies
+/strategy status <id>            Check strategy status
+/strategy cancel <id>            Cancel strategy
+/strategy templates              List available templates
+/execute buy 0.5 SOL of TOKEN... Execute trade immediately
+/execute sell all BONK           Immediate sell
+```
+
+### Weather Betting
+```
+/weather scan                    Scan weather markets for edge
+/weather forecast <city>         Get NOAA forecast
+/weather markets                 List active weather markets
+/weather edge <market-id>        Calculate edge for market
+/weather bet <market-id> <amt>   Execute bet
+/weather auto --threshold 10     Auto-bet on high-edge markets
+```
+
+### Pump.fun Swarm Trading
+```
+/swarm wallets                   List swarm wallets
+/swarm balances                  Refresh SOL balances
+/swarm buy <mint> <sol>          Buy with all enabled wallets
+/swarm sell <mint> <amount|%>    Sell from wallets
+/swarm position <mint>           Show cached positions
+/swarm refresh <mint>            Fetch fresh positions
+/swarm preset list               List saved presets
+/swarm preset save <name>        Save trading preset
 ```
 
 ### Whale Tracking
@@ -1253,7 +1310,7 @@ Shortcuts: `/hl b` (balance), `/hl l` (long), `/hl s` (short), `/hl p` (price), 
 
 ## Skills System
 
-### Bundled Skills (80)
+### Bundled Skills (84)
 
 **Trading & Markets**
 - `trading-polymarket` — Polymarket trading
@@ -1302,8 +1359,13 @@ Shortcuts: `/hl b` (balance), `/hl l` (long), `/hl s` (short), `/hl p` (price), 
 
 **Smart Trading**
 - `whale-tracking` — Multi-chain whale monitoring
-- `copy-trading` — Mirror whale trades
+- `copy-trading` — Mirror whale trades (Polymarket)
+- `copy-trading-solana` — Copy trade Solana wallets (/copy commands, real-time WebSocket, Jupiter execution)
 - `alerts` — Price and event alerts
+- `signals` — Signal trading from RSS, Twitter, webhooks (/signal commands)
+- `ai-strategy` — Natural language to trades (/strategy commands, DCA, triggers, stop-loss)
+- `weather` — Weather betting with NOAA data (/weather commands, Polymarket weather markets)
+- `pump-swarm` — Coordinated multi-wallet Pump.fun trading (/swarm commands, 20 wallets, Jito bundles)
 
 **Automation**
 - `automation` — Cron jobs, scheduling
@@ -1572,7 +1634,7 @@ docker compose up --build
 | Messaging Channels | **22** |
 | Prediction Markets | **9** |
 | AI Tools | **21** |
-| Skills | **80** |
+| Skills | **84** |
 | LLM Providers | **6** |
 | Solana DEX Protocols | **5** |
 | Trading Strategies | **3** |

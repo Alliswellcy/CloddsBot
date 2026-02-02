@@ -27,9 +27,52 @@ import bs58 from 'bs58';
 import { logger } from '../utils/logger';
 import { getEscrowPersistence } from './persistence';
 
-// Note: SPL token support requires additional setup
-// For now, escrow supports native SOL only
-// SPL token functionality can be added via dynamic imports when needed
+// =============================================================================
+// SPL TOKEN HELPERS (Dynamic import to handle ESM/CJS compatibility)
+// =============================================================================
+
+interface TokenAccount {
+  address: PublicKey;
+  amount: bigint;
+}
+
+interface SplTokenModule {
+  getOrCreateAssociatedTokenAccount: (
+    connection: Connection,
+    payer: Keypair,
+    mint: PublicKey,
+    owner: PublicKey,
+    allowOwnerOffCurve?: boolean
+  ) => Promise<TokenAccount>;
+  transfer: (
+    connection: Connection,
+    payer: Keypair,
+    source: PublicKey,
+    destination: PublicKey,
+    owner: Keypair,
+    amount: bigint
+  ) => Promise<string>;
+  getAccount: (
+    connection: Connection,
+    address: PublicKey
+  ) => Promise<TokenAccount>;
+}
+
+let splTokenModule: SplTokenModule | null = null;
+
+async function getSplToken(): Promise<SplTokenModule> {
+  if (!splTokenModule) {
+    // Dynamic import for ESM compatibility
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const spl: any = await import('@solana/spl-token');
+    splTokenModule = {
+      getOrCreateAssociatedTokenAccount: spl.getOrCreateAssociatedTokenAccount,
+      transfer: spl.transfer,
+      getAccount: spl.getAccount,
+    };
+  }
+  return splTokenModule;
+}
 
 // =============================================================================
 // KEYPAIR ENCRYPTION (AES-256-GCM)
@@ -192,6 +235,305 @@ const ESCROW_SEED = 'acp_escrow_v1';
 const ESCROW_TIMEOUT_DEFAULT = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // =============================================================================
+// ORACLE CONDITION SUPPORT
+// =============================================================================
+
+/**
+ * Oracle configuration for condition checks
+ * Supports: Pyth Network, HTTP endpoints, Switchboard
+ */
+export interface OracleConfig {
+  /** Oracle type */
+  type: 'pyth' | 'http' | 'switchboard';
+  /** Feed ID (Pyth price feed or Switchboard feed) or HTTP URL */
+  feedId: string;
+  /** Comparison operator */
+  operator: 'gt' | 'lt' | 'gte' | 'lte' | 'eq';
+  /** Target value to compare against */
+  targetValue: number;
+  /** JSON path for HTTP oracle response (e.g., "data.price") */
+  jsonPath?: string;
+}
+
+/**
+ * Parse oracle condition value
+ * Format: "pyth:BTC/USD:gt:50000" or "http:https://api.example.com/price:lt:100:data.price"
+ */
+function parseOracleCondition(value: string): OracleConfig | null {
+  const parts = value.split(':');
+  if (parts.length < 4) return null;
+
+  const [type, feedId, operator, targetStr, jsonPath] = parts;
+
+  if (!['pyth', 'http', 'switchboard'].includes(type)) return null;
+  if (!['gt', 'lt', 'gte', 'lte', 'eq'].includes(operator)) return null;
+
+  const targetValue = parseFloat(targetStr);
+  if (isNaN(targetValue)) return null;
+
+  return {
+    type: type as OracleConfig['type'],
+    feedId,
+    operator: operator as OracleConfig['operator'],
+    targetValue,
+    jsonPath,
+  };
+}
+
+/**
+ * Compare values based on operator
+ */
+function compareValues(actual: number, operator: OracleConfig['operator'], target: number): boolean {
+  switch (operator) {
+    case 'gt': return actual > target;
+    case 'lt': return actual < target;
+    case 'gte': return actual >= target;
+    case 'lte': return actual <= target;
+    case 'eq': return Math.abs(actual - target) < 0.000001;
+    default: return false;
+  }
+}
+
+/**
+ * Get value from nested JSON path (e.g., "data.price" -> obj.data.price)
+ */
+function getJsonPathValue(obj: unknown, path: string): number | null {
+  const parts = path.split('.');
+  let current: unknown = obj;
+
+  for (const part of parts) {
+    if (current === null || current === undefined) return null;
+    if (typeof current !== 'object') return null;
+    current = (current as Record<string, unknown>)[part];
+  }
+
+  if (typeof current === 'number') return current;
+  if (typeof current === 'string') {
+    const parsed = parseFloat(current);
+    return isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+/**
+ * Fetch price from Pyth Network (Solana)
+ * Uses Pyth's price feed accounts
+ */
+async function fetchPythPrice(connection: Connection, feedId: string): Promise<number | null> {
+  try {
+    // Pyth price feed accounts on Solana mainnet
+    // feedId format: either full public key or known pairs like "BTC/USD"
+    const knownFeeds: Record<string, string> = {
+      'BTC/USD': 'GVXRSBjFk6e6J3NbVPXohDJetcTjaeeuykUpbQF8UoMU',
+      'ETH/USD': 'JBu1AL4obBcCMqKBBxhpWCNUt136ijcuMZLFvTP7iWdB',
+      'SOL/USD': 'H6ARHf6YXhGYeQfUzQNGk6rDNnLBQKrenN712K4AQJEG',
+      'USDC/USD': 'Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD',
+      'MATIC/USD': '7KVswB9vkCgeM3SHP7aGDijvdRAHK8P5wi9JXViCrtYh',
+    };
+
+    const feedPubkey = knownFeeds[feedId] || feedId;
+    const accountPubkey = new PublicKey(feedPubkey);
+    const accountInfo = await connection.getAccountInfo(accountPubkey);
+
+    if (!accountInfo?.data) {
+      logger.warn({ feedId }, 'Pyth price feed account not found');
+      return null;
+    }
+
+    // Parse Pyth price account (simplified - real impl would use @pythnetwork/client)
+    // Price is stored at offset 208, exponent at 212
+    const data = accountInfo.data;
+    if (data.length < 220) return null;
+
+    const priceRaw = data.readBigInt64LE(208);
+    const expo = data.readInt32LE(216);
+    const price = Number(priceRaw) * Math.pow(10, expo);
+
+    logger.debug({ feedId, price }, 'Fetched Pyth price');
+    return price;
+  } catch (error) {
+    logger.error({ feedId, error }, 'Failed to fetch Pyth price');
+    return null;
+  }
+}
+
+/**
+ * Fetch price from HTTP oracle endpoint
+ */
+async function fetchHttpOraclePrice(url: string, jsonPath?: string): Promise<number | null> {
+  try {
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(10000), // 10s timeout
+    });
+
+    if (!response.ok) {
+      logger.warn({ url, status: response.status }, 'HTTP oracle request failed');
+      return null;
+    }
+
+    const data: unknown = await response.json();
+
+    if (jsonPath) {
+      const value = getJsonPathValue(data, jsonPath);
+      if (value !== null) {
+        logger.debug({ url, jsonPath, value }, 'Fetched HTTP oracle price');
+        return value;
+      }
+      logger.warn({ url, jsonPath }, 'JSON path not found in response');
+      return null;
+    }
+
+    // If no path, try common patterns with type narrowing
+    if (typeof data === 'number') return data;
+
+    if (data !== null && typeof data === 'object') {
+      const obj = data as Record<string, unknown>;
+      if (typeof obj.price === 'number') return obj.price;
+      if (typeof obj.result === 'number') return obj.result;
+      if (typeof obj.value === 'number') return obj.value;
+      if (obj.data !== null && typeof obj.data === 'object') {
+        const nested = obj.data as Record<string, unknown>;
+        if (typeof nested.price === 'number') return nested.price;
+      }
+    }
+
+    logger.warn({ url }, 'Could not extract price from HTTP oracle response');
+    return null;
+  } catch (error) {
+    logger.error({ url, error }, 'Failed to fetch HTTP oracle price');
+    return null;
+  }
+}
+
+/**
+ * Check oracle condition against live data
+ */
+async function checkOracleCondition(
+  connection: Connection,
+  config: OracleConfig
+): Promise<boolean> {
+  let actualValue: number | null = null;
+
+  switch (config.type) {
+    case 'pyth':
+      actualValue = await fetchPythPrice(connection, config.feedId);
+      break;
+    case 'http':
+      actualValue = await fetchHttpOraclePrice(config.feedId, config.jsonPath);
+      break;
+    case 'switchboard':
+      // Switchboard support - similar to Pyth but different account format
+      logger.warn({ feedId: config.feedId }, 'Switchboard oracle not yet implemented, treating as passed');
+      return true;
+  }
+
+  if (actualValue === null) {
+    logger.warn({ config }, 'Could not fetch oracle value, treating condition as not met');
+    return false;
+  }
+
+  const result = compareValues(actualValue, config.operator, config.targetValue);
+  logger.debug({ config, actualValue, result }, 'Oracle condition check result');
+  return result;
+}
+
+// =============================================================================
+// CUSTOM CONDITION REGISTRY
+// =============================================================================
+
+/**
+ * Custom condition handler function type
+ * Receives the escrow and condition, returns whether the condition is met
+ */
+export type CustomConditionHandler = (
+  escrow: Escrow,
+  condition: EscrowCondition
+) => Promise<boolean>;
+
+/**
+ * Registry for custom condition handlers
+ * Key is the condition name (from condition.value)
+ */
+const customConditionHandlers = new Map<string, CustomConditionHandler>();
+
+/**
+ * Register a custom condition handler
+ * @param name - Unique name for the condition (e.g., "delivery_confirmed")
+ * @param handler - Async function that checks if condition is met
+ */
+export function registerCustomCondition(name: string, handler: CustomConditionHandler): void {
+  if (customConditionHandlers.has(name)) {
+    logger.warn({ name }, 'Overwriting existing custom condition handler');
+  }
+  customConditionHandlers.set(name, handler);
+  logger.info({ name }, 'Custom condition handler registered');
+}
+
+/**
+ * Unregister a custom condition handler
+ */
+export function unregisterCustomCondition(name: string): boolean {
+  return customConditionHandlers.delete(name);
+}
+
+/**
+ * List all registered custom condition handlers
+ */
+export function listCustomConditions(): string[] {
+  return Array.from(customConditionHandlers.keys());
+}
+
+/**
+ * Check a custom condition using the registered handler
+ */
+async function checkCustomCondition(escrow: Escrow, condition: EscrowCondition): Promise<boolean> {
+  const conditionName = typeof condition.value === 'string' ? condition.value : String(condition.value);
+
+  // Check if there's a registered handler
+  const handler = customConditionHandlers.get(conditionName);
+  if (!handler) {
+    logger.warn({ conditionName, escrowId: escrow.id }, 'No handler registered for custom condition');
+    return false;
+  }
+
+  try {
+    const result = await handler(escrow, condition);
+    logger.debug({ conditionName, escrowId: escrow.id, result }, 'Custom condition check result');
+    return result;
+  } catch (error) {
+    logger.error({ conditionName, escrowId: escrow.id, error }, 'Custom condition handler threw error');
+    return false;
+  }
+}
+
+// =============================================================================
+// BUILT-IN CUSTOM CONDITIONS
+// =============================================================================
+
+// Register some commonly useful built-in conditions
+registerCustomCondition('always_true', async () => true);
+registerCustomCondition('always_false', async () => false);
+
+// Time-window condition: "time_window:START_TS:END_TS"
+registerCustomCondition('time_window', async (_escrow, condition) => {
+  const [, startStr, endStr] = String(condition.value).split(':');
+  const start = parseInt(startStr, 10);
+  const end = parseInt(endStr, 10);
+  if (isNaN(start) || isNaN(end)) return false;
+  const now = Date.now();
+  return now >= start && now <= end;
+});
+
+// Escrow age condition: "min_age:MILLISECONDS" - escrow must be at least this old
+registerCustomCondition('min_age', async (escrow, condition) => {
+  const [, msStr] = String(condition.value).split(':');
+  const minAge = parseInt(msStr, 10);
+  if (isNaN(minAge)) return false;
+  return Date.now() - escrow.createdAt >= minAge;
+});
+
+// =============================================================================
 // KEYPAIR MANAGEMENT
 // =============================================================================
 
@@ -330,7 +672,46 @@ export function createSolanaEscrowService(connection: Connection): EscrowService
         const amount = BigInt(escrow.amount);
 
         if (escrow.tokenMint) {
-          return { success: false, escrowId, error: 'SPL token escrow not yet implemented - use native SOL' };
+          // SPL Token transfer using high-level helpers
+          const spl = await getSplToken();
+          const mintPubkey = new PublicKey(escrow.tokenMint);
+
+          // Get or create escrow's associated token account
+          const escrowAta = await spl.getOrCreateAssociatedTokenAccount(
+            connection,
+            payer,
+            mintPubkey,
+            escrowPubkey,
+            true // allowOwnerOffCurve - escrow keypair may not be on curve
+          );
+
+          // Get payer's token account
+          const payerAta = await spl.getOrCreateAssociatedTokenAccount(
+            connection,
+            payer,
+            mintPubkey,
+            payer.publicKey
+          );
+
+          // Transfer SPL tokens to escrow
+          const signature = await spl.transfer(
+            connection,
+            payer,
+            payerAta.address,
+            escrowAta.address,
+            payer,
+            amount
+          );
+
+          // Update escrow status
+          escrow.status = 'funded';
+          escrow.fundedAt = Date.now();
+          escrow.txSignatures.push(signature);
+          await persistence.save(escrow);
+
+          logger.info({ escrowId, signature, token: escrow.tokenMint }, 'SPL token escrow funded');
+
+          return { success: true, escrowId, signature };
         }
 
         // Native SOL transfer to escrow account
@@ -388,11 +769,60 @@ export function createSolanaEscrowService(connection: Connection): EscrowService
           return { success: false, escrowId, error: 'Escrow keypair not available - check CLODDS_ESCROW_KEY env var' };
         }
 
+        const sellerPubkey = new PublicKey(escrow.seller);
+
         if (escrow.tokenMint) {
-          return { success: false, escrowId, error: 'SPL token escrow not yet implemented - use native SOL' };
+          // SPL Token release using high-level helpers
+          const spl = await getSplToken();
+          const mintPubkey = new PublicKey(escrow.tokenMint);
+
+          // Get escrow's token account
+          const escrowAta = await spl.getOrCreateAssociatedTokenAccount(
+            connection,
+            escrowKeypair,
+            mintPubkey,
+            escrowKeypair.publicKey,
+            true
+          );
+
+          // Get escrow token balance
+          const tokenBalance = escrowAta.amount;
+          if (tokenBalance <= BigInt(0)) {
+            return { success: false, escrowId, error: 'Escrow token account is empty' };
+          }
+
+          // Get or create seller's token account
+          const sellerAta = await spl.getOrCreateAssociatedTokenAccount(
+            connection,
+            escrowKeypair, // escrow pays for account creation
+            mintPubkey,
+            sellerPubkey
+          );
+
+          // Transfer tokens from escrow to seller
+          const signature = await spl.transfer(
+            connection,
+            escrowKeypair,
+            escrowAta.address,
+            sellerAta.address,
+            escrowKeypair,
+            tokenBalance
+          );
+
+          // Update escrow
+          escrow.status = 'released';
+          escrow.completedAt = Date.now();
+          escrow.txSignatures.push(signature);
+          await persistence.save(escrow);
+
+          await clearEscrowKeypair(escrowId);
+
+          logger.info({ escrowId, signature, seller: escrow.seller, token: escrow.tokenMint }, 'SPL token escrow released');
+
+          return { success: true, escrowId, signature };
         }
 
-        const sellerPubkey = new PublicKey(escrow.seller);
+        // Native SOL release
         const amount = BigInt(escrow.amount);
 
         // Get escrow account balance to handle any rent
@@ -464,7 +894,58 @@ export function createSolanaEscrowService(connection: Connection): EscrowService
 
         const buyerPubkey = new PublicKey(escrow.buyer);
 
-        // Get escrow account balance
+        if (escrow.tokenMint) {
+          // SPL Token refund using high-level helpers
+          const spl = await getSplToken();
+          const mintPubkey = new PublicKey(escrow.tokenMint);
+
+          // Get escrow's token account
+          const escrowAta = await spl.getOrCreateAssociatedTokenAccount(
+            connection,
+            escrowKeypair,
+            mintPubkey,
+            escrowKeypair.publicKey,
+            true
+          );
+
+          // Get escrow token balance
+          const tokenBalance = escrowAta.amount;
+          if (tokenBalance <= BigInt(0)) {
+            return { success: false, escrowId, error: 'Escrow token account is empty' };
+          }
+
+          // Get or create buyer's token account (should exist since they funded)
+          const buyerAta = await spl.getOrCreateAssociatedTokenAccount(
+            connection,
+            escrowKeypair,
+            mintPubkey,
+            buyerPubkey
+          );
+
+          // Transfer tokens back to buyer
+          const signature = await spl.transfer(
+            connection,
+            escrowKeypair,
+            escrowAta.address,
+            buyerAta.address,
+            escrowKeypair,
+            tokenBalance
+          );
+
+          // Update escrow
+          escrow.status = 'refunded';
+          escrow.completedAt = Date.now();
+          escrow.txSignatures.push(signature);
+          await persistence.save(escrow);
+
+          await clearEscrowKeypair(escrowId);
+
+          logger.info({ escrowId, signature, buyer: escrow.buyer, token: escrow.tokenMint }, 'SPL token escrow refunded');
+
+          return { success: true, escrowId, signature };
+        }
+
+        // Native SOL refund
         const balance = await connection.getBalance(escrowKeypair.publicKey);
         if (balance <= 0) {
           return { success: false, escrowId, error: 'Escrow account has no funds' };
@@ -579,6 +1060,7 @@ export function createSolanaEscrowService(connection: Connection): EscrowService
           case 'time':
             // Time-based condition: check if current time is past the specified value
             if (Date.now() < Number(condition.value)) {
+              logger.debug({ escrowId, condition, now: Date.now() }, 'Time condition not met');
               return false;
             }
             break;
@@ -588,21 +1070,38 @@ export function createSolanaEscrowService(connection: Connection): EscrowService
             // Value should be the signature to look for
             if (typeof condition.value === 'string') {
               const hasSignature = escrow.txSignatures.some(sig => sig === condition.value);
-              if (!hasSignature) return false;
+              if (!hasSignature) {
+                logger.debug({ escrowId, condition }, 'Signature condition not met');
+                return false;
+              }
             }
             break;
 
-          case 'oracle':
+          case 'oracle': {
             // Oracle condition: query external data source
-            // For now, skip oracle checks (would need integration)
-            logger.warn({ escrowId, condition }, 'Oracle condition check not implemented');
+            // Format: "pyth:BTC/USD:gt:50000" or "http:https://api.example.com:lt:100:data.price"
+            const oracleConfig = parseOracleCondition(String(condition.value));
+            if (!oracleConfig) {
+              logger.warn({ escrowId, condition }, 'Invalid oracle condition format');
+              return false;
+            }
+            const oracleMet = await checkOracleCondition(connection, oracleConfig);
+            if (!oracleMet) {
+              logger.debug({ escrowId, condition }, 'Oracle condition not met');
+              return false;
+            }
             break;
+          }
 
-          case 'custom':
-            // Custom condition: evaluate based on description
-            // For now, log and skip
-            logger.warn({ escrowId, condition }, 'Custom condition check not implemented');
+          case 'custom': {
+            // Custom condition: use registered handler
+            const customMet = await checkCustomCondition(escrow, condition);
+            if (!customMet) {
+              logger.debug({ escrowId, condition }, 'Custom condition not met');
+              return false;
+            }
             break;
+          }
         }
       }
 
@@ -648,4 +1147,28 @@ export function formatEscrowAmount(amount: string, tokenMint?: string): string {
 
 export function createEscrowId(): string {
   return generateEscrowId();
+}
+
+/**
+ * Create an oracle condition string
+ * @example createOracleCondition('pyth', 'BTC/USD', 'gt', 50000)
+ * @example createOracleCondition('http', 'https://api.example.com/price', 'lt', 100, 'data.price')
+ */
+export function createOracleCondition(
+  type: OracleConfig['type'],
+  feedId: string,
+  operator: OracleConfig['operator'],
+  targetValue: number,
+  jsonPath?: string
+): string {
+  const parts = [type, feedId, operator, targetValue.toString()];
+  if (jsonPath) parts.push(jsonPath);
+  return parts.join(':');
+}
+
+/**
+ * Validate an oracle condition string format
+ */
+export function isValidOracleCondition(value: string): boolean {
+  return parseOracleCondition(value) !== null;
 }

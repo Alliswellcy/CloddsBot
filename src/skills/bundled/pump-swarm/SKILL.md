@@ -72,7 +72,9 @@ export PUMPPORTAL_API_KEY="your-api-key"
 | `--preset <name>` | Apply a saved preset |
 | `--wallets <id1,id2>` | Use specific wallets only |
 | `--slippage <bps>` | Slippage tolerance (default: 500 = 5%) |
-| `--pool <pool>` | Pool: pump, raydium, auto |
+| `--pool <pool>` | Pool: pump, raydium, auto (pumpfun only) |
+| `--dex <dex>` | DEX: pumpfun (default), bags, meteora |
+| `--pool-address <addr>` | Specific pool address (for Meteora) |
 
 ## Examples
 
@@ -98,6 +100,11 @@ export PUMPPORTAL_API_KEY="your-api-key"
 # Check positions before selling
 /swarm refresh ABC123mint...
 /swarm position ABC123mint...
+
+# Multi-DEX examples
+/swarm buy ABC123mint... 0.1 --dex bags          # Buy on Bags.fm
+/swarm buy ABC123mint... 0.1 --dex meteora       # Buy on Meteora DLMM
+/swarm sell ABC123mint... 100% --dex bags        # Sell on Bags.fm
 ```
 
 ## Execution Modes Deep Dive
@@ -159,7 +166,41 @@ export PUMPPORTAL_API_KEY="your-api-key"
 | `SOLANA_PRIVATE_KEY` | Main wallet (wallet_0) |
 | `SOLANA_SWARM_KEY_1..20` | Additional swarm wallets |
 | `SOLANA_RPC_URL` | Custom RPC endpoint (faster = better) |
-| `PUMPPORTAL_API_KEY` | PumpPortal API key (optional, for trading) |
+| `PUMPPORTAL_API_KEY` | PumpPortal API key (optional, for pumpfun) |
+| `BAGS_API_KEY` | Bags.fm API key (required for bags DEX) |
+
+## Multi-DEX Support
+
+The swarm system supports trading across multiple DEXes:
+
+| DEX | Flag | Best For | Requires |
+|-----|------|----------|----------|
+| Pump.fun | `--dex pumpfun` (default) | Memecoins, new launches | `PUMPPORTAL_API_KEY` (optional) |
+| Bags.fm | `--dex bags` | Bags-launched tokens | `BAGS_API_KEY` |
+| Meteora | `--dex meteora` | DLMM pools, concentrated liquidity | - |
+
+### Multi-DEX Examples
+
+```bash
+# Buy on Pump.fun (default)
+/swarm buy ABC123... 0.1
+
+# Buy on Bags.fm
+/swarm buy ABC123... 0.1 --dex bags
+
+# Buy on Meteora with specific pool
+/swarm buy ABC123... 0.1 --dex meteora --pool-address <pool_address>
+
+# Sell on Bags.fm with stealth preset
+/swarm sell ABC123... 100% --dex bags --preset stealth
+```
+
+### Notes
+- Default DEX is `pumpfun` for backward compatibility
+- Bags requires `BAGS_API_KEY` - will error if missing
+- Meteora can auto-discover pools or use a specific `--pool-address`
+- All execution modes (parallel, bundle, sequential) work with all DEXes
+- Presets work with all DEXes
 
 ## Agent Tools (12)
 

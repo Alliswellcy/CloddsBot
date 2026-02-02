@@ -63,6 +63,8 @@ export interface StepParams {
   slippageBps?: number;
   pool?: 'pump' | 'raydium' | 'auto';
   executionMode?: 'parallel' | 'bundle' | 'multi-bundle' | 'sequential';
+  dex?: 'pumpfun' | 'bags' | 'meteora' | 'auto';
+  poolAddress?: string;
 }
 
 export interface StepResult {
@@ -102,6 +104,8 @@ export interface StrategyConfig {
   walletIds?: string[];
   walletAllocation?: Map<string, number>;
   priceCheckIntervalMs?: number;
+  dex?: 'pumpfun' | 'bags' | 'meteora' | 'auto';
+  poolAddress?: string;
 }
 
 export type StrategyStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
@@ -653,6 +657,8 @@ export class StrategyExecutor extends EventEmitter {
             pool: step.params.pool || strategy.config.defaultPool,
             executionMode: step.params.executionMode,
             walletIds: step.params.walletIds || strategy.config.walletIds,
+            dex: step.params.dex || strategy.config.dex,
+            poolAddress: step.params.poolAddress || strategy.config.poolAddress,
           });
           result.success = buyResult.success;
           result.solAmount = buyResult.totalSolSpent;
@@ -670,6 +676,8 @@ export class StrategyExecutor extends EventEmitter {
             pool: step.params.pool || strategy.config.defaultPool,
             executionMode: step.params.executionMode,
             walletIds: step.params.walletIds || strategy.config.walletIds,
+            dex: step.params.dex || strategy.config.dex,
+            poolAddress: step.params.poolAddress || strategy.config.poolAddress,
           });
           result.success = sellResult.success;
           result.solAmount = sellResult.totalSolReceived;
@@ -824,6 +832,8 @@ export interface SwarmTradeParams {
   pool?: string;
   executionMode?: string;
   walletIds?: string[];
+  dex?: 'pumpfun' | 'bags' | 'meteora' | 'auto';
+  poolAddress?: string;
 }
 
 export interface SwarmTradeResult {
