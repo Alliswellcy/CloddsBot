@@ -75,3 +75,4 @@ CLAWDBOT_ARCHITECTURE.md
 # Temp files
 *.bak
 *~
+src/api/server.ts
