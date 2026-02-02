@@ -6,6 +6,7 @@
  */
 
 import { logger } from '../../utils/logger';
+import { generateId as generateSecureId } from '../../utils/id';
 
 export interface OpenProseConfig {
   enabled: boolean;
@@ -84,7 +85,7 @@ export async function createOpenProseExtension(config: OpenProseConfig): Promise
   const maxHistoryEntries = config.maxHistoryEntries || 100;
 
   function generateId(): string {
-    return `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return generateSecureId('doc');
   }
 
   function addToHistory(docId: string, doc: Document, message?: string): void {

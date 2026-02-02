@@ -6,6 +6,7 @@
  */
 
 import { logger } from '../../utils/logger';
+import { generateId as generateSecureId } from '../../utils/id';
 import * as path from 'path';
 
 export interface LanceDBConfig {
@@ -179,7 +180,7 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
   }
 
   function generateId(): string {
-    return `mem_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    return generateSecureId('mem');
   }
 
   const extension: LanceDBExtension = {

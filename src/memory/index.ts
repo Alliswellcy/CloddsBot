@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Database } from '../db/index';
 import { logger } from '../utils/logger';
+import { generateId } from '../utils/id';
 import { createEmbeddingsService, EmbeddingsService, EmbeddingConfig, EmbeddingVector } from '../embeddings/index';
 import { createHybridSearchService, HybridSearchService } from '../search/index';
 
@@ -136,10 +137,7 @@ export interface MemoryService {
   cleanup(): number;
 }
 
-/** Generate a unique ID */
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
-}
+/** Generate a unique ID - uses imported generateId from utils/id */
 
 /** Get today's date in YYYY-MM-DD format */
 function getToday(): string {

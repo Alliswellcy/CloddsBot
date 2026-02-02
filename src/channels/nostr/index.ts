@@ -11,6 +11,7 @@ import * as secp256k1 from '@noble/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { logger } from '../../utils/logger';
+import { generateShortId } from '../../utils/id';
 import type { ChannelCallbacks, ChannelAdapter } from '../index';
 import type { OutgoingMessage, IncomingMessage } from '../../types';
 import type { PairingService } from '../../pairing/index';
@@ -239,7 +240,7 @@ export async function createNostrChannel(
       logger.info({ relay: url }, 'Connected to Nostr relay');
 
       // Subscribe to DMs and mentions
-      const subId = 'clodds-' + Math.random().toString(36).slice(2);
+      const subId = 'clodds-' + generateShortId(8);
       ws.send(
         JSON.stringify([
           'REQ',

@@ -6,6 +6,7 @@
  */
 
 import { logger } from '../../utils/logger';
+import { generateId as generateSecureId } from '../../utils/id';
 
 export interface LLMTaskConfig {
   enabled: boolean;
@@ -96,7 +97,7 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
   let isRunning = false;
 
   function generateId(): string {
-    return `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return generateSecureId('task');
   }
 
   async function processTask(taskId: string): Promise<void> {

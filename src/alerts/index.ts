@@ -11,6 +11,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { logger } from '../utils/logger';
+import { generateId } from '../utils/id';
 import { Database } from '../db/index';
 import type { ChannelManager } from '../channels/index';
 
@@ -253,8 +254,8 @@ export function createAlertService(
     }
   }
 
-  function generateId(): string {
-    return `alert_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  function makeId(): string {
+    return generateId('alert');
   }
 
   function saveAlert(alert: Alert): void {
@@ -419,7 +420,7 @@ export function createAlertService(
   Object.assign(emitter, {
     createPriceAlert(params) {
       const alert: Alert = {
-        id: generateId(),
+        id: makeId(),
         userId: params.userId,
         platform: params.platform,
         marketId: params.marketId,
@@ -442,7 +443,7 @@ export function createAlertService(
 
     createPriceChangeAlert(params) {
       const alert: Alert = {
-        id: generateId(),
+        id: makeId(),
         userId: params.userId,
         platform: params.platform,
         marketId: params.marketId,
@@ -467,7 +468,7 @@ export function createAlertService(
 
     createVolumeAlert(params) {
       const alert: Alert = {
-        id: generateId(),
+        id: makeId(),
         userId: params.userId,
         platform: params.platform,
         marketId: params.marketId,

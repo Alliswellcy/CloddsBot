@@ -1,15 +1,14 @@
-FROM node:20-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
 
 COPY package.json package-lock.json tsconfig.json ./
 COPY src ./src
-COPY trading ./trading
 
 RUN npm ci
 RUN npm run build
 
-FROM node:20-bookworm-slim AS runner
+FROM node:22-bookworm-slim AS runner
 
 WORKDIR /app
 
@@ -21,12 +20,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/trading ./trading
-
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 python3-pip \
-  && pip3 install --no-cache-dir -r /app/trading/requirements.txt \
-  && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /data /data/workspace \
   && chown -R node:node /data
@@ -34,5 +27,8 @@ RUN mkdir -p /data /data/workspace \
 USER node
 
 EXPOSE 18789
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD node -e "fetch('http://localhost:18789/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 CMD ["node", "dist/index.js"]

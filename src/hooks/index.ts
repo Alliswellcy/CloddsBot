@@ -18,6 +18,7 @@ import { EventEmitter } from 'eventemitter3';
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync, appendFileSync, statSync, renameSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
+import { generateId as generateSecureId } from '../utils/id';
 import { logger } from '../utils/logger';
 import type { IncomingMessage, OutgoingMessage, Session } from '../types';
 
@@ -759,7 +760,7 @@ export function createHooksService(): HooksService {
     event: HookEvent,
     partialCtx: Partial<HookContext>
   ): { ctx: HookContext; runId: string; controller: AbortController } {
-    const runId = `hookrun_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const runId = generateSecureId('hookrun');
     const controller = new AbortController();
     const ctx: HookContext = {
       event,
@@ -792,7 +793,7 @@ export function createHooksService(): HooksService {
   ): void {
     if (!tracingEnabled) return;
     const entry: HookTraceEntry = {
-      id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: generateSecureId('trace'),
       hookId: hook.id,
       hookName: hook.name,
       event,

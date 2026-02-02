@@ -11,6 +11,7 @@
  */
 
 import { logger } from '../utils/logger';
+import { generateId as generateSecureId } from '../utils/id';
 import type { WebSocket } from 'ws';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
@@ -240,7 +241,7 @@ export function createNodesTool(): NodesTool {
 
   /** Generate request ID */
   function generateRequestId(): string {
-    return Date.now().toString(36) + Math.random().toString(36).slice(2);
+    return generateSecureId('req');
   }
 
   /** Send request to node and wait for response */

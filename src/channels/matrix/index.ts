@@ -9,6 +9,7 @@
  */
 
 import { logger } from '../../utils/logger';
+import { generateShortId } from '../../utils/id';
 import type { ChannelAdapter, ChannelCallbacks } from '../index';
 import type { IncomingMessage, OutgoingMessage, MessageAttachment } from '../../types';
 import type { PairingService } from '../../pairing/index';
@@ -374,7 +375,7 @@ export async function createMatrixChannel(
       return null;
     }
 
-    const txnId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    const txnId = generateShortId(12);
     const content = buildMatrixTextContent(message.text);
 
     const response = await matrixApi<{ event_id?: string }>(
@@ -417,7 +418,7 @@ export async function createMatrixChannel(
     },
 
     async editMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
-      const txnId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      const txnId = generateShortId(12);
       const content = buildMatrixEditContent(message.text, message.messageId);
 
       await matrixApi(
@@ -428,7 +429,7 @@ export async function createMatrixChannel(
     },
 
     async deleteMessage(message: OutgoingMessage & { messageId: string }): Promise<void> {
-      const txnId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      const txnId = generateShortId(12);
       await matrixApi(
         'PUT',
         `/rooms/${encodeURIComponent(message.chatId)}/redact/${encodeURIComponent(message.messageId)}/${txnId}`,

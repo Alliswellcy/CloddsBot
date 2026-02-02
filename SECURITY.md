@@ -97,9 +97,29 @@ All npm vulnerabilities have been fixed using npm overrides:
 
 Run `npm audit` to verify: **0 vulnerabilities**
 
-### Sandbox Limitations
+### Sandbox & Dynamic Code Execution
 
-The `createSandbox()` function in `src/security/index.ts` is NOT a secure sandbox. It should only be used for trusted code. For untrusted code execution, use Docker containers or `isolated-vm`.
+The following features are **disabled by default** for security:
+
+| Feature | Environment Variable | Default |
+|---------|---------------------|---------|
+| JavaScript sandbox | `ALLOW_UNSAFE_SANDBOX` | `false` |
+| Canvas JS eval | `CANVAS_ALLOW_JS_EVAL` | `false` |
+
+Only enable these if you understand the risks. For untrusted code execution, use Docker containers or `isolated-vm`.
+
+### Rate Limiting & HTTPS
+
+Production deployments should enable:
+
+```bash
+# IP-based rate limiting (requests per minute)
+CLODDS_IP_RATE_LIMIT=100
+
+# HTTPS enforcement
+CLODDS_FORCE_HTTPS=true
+CLODDS_HSTS_ENABLED=true
+```
 
 ## Security Audit
 

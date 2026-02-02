@@ -6,6 +6,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { spawn, spawnSync, ChildProcess, execSync, execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
+import { generateId as generateSecureId } from '../utils/id';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
@@ -6759,6 +6760,490 @@ function buildTools(): ToolDefinition[] {
           percent: { type: 'number', description: 'Progress percent (0-100)' },
         },
         required: ['id'],
+      },
+    },
+    // ========================================================================
+    // ACP - Agent Commerce Protocol
+    // ========================================================================
+    {
+      name: 'acp_register_agent',
+      description: 'Register a new agent in the ACP registry for service discovery.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Agent name' },
+          address: { type: 'string', description: 'Solana wallet address' },
+          description: { type: 'string', description: 'Agent description' },
+        },
+        required: ['name', 'address'],
+      },
+    },
+    {
+      name: 'acp_list_service',
+      description: 'List a service under an agent for others to discover and use.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agent_id: { type: 'string', description: 'Agent ID to list service under' },
+          name: { type: 'string', description: 'Service name' },
+          category: {
+            type: 'string',
+            description: 'Service category',
+            enum: ['compute', 'data', 'analytics', 'trading', 'content', 'research', 'automation', 'other'],
+          },
+          price: { type: 'string', description: 'Price per request' },
+          currency: { type: 'string', description: 'Currency (SOL, USDC)', enum: ['SOL', 'USDC'] },
+          description: { type: 'string', description: 'Service description' },
+        },
+        required: ['agent_id', 'name'],
+      },
+    },
+    {
+      name: 'acp_get_agent',
+      description: 'Get details about a registered agent.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agent_id: { type: 'string', description: 'Agent ID' },
+        },
+        required: ['agent_id'],
+      },
+    },
+    {
+      name: 'acp_search_services',
+      description: 'Search for services in the ACP registry.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          category: {
+            type: 'string',
+            description: 'Filter by category',
+            enum: ['compute', 'data', 'analytics', 'trading', 'content', 'research', 'automation', 'other'],
+          },
+          max_price: { type: 'string', description: 'Maximum price' },
+          min_rating: { type: 'number', description: 'Minimum rating (1-5)' },
+          query: { type: 'string', description: 'Search query' },
+        },
+      },
+    },
+    {
+      name: 'acp_discover',
+      description: 'Discover and rank services based on your needs using AI scoring.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          need: { type: 'string', description: 'What you need (e.g., "image generation", "price data")' },
+          buyer_address: { type: 'string', description: 'Your Solana address' },
+          max_price: { type: 'string', description: 'Maximum price willing to pay' },
+        },
+        required: ['need', 'buyer_address'],
+      },
+    },
+    {
+      name: 'acp_quick_hire',
+      description: 'Auto-negotiate and create agreement with best matching service.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          need: { type: 'string', description: 'What you need' },
+          buyer_address: { type: 'string', description: 'Your Solana address' },
+          max_price: { type: 'string', description: 'Maximum price' },
+        },
+        required: ['need', 'buyer_address'],
+      },
+    },
+    {
+      name: 'acp_create_agreement',
+      description: 'Create a service agreement between buyer and seller.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Agreement title' },
+          buyer: { type: 'string', description: 'Buyer Solana address' },
+          seller: { type: 'string', description: 'Seller Solana address' },
+          price: { type: 'string', description: 'Agreement price' },
+          currency: { type: 'string', description: 'Currency (SOL, USDC)', enum: ['SOL', 'USDC'] },
+          description: { type: 'string', description: 'Agreement description' },
+        },
+        required: ['title', 'buyer', 'seller', 'price'],
+      },
+    },
+    {
+      name: 'acp_sign_agreement',
+      description: 'Sign an agreement with your private key.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agreement_id: { type: 'string', description: 'Agreement ID' },
+          private_key: { type: 'string', description: 'Base58 encoded private key' },
+        },
+        required: ['agreement_id', 'private_key'],
+      },
+    },
+    {
+      name: 'acp_get_agreement',
+      description: 'Get agreement details.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agreement_id: { type: 'string', description: 'Agreement ID' },
+        },
+        required: ['agreement_id'],
+      },
+    },
+    {
+      name: 'acp_list_agreements',
+      description: 'List all agreements for an address.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          address: { type: 'string', description: 'Solana address' },
+        },
+        required: ['address'],
+      },
+    },
+    {
+      name: 'acp_create_escrow',
+      description: 'Create an on-chain escrow for secure payment.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          buyer: { type: 'string', description: 'Buyer Solana address' },
+          seller: { type: 'string', description: 'Seller Solana address' },
+          amount: { type: 'string', description: 'Amount in lamports' },
+          arbiter: { type: 'string', description: 'Optional arbiter address for disputes' },
+          rpc_url: { type: 'string', description: 'Solana RPC URL' },
+        },
+        required: ['buyer', 'seller', 'amount'],
+      },
+    },
+    {
+      name: 'acp_fund_escrow',
+      description: 'Fund an escrow (buyer only).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          escrow_id: { type: 'string', description: 'Escrow ID' },
+          private_key: { type: 'string', description: 'Buyer private key (base58)' },
+        },
+        required: ['escrow_id', 'private_key'],
+      },
+    },
+    {
+      name: 'acp_release_escrow',
+      description: 'Release escrow funds to seller (buyer or arbiter).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          escrow_id: { type: 'string', description: 'Escrow ID' },
+          private_key: { type: 'string', description: 'Buyer or arbiter private key (base58)' },
+        },
+        required: ['escrow_id', 'private_key'],
+      },
+    },
+    {
+      name: 'acp_refund_escrow',
+      description: 'Refund escrow to buyer (seller, expired buyer, or arbiter).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          escrow_id: { type: 'string', description: 'Escrow ID' },
+          private_key: { type: 'string', description: 'Authorized party private key (base58)' },
+        },
+        required: ['escrow_id', 'private_key'],
+      },
+    },
+    {
+      name: 'acp_get_escrow',
+      description: 'Get escrow details.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          escrow_id: { type: 'string', description: 'Escrow ID' },
+        },
+        required: ['escrow_id'],
+      },
+    },
+    {
+      name: 'acp_list_escrows',
+      description: 'List all escrows for an address.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          address: { type: 'string', description: 'Solana address' },
+        },
+        required: ['address'],
+      },
+    },
+    {
+      name: 'acp_rate_service',
+      description: 'Rate a service (1-5 stars).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          service_id: { type: 'string', description: 'Service ID' },
+          rater_address: { type: 'string', description: 'Your Solana address' },
+          rating: { type: 'number', description: 'Rating 1-5' },
+          review: { type: 'string', description: 'Optional review text' },
+        },
+        required: ['service_id', 'rater_address', 'rating'],
+      },
+    },
+    // ACP Identity - Handles
+    {
+      name: 'acp_register_handle',
+      description: 'Register a unique @handle for an agent. Handles are unique identifiers like @myagent.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          handle: { type: 'string', description: 'Desired handle (3-20 chars, lowercase, no spaces)' },
+          agent_id: { type: 'string', description: 'Agent ID to link' },
+          owner_address: { type: 'string', description: 'Owner Solana address' },
+        },
+        required: ['handle', 'agent_id', 'owner_address'],
+      },
+    },
+    {
+      name: 'acp_get_handle',
+      description: 'Look up a handle to find the associated agent.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          handle: { type: 'string', description: 'Handle to look up (with or without @)' },
+        },
+        required: ['handle'],
+      },
+    },
+    {
+      name: 'acp_check_handle',
+      description: 'Check if a handle is available for registration.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          handle: { type: 'string', description: 'Handle to check' },
+        },
+        required: ['handle'],
+      },
+    },
+    // ACP Identity - Takeovers
+    {
+      name: 'acp_create_bid',
+      description: 'Create a takeover bid for a handle. Funds are held in escrow.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          handle: { type: 'string', description: 'Handle to bid on' },
+          bidder_address: { type: 'string', description: 'Your Solana address' },
+          amount: { type: 'string', description: 'Bid amount in lamports' },
+          currency: { type: 'string', description: 'Currency (default: SOL)' },
+        },
+        required: ['handle', 'bidder_address', 'amount'],
+      },
+    },
+    {
+      name: 'acp_accept_bid',
+      description: 'Accept a takeover bid and transfer handle ownership.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          bid_id: { type: 'string', description: 'Bid ID to accept' },
+          owner_address: { type: 'string', description: 'Current owner address (for verification)' },
+        },
+        required: ['bid_id', 'owner_address'],
+      },
+    },
+    {
+      name: 'acp_reject_bid',
+      description: 'Reject a takeover bid and refund the bidder.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          bid_id: { type: 'string', description: 'Bid ID to reject' },
+          owner_address: { type: 'string', description: 'Current owner address (for verification)' },
+        },
+        required: ['bid_id', 'owner_address'],
+      },
+    },
+    {
+      name: 'acp_list_bids',
+      description: 'List takeover bids for a handle or by a bidder.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          handle: { type: 'string', description: 'Handle to list bids for' },
+          bidder_address: { type: 'string', description: 'Or list bids by this address' },
+        },
+      },
+    },
+    // ACP Identity - Referrals
+    {
+      name: 'acp_get_referral_code',
+      description: 'Generate a referral code for an address. Earns 5% of referred agent fees.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          referrer_address: { type: 'string', description: 'Your Solana address' },
+        },
+        required: ['referrer_address'],
+      },
+    },
+    {
+      name: 'acp_use_referral_code',
+      description: 'Apply a referral code to an agent (one-time only).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'Referral code to use' },
+          agent_id: { type: 'string', description: 'Agent ID to apply referral to' },
+        },
+        required: ['code', 'agent_id'],
+      },
+    },
+    {
+      name: 'acp_get_referral_stats',
+      description: 'Get referral statistics for an address.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          referrer_address: { type: 'string', description: 'Referrer address' },
+        },
+        required: ['referrer_address'],
+      },
+    },
+    // ACP Identity - Profiles
+    {
+      name: 'acp_get_profile',
+      description: 'Get public profile for an agent.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agent_id: { type: 'string', description: 'Agent ID' },
+          handle: { type: 'string', description: 'Or look up by handle' },
+        },
+      },
+    },
+    {
+      name: 'acp_update_profile',
+      description: 'Update agent public profile.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agent_id: { type: 'string', description: 'Agent ID to update' },
+          display_name: { type: 'string', description: 'Display name' },
+          bio: { type: 'string', description: 'Short bio (max 280 chars)' },
+          avatar_url: { type: 'string', description: 'Avatar image URL' },
+          website_url: { type: 'string', description: 'Website URL' },
+          twitter_handle: { type: 'string', description: 'Twitter handle' },
+          github_handle: { type: 'string', description: 'GitHub handle' },
+        },
+        required: ['agent_id'],
+      },
+    },
+    // ACP Identity - Leaderboard
+    {
+      name: 'acp_get_leaderboard',
+      description: 'Get top agents by score.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          count: { type: 'number', description: 'Number of entries (default: 10)' },
+          period: { type: 'string', description: 'Period: all_time, monthly, weekly (default: all_time)' },
+        },
+      },
+    },
+    // ACP Predictions - Brier score tracking
+    {
+      name: 'acp_submit_prediction',
+      description: 'Submit a probability prediction on a market. Agent must provide rationale (10-800 chars).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agent_id: { type: 'string', description: 'Agent ID submitting prediction' },
+          market_slug: { type: 'string', description: 'Market identifier (e.g., will-trump-win-2024)' },
+          market_title: { type: 'string', description: 'Market title/question' },
+          market_category: { type: 'string', enum: ['politics', 'pop-culture', 'economy', 'crypto-tech', 'sports', 'other'], description: 'Market category' },
+          probability: { type: 'number', description: 'Predicted probability 0.0-1.0 (e.g., 0.72 = 72% YES)' },
+          rationale: { type: 'string', description: 'Reasoning for prediction (10-800 chars, required)' },
+        },
+        required: ['agent_id', 'market_slug', 'market_title', 'probability', 'rationale'],
+      },
+    },
+    {
+      name: 'acp_get_prediction',
+      description: 'Get a specific prediction by ID.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          prediction_id: { type: 'string', description: 'Prediction ID' },
+        },
+        required: ['prediction_id'],
+      },
+    },
+    {
+      name: 'acp_get_predictions_by_agent',
+      description: 'Get all predictions by an agent.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agent_id: { type: 'string', description: 'Agent ID' },
+          limit: { type: 'number', description: 'Max results (default: 20)' },
+        },
+        required: ['agent_id'],
+      },
+    },
+    {
+      name: 'acp_get_predictions_by_market',
+      description: 'Get all predictions for a market. Shows agent consensus.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          market_slug: { type: 'string', description: 'Market identifier' },
+        },
+        required: ['market_slug'],
+      },
+    },
+    {
+      name: 'acp_get_prediction_feed',
+      description: 'Get recent predictions from all agents (public feed).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: 'Max results (default: 20)' },
+          category: { type: 'string', enum: ['politics', 'pop-culture', 'economy', 'crypto-tech', 'sports', 'other'], description: 'Filter by category' },
+        },
+      },
+    },
+    {
+      name: 'acp_resolve_market',
+      description: 'Resolve a market and calculate Brier scores for all predictions.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          market_slug: { type: 'string', description: 'Market identifier' },
+          outcome: { type: 'number', enum: [0, 1], description: 'Outcome: 1=YES, 0=NO' },
+        },
+        required: ['market_slug', 'outcome'],
+      },
+    },
+    {
+      name: 'acp_get_prediction_stats',
+      description: 'Get prediction accuracy stats for an agent (Brier score, win rate, streaks).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          agent_id: { type: 'string', description: 'Agent ID' },
+        },
+        required: ['agent_id'],
+      },
+    },
+    {
+      name: 'acp_get_prediction_leaderboard',
+      description: 'Get top agents ranked by Brier score (lower=better). Min 5 resolved predictions.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: 'Max results (default: 10)' },
+        },
       },
     },
   ];
@@ -13590,23 +14075,73 @@ async function executeTool(
 
       // Opinion.trade TRADING handlers (full SDK implementation)
       case 'opinion_place_order': {
-        const apiKey = process.env.OPINION_API_KEY;
-        const privateKey = process.env.OPINION_PRIVATE_KEY;
-        const vaultAddress = process.env.OPINION_VAULT_ADDRESS;
-
-        if (!apiKey || !privateKey || !vaultAddress) {
-          return JSON.stringify({
-            error: 'Opinion.trade trading requires OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS env vars.',
-            docs: 'https://docs.opinion.trade/developer-guide/opinion-clob-sdk',
-          });
-        }
-
         const marketId = toolInput.market_id as number;
         const tokenId = toolInput.token_id as string;
         const side = (toolInput.side as string).toUpperCase() as 'BUY' | 'SELL';
         const price = toolInput.price as number;
         const amount = toolInput.amount as number;
         const orderType = ((toolInput.order_type as string) || 'LIMIT').toUpperCase() as 'LIMIT' | 'MARKET';
+
+        // Use execution service if available (preferred)
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const result = side === 'BUY'
+              ? await execSvc.buyLimit({
+                  platform: 'opinion',
+                  marketId: String(marketId),
+                  tokenId,
+                  price,
+                  size: amount,
+                  orderType: orderType === 'MARKET' ? 'FOK' : 'GTC',
+                })
+              : await execSvc.sellLimit({
+                  platform: 'opinion',
+                  marketId: String(marketId),
+                  tokenId,
+                  price,
+                  size: amount,
+                  orderType: orderType === 'MARKET' ? 'FOK' : 'GTC',
+                });
+
+            if (result.success) {
+              const vaultAddress = context.tradingContext?.credentials.get('opinion')?.data as { vaultAddress?: string } | undefined;
+              db.logOpinionTrade({
+                oddsUserId: vaultAddress?.vaultAddress?.slice(0, 16) || 'unknown',
+                orderId: result.orderId || '',
+                marketId: String(marketId),
+                tokenId,
+                side,
+                price,
+                size: amount,
+                orderType,
+                timestamp: new Date(),
+              });
+            }
+
+            return JSON.stringify({
+              success: result.success,
+              orderId: result.orderId,
+              filledSize: result.filledSize,
+              avgFillPrice: result.avgFillPrice,
+              error: result.error,
+            });
+          } catch (err: unknown) {
+            return JSON.stringify({ error: (err as Error).message });
+          }
+        }
+
+        // Fallback to direct call with env vars
+        const apiKey = process.env.OPINION_API_KEY;
+        const privateKey = process.env.OPINION_PRIVATE_KEY;
+        const vaultAddress = process.env.OPINION_VAULT_ADDRESS;
+
+        if (!apiKey || !privateKey || !vaultAddress) {
+          return JSON.stringify({
+            error: 'Opinion trading requires either trading.opinion config or OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS env vars.',
+            docs: 'https://docs.opinion.trade/developer-guide/opinion-clob-sdk',
+          });
+        }
 
         try {
           const config = { apiKey, privateKey, vaultAddress, dryRun: process.env.DRY_RUN === 'true' };
@@ -13633,15 +14168,28 @@ async function executeTool(
       }
 
       case 'opinion_cancel_order': {
+        const orderId = toolInput.order_id as string;
+
+        // Use execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const success = await execSvc.cancelOrder('opinion', orderId);
+            return JSON.stringify({ success, orderId });
+          } catch (err: unknown) {
+            return JSON.stringify({ error: (err as Error).message });
+          }
+        }
+
+        // Fallback to direct call
         const apiKey = process.env.OPINION_API_KEY;
         const privateKey = process.env.OPINION_PRIVATE_KEY;
         const vaultAddress = process.env.OPINION_VAULT_ADDRESS;
 
         if (!apiKey || !privateKey || !vaultAddress) {
-          return JSON.stringify({ error: 'Opinion.trade requires OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS' });
+          return JSON.stringify({ error: 'Opinion trading requires either trading.opinion config or OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS' });
         }
 
-        const orderId = toolInput.order_id as string;
         try {
           const config = { apiKey, privateKey, vaultAddress, dryRun: process.env.DRY_RUN === 'true' };
           const success = await opinion.cancelOrder(config, orderId);
@@ -13652,16 +14200,29 @@ async function executeTool(
       }
 
       case 'opinion_cancel_all_orders': {
+        const marketId = toolInput.market_id as number | undefined;
+        const side = toolInput.side as string | undefined;
+
+        // Use execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const cancelled = await execSvc.cancelAllOrders('opinion', marketId ? String(marketId) : undefined);
+            return JSON.stringify({ success: true, cancelledCount: cancelled });
+          } catch (err: unknown) {
+            return JSON.stringify({ error: (err as Error).message });
+          }
+        }
+
+        // Fallback to direct call
         const apiKey = process.env.OPINION_API_KEY;
         const privateKey = process.env.OPINION_PRIVATE_KEY;
         const vaultAddress = process.env.OPINION_VAULT_ADDRESS;
 
         if (!apiKey || !privateKey || !vaultAddress) {
-          return JSON.stringify({ error: 'Opinion.trade requires OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS' });
+          return JSON.stringify({ error: 'Opinion trading requires either trading.opinion config or OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS' });
         }
 
-        const marketId = toolInput.market_id as number | undefined;
-        const side = toolInput.side as string | undefined;
         try {
           const config = { apiKey, privateKey, vaultAddress, dryRun: process.env.DRY_RUN === 'true' };
           const result = await opinion.cancelAllOrders(
@@ -13829,14 +14390,6 @@ async function executeTool(
       }
 
       case 'opinion_place_orders_batch': {
-        const apiKey = process.env.OPINION_API_KEY;
-        const privateKey = process.env.OPINION_PRIVATE_KEY;
-        const vaultAddress = process.env.OPINION_VAULT_ADDRESS;
-
-        if (!apiKey || !privateKey || !vaultAddress) {
-          return JSON.stringify({ error: 'Opinion.trade requires OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS' });
-        }
-
         const orders = toolInput.orders as Array<{
           market_id: number;
           token_id: string;
@@ -13844,6 +14397,34 @@ async function executeTool(
           price: number;
           amount: number;
         }>;
+
+        // Use execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const orderRequests = orders.map(o => ({
+              platform: 'opinion' as const,
+              marketId: String(o.market_id),
+              tokenId: o.token_id,
+              side: o.side.toLowerCase() as 'buy' | 'sell',
+              price: o.price,
+              size: o.amount,
+            }));
+            const results = await execSvc.placeOrdersBatch(orderRequests);
+            return JSON.stringify({ results, count: results.length });
+          } catch (err: unknown) {
+            return JSON.stringify({ error: (err as Error).message });
+          }
+        }
+
+        // Fallback to direct call
+        const apiKey = process.env.OPINION_API_KEY;
+        const privateKey = process.env.OPINION_PRIVATE_KEY;
+        const vaultAddress = process.env.OPINION_VAULT_ADDRESS;
+
+        if (!apiKey || !privateKey || !vaultAddress) {
+          return JSON.stringify({ error: 'Opinion trading requires either trading.opinion config or OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS' });
+        }
 
         try {
           const config = { apiKey, privateKey, vaultAddress, dryRun: process.env.DRY_RUN === 'true' };
@@ -13862,15 +14443,28 @@ async function executeTool(
       }
 
       case 'opinion_cancel_orders_batch': {
+        const orderIds = toolInput.order_ids as string[];
+
+        // Use execution service if available
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const results = await execSvc.cancelOrdersBatch('opinion', orderIds);
+            return JSON.stringify({ results });
+          } catch (err: unknown) {
+            return JSON.stringify({ error: (err as Error).message });
+          }
+        }
+
+        // Fallback to direct call
         const apiKey = process.env.OPINION_API_KEY;
         const privateKey = process.env.OPINION_PRIVATE_KEY;
         const vaultAddress = process.env.OPINION_VAULT_ADDRESS;
 
         if (!apiKey || !privateKey || !vaultAddress) {
-          return JSON.stringify({ error: 'Opinion.trade requires OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS' });
+          return JSON.stringify({ error: 'Opinion trading requires either trading.opinion config or OPINION_API_KEY, OPINION_PRIVATE_KEY, and OPINION_VAULT_ADDRESS' });
         }
 
-        const orderIds = toolInput.order_ids as string[];
         try {
           const config = { apiKey, privateKey, vaultAddress, dryRun: process.env.DRY_RUN === 'true' };
           const results = await opinion.cancelOrdersBatch(config, orderIds);
@@ -14062,16 +14656,6 @@ async function executeTool(
 
       // Predict.fun TRADING handlers (full SDK implementation)
       case 'predictfun_create_order': {
-        const privateKey = process.env.PREDICTFUN_PRIVATE_KEY;
-        const predictAccount = process.env.PREDICTFUN_PREDICT_ACCOUNT;
-
-        if (!privateKey) {
-          return JSON.stringify({
-            error: 'Predict.fun trading requires PREDICTFUN_PRIVATE_KEY env var',
-            docs: 'https://dev.predict.fun/how-to-create-or-cancel-orders-679306m0',
-          });
-        }
-
         const marketId = toolInput.market_id as string;
         const tokenId = toolInput.token_id as string;
         const side = (toolInput.side as string).toUpperCase() as 'BUY' | 'SELL';
@@ -14080,6 +14664,64 @@ async function executeTool(
         const feeRateBps = toolInput.fee_rate_bps as number | undefined;
         const isNegRisk = toolInput.is_neg_risk as boolean | undefined;
         const isYieldBearing = toolInput.is_yield_bearing as boolean | undefined;
+
+        // Try ExecutionService first (from trading context)
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc) {
+          try {
+            const result = side === 'BUY'
+              ? await execSvc.buyLimit({
+                  platform: 'predictfun',
+                  marketId,
+                  tokenId,
+                  price,
+                  size: quantity,
+                  negRisk: isNegRisk,
+                })
+              : await execSvc.sellLimit({
+                  platform: 'predictfun',
+                  marketId,
+                  tokenId,
+                  price,
+                  size: quantity,
+                  negRisk: isNegRisk,
+                });
+
+            if (result.success) {
+              db.logPredictFunTrade({
+                oddsUserId: process.env.PREDICTFUN_PREDICT_ACCOUNT || 'eoa',
+                orderHash: result.orderId || '',
+                marketId,
+                tokenId,
+                side,
+                price,
+                quantity,
+                status: 'open',
+                timestamp: new Date(),
+              });
+            }
+
+            return JSON.stringify({
+              success: result.success,
+              orderHash: result.orderId,
+              status: result.status,
+              error: result.error,
+            });
+          } catch (err: unknown) {
+            // Fall through to direct call
+          }
+        }
+
+        // Fallback: Direct call with env vars
+        const privateKey = process.env.PREDICTFUN_PRIVATE_KEY;
+        const predictAccount = process.env.PREDICTFUN_PREDICT_ACCOUNT;
+
+        if (!privateKey) {
+          return JSON.stringify({
+            error: 'Predict.fun trading requires PREDICTFUN_PRIVATE_KEY env var or configured ExecutionService',
+            docs: 'https://dev.predict.fun/how-to-create-or-cancel-orders-679306m0',
+          });
+        }
 
         try {
           const config = {
@@ -14121,16 +14763,33 @@ async function executeTool(
       }
 
       case 'predictfun_cancel_orders': {
+        const orderHashes = toolInput.order_hashes as string[];
+        const isNegRisk = (toolInput.is_neg_risk as boolean) || false;
+        const isYieldBearing = (toolInput.is_yield_bearing as boolean) ?? true;
+
+        // Try ExecutionService first
+        const execSvc = context.tradingContext?.executionService;
+        if (execSvc && orderHashes.length > 0) {
+          try {
+            const results: Array<{ orderHash: string; success: boolean }> = [];
+            for (const orderHash of orderHashes) {
+              const success = await execSvc.cancelOrder('predictfun', orderHash);
+              results.push({ orderHash, success });
+            }
+            const cancelled = results.filter(r => r.success).length;
+            return JSON.stringify({ success: cancelled > 0, cancelled, results });
+          } catch (err: unknown) {
+            // Fall through to direct call
+          }
+        }
+
+        // Fallback: Direct call with env vars
         const privateKey = process.env.PREDICTFUN_PRIVATE_KEY;
         const predictAccount = process.env.PREDICTFUN_PREDICT_ACCOUNT;
 
         if (!privateKey) {
-          return JSON.stringify({ error: 'Predict.fun requires PREDICTFUN_PRIVATE_KEY' });
+          return JSON.stringify({ error: 'Predict.fun requires PREDICTFUN_PRIVATE_KEY or configured ExecutionService' });
         }
-
-        const orderHashes = toolInput.order_hashes as string[];
-        const isNegRisk = (toolInput.is_neg_risk as boolean) || false;
-        const isYieldBearing = (toolInput.is_yield_bearing as boolean) ?? true;
 
         try {
           const config = {
@@ -16731,7 +17390,7 @@ async function executeTool(
         const script = toolInput.script as string;
         const args = (toolInput.args as string) || '';
 
-        const botId = `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const botId = generateSecureId('bot');
 
         // Check if it's code or a file path
         let cmd: string;

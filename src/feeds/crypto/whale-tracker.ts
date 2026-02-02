@@ -16,6 +16,7 @@
 import { EventEmitter } from 'eventemitter3';
 import WebSocket from 'ws';
 import { logger } from '../../utils/logger';
+import { generateId as generateSecureId } from '../../utils/id';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyData = any;
@@ -286,7 +287,7 @@ export function createCryptoWhaleTracker(
     transaction?: WhaleTransaction
   ): void {
     const alert: WhaleAlert = {
-      id: `${chain}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: generateSecureId(chain),
       type,
       chain,
       wallet,

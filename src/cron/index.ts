@@ -11,6 +11,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
+import { generateId as generateSecureId } from '../utils/id';
 import { execSync } from 'child_process';
 import { join } from 'path';
 import { Database } from '../db';
@@ -237,7 +238,7 @@ export function createCronService(deps: CronServiceDeps): CronService {
 
   /** Generate unique job ID */
   function generateId(): string {
-    return `cron_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return generateSecureId('cron');
   }
 
   function persistJob(job: CronJob): void {

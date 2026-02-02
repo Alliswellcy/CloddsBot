@@ -13,6 +13,7 @@
 
 import type { Database } from '../db/index';
 import type { FeedManager } from '../feeds/index';
+import { generateId as generateSecureId } from '../utils/id';
 
 // ============================================================================
 // Fee Calculation
@@ -962,7 +963,7 @@ export function saveCombinatorialOpportunity(
   db: Database,
   opp: RebalanceOpportunity | CombinatorialOpportunity
 ): void {
-  const id = `comb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = generateSecureId('comb');
 
   db.run(`
     INSERT INTO combinatorial_opportunities

@@ -5,6 +5,121 @@ All notable changes to Clodds will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-02-02
+
+### Security
+
+#### Cryptographic ID Generation
+- Replaced `Math.random().toString(36)` with `crypto.randomBytes()` across 21 files
+- New `src/utils/id.ts` utility with `generateId()`, `generateShortId()`, `generateUuid()`
+- Affected: alerts, usage, memory, media, cron, hooks, arbitrage, canvas, embeddings, agents, extensions
+
+#### Sandbox Hardening
+- `createSandbox()` now **disabled by default** - requires `ALLOW_UNSAFE_SANDBOX=true`
+- Canvas `eval()` now **disabled by default** - requires `CANVAS_ALLOW_JS_EVAL=true`
+
+#### Task Runner Security
+- Replaced `spawn(shell: true)` with `execFile()` to prevent shell injection
+- Added command validation (blocks shell metacharacters)
+- Restricted environment variable passthrough to allowlist
+
+#### XSS Prevention
+- Added `escapeHtml()` and `sanitizeStyle()` to canvas component renderers
+- All user content now properly escaped before HTML insertion
+
+#### Gateway Hardening
+- **IP Rate Limiting**: Sliding window, 100 req/min default (`CLODDS_IP_RATE_LIMIT`)
+- **Security Headers**: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection
+- **HSTS Support**: `CLODDS_HSTS_ENABLED=true` enables Strict-Transport-Security
+- **HTTPS Enforcement**: `CLODDS_FORCE_HTTPS=true` redirects HTTP to HTTPS
+- **CORS Fix**: Credentials only allowed with specific origin allowlist (not wildcard)
+- **/metrics Auth**: Now requires `CLODDS_TOKEN` if set
+
+#### WebSocket Security
+- Added message structure validation (`isValidWebMessage()`)
+- Added 1MB message size limit to prevent DoS
+- Session IDs now use `crypto.randomBytes(16)`
+
+### Fixed
+- Dockerfile: Updated Node 20 → 22, removed nonexistent Python dependencies, added healthcheck
+- docker-compose.yml: Added `env_file` and `restart: unless-stopped`
+
+### Added
+- New environment variables:
+  - `CLODDS_IP_RATE_LIMIT` - requests per minute per IP (default: 100)
+  - `CLODDS_FORCE_HTTPS` - redirect HTTP to HTTPS
+  - `CLODDS_HSTS_ENABLED` - enable HSTS header
+  - `CANVAS_ALLOW_JS_EVAL` - enable canvas JS execution (default: false)
+  - `ALLOW_UNSAFE_SANDBOX` - enable unsafe sandbox (default: false)
+
+## [0.2.0] - 2026-01-31
+
+### Added
+
+#### New Trading Platforms
+- **Opinion.trade**: Full BNB Chain prediction market integration
+  - EIP-712 order signing via `unofficial-opinion-clob-sdk`
+  - Place/cancel orders, get positions, balances, trade history
+  - Split/merge outcome tokens, redeem settled positions
+  - 20+ tool handlers in `src/exchanges/opinion/index.ts`
+
+- **Predict.fun**: Full BNB Chain prediction market integration
+  - Wallet signing via `@predictdotfun/sdk`
+  - Create orders, cancel orders, get positions
+  - Merge/redeem positions with proper index set handling
+  - 15+ tool handlers in `src/exchanges/predictfun/index.ts`
+
+#### Drift Protocol Direct SDK
+- New SDK-based functions bypassing gateway requirement:
+  - `executeDriftDirectOrder` - Place perp/spot orders
+  - `cancelDriftOrder` - Cancel by ID, market, or all
+  - `getDriftOrders` - Get open orders
+  - `getDriftPositions` - Get positions with PnL calculation
+  - `getDriftBalance` - Get collateral, margin, health factor
+  - `modifyDriftOrder` - Modify existing orders
+  - `setDriftLeverage` - Set leverage per market
+- New handlers: `drift_direct_*` for SDK-based trading
+
+#### Identity & Payments
+- **ERC-8004 Indexer**: Event-based owner→agentId indexer
+  - Transfer event scanning with batch processing
+  - `getAgentByOwner()` now works via indexer
+  - `getAgentsByOwner()` for multi-agent accounts
+  - Auto-refreshing cache with TTL
+
+- **X-402 Solana Signing**: Real Ed25519 implementation
+  - Replaced HMAC placeholder with `@noble/ed25519`
+  - Proper signature verification with `ed25519.verifyAsync()`
+  - Correct PDA validation using curve point checking
+
+#### Local AI
+- **Transformers.js Embeddings**: Neural embeddings without API keys
+  - `@xenova/transformers` integration
+  - `Xenova/all-MiniLM-L6-v2` model (384 dimensions)
+  - Lazy loading to avoid startup cost
+  - Fallback to bag-of-words if model fails
+
+#### Architecture
+- **Modular Handlers**: New `src/agents/handlers/` structure
+  - `types.ts` - Common handler types and helpers
+  - `opinion.ts` - Opinion.trade handlers extracted
+  - `index.ts` - Aggregation with `dispatchHandler()`
+  - Pattern for incremental platform migration
+
+### Improved
+
+#### Type Safety
+- Removed all `as any` casts from `agents/index.ts`
+- Added typed interfaces: `KalshiBalanceResponse`, `PolymarketBookResponse`, `PolymarketMarketResponse`
+- Added `toEvmChain()` helper for proper type narrowing
+- Fixed BigInt literal compatibility issues
+
+### Dependencies
+- Added `@noble/ed25519@2.2.0` for Solana signing
+- Added `@xenova/transformers@2.17.2` for local embeddings
+- Added `unofficial-opinion-clob-sdk` for Opinion.trade
+- Using `@predictdotfun/sdk` for Predict.fun
+
 ## [0.1.0] - 2026-01-30
 
 ### Added
@@ -81,4 +196,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.2.0]: https://github.com/alsk1992/CloddsBot/releases/tag/v0.2.0
 [0.1.0]: https://github.com/alsk1992/CloddsBot/releases/tag/v0.1.0

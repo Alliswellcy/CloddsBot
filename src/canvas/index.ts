@@ -13,6 +13,7 @@ import { EventEmitter } from 'eventemitter3';
 import { createServer, Server, IncomingMessage, ServerResponse } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { logger } from '../utils/logger';
+import { generateId as generateSecureId } from '../utils/id';
 import { createBrowserService, BrowserService, BrowserPage } from '../browser';
 
 // =============================================================================
@@ -25,6 +26,10 @@ export interface CanvasState {
   js?: string;
   data?: Record<string, unknown>;
 }
+
+// Security: Canvas JS execution is disabled by default
+// Set CANVAS_ALLOW_JS_EVAL=true to enable (use with caution)
+const ALLOW_JS_EVAL = process.env.CANVAS_ALLOW_JS_EVAL === 'true';
 
 export interface CanvasComponent {
   id: string;
@@ -97,10 +102,19 @@ function generateHtml(state: CanvasState): string {
 
     // WebSocket for live updates
     const ws = new WebSocket('ws://' + location.host);
+    const jsEvalEnabled = ${ALLOW_JS_EVAL};
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === 'update') {
-        if (msg.html) document.querySelector('.container').innerHTML = msg.html;
+        if (msg.html) {
+          // Security: Use textContent for text-only updates, innerHTML only for trusted HTML
+          const container = document.querySelector('.container');
+          if (msg.textOnly) {
+            container.textContent = msg.html;
+          } else {
+            container.innerHTML = msg.html;
+          }
+        }
         if (msg.css) {
           let style = document.querySelector('#dynamic-css');
           if (!style) {
@@ -110,17 +124,21 @@ function generateHtml(state: CanvasState): string {
           }
           style.textContent = msg.css;
         }
-        if (msg.js) {
-          try { eval(msg.js); } catch(e) { console.error(e); }
+        if (msg.js && jsEvalEnabled) {
+          // Security: JS eval is disabled by default - requires CANVAS_ALLOW_JS_EVAL=true
+          try { eval(msg.js); } catch(e) { console.error('Canvas JS error:', e); }
         }
         if (msg.data) window.canvasData = msg.data;
-      } else if (msg.type === 'eval') {
+      } else if (msg.type === 'eval' && jsEvalEnabled) {
+        // Security: Remote eval is disabled by default - requires CANVAS_ALLOW_JS_EVAL=true
         try {
           const result = eval(msg.code);
           ws.send(JSON.stringify({ type: 'evalResult', id: msg.id, result }));
         } catch(e) {
           ws.send(JSON.stringify({ type: 'evalResult', id: msg.id, error: e.message }));
         }
+      } else if (msg.type === 'eval' && !jsEvalEnabled) {
+        ws.send(JSON.stringify({ type: 'evalResult', id: msg.id, error: 'JS eval disabled (set CANVAS_ALLOW_JS_EVAL=true)' }));
       } else if (msg.type === 'reset') {
         document.querySelector('.container').innerHTML = '<p>Canvas ready</p>';
         window.canvasData = {};
@@ -138,60 +156,87 @@ function generateHtml(state: CanvasState): string {
 // COMPONENT RENDERERS
 // =============================================================================
 
+// Security: HTML escape to prevent XSS in user-provided content
+function escapeHtml(str: unknown): string {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Security: Sanitize CSS style strings (allow only safe properties)
+function sanitizeStyle(style: unknown): string {
+  if (!style || typeof style !== 'string') return '';
+  // Remove any potential CSS injection attempts
+  return style.replace(/[<>"']/g, '').replace(/expression|javascript|behavior|binding/gi, '');
+}
+
 function renderComponent(comp: CanvasComponent): string {
   switch (comp.type) {
     case 'text':
       const tag = comp.props.variant === 'h1' ? 'h1' :
                   comp.props.variant === 'h2' ? 'h2' :
                   comp.props.variant === 'h3' ? 'h3' : 'p';
-      return `<${tag} class="canvas-text" style="${comp.props.style || ''}">${comp.props.content || ''}</${tag}>`;
+      return `<${tag} class="canvas-text" style="${sanitizeStyle(comp.props.style)}">${escapeHtml(comp.props.content)}</${tag}>`;
 
     case 'chart':
-      return `<div class="canvas-chart" id="${comp.id}" data-type="${comp.props.chartType || 'line'}" data-values='${JSON.stringify(comp.props.data || [])}'></div>`;
+      return `<div class="canvas-chart" id="${escapeHtml(comp.id)}" data-type="${escapeHtml(comp.props.chartType) || 'line'}" data-values='${JSON.stringify(comp.props.data || [])}'></div>`;
 
     case 'table':
       const headers = (comp.props.headers as string[]) || [];
       const rows = (comp.props.rows as string[][]) || [];
       return `
         <table class="canvas-table">
-          <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
-          <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
+          <thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${escapeHtml(c)}</td>`).join('')}</tr>`).join('')}</tbody>
         </table>`;
 
     case 'image':
-      return `<img class="canvas-image" src="${comp.props.src}" alt="${comp.props.alt || ''}" style="${comp.props.style || ''}">`;
+      // Security: Only allow http/https/data URLs for images
+      const src = String(comp.props.src || '');
+      const safeSrc = /^(https?:|data:image\/)/.test(src) ? src : '';
+      return `<img class="canvas-image" src="${escapeHtml(safeSrc)}" alt="${escapeHtml(comp.props.alt)}" style="${sanitizeStyle(comp.props.style)}">`;
 
     case 'form':
       const fields = (comp.props.fields as Array<{ name: string; type: string; label: string }>) || [];
+      const allowedTypes = ['text', 'number', 'email', 'password', 'tel', 'url', 'date', 'time', 'checkbox', 'radio', 'hidden'];
       return `
-        <form class="canvas-form" id="${comp.id}">
-          ${fields.map(f => `
-            <label>${f.label}
-              <input type="${f.type || 'text'}" name="${f.name}">
-            </label>
-          `).join('')}
-          <button type="submit">${comp.props.submitText || 'Submit'}</button>
+        <form class="canvas-form" id="${escapeHtml(comp.id)}">
+          ${fields.map(f => {
+            const inputType = allowedTypes.includes(f.type) ? f.type : 'text';
+            return `
+            <label>${escapeHtml(f.label)}
+              <input type="${inputType}" name="${escapeHtml(f.name)}">
+            </label>`;
+          }).join('')}
+          <button type="submit">${escapeHtml(comp.props.submitText) || 'Submit'}</button>
         </form>`;
 
     case 'list':
       const items = (comp.props.items as string[]) || [];
       const ordered = comp.props.ordered;
       const tag2 = ordered ? 'ol' : 'ul';
-      return `<${tag2} class="canvas-list">${items.map(i => `<li>${i}</li>`).join('')}</${tag2}>`;
+      return `<${tag2} class="canvas-list">${items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</${tag2}>`;
 
     case 'card':
       return `
-        <div class="canvas-card" style="${comp.props.style || ''}">
-          ${comp.props.title ? `<h3>${comp.props.title}</h3>` : ''}
-          ${comp.props.content ? `<p>${comp.props.content}</p>` : ''}
+        <div class="canvas-card" style="${sanitizeStyle(comp.props.style)}">
+          ${comp.props.title ? `<h3>${escapeHtml(comp.props.title)}</h3>` : ''}
+          ${comp.props.content ? `<p>${escapeHtml(comp.props.content)}</p>` : ''}
           ${comp.children ? comp.children.map(c => renderComponent(c)).join('') : ''}
         </div>`;
 
     case 'custom':
+      // Security: Custom HTML is intentionally unescaped - trust boundary
+      // Only use 'custom' type with trusted content
+      logger.warn({ componentId: comp.id }, 'Custom HTML component used - ensure content is trusted');
       return comp.props.html as string || '';
 
     default:
-      return `<div class="canvas-unknown">[Unknown: ${comp.type}]</div>`;
+      return `<div class="canvas-unknown">[Unknown: ${escapeHtml(comp.type)}]</div>`;
   }
 }
 
@@ -246,7 +291,7 @@ export function createCanvasService(): CanvasService {
     async eval(code) {
       // If we have connected clients, eval via WebSocket
       if (clients.length > 0) {
-        const id = `eval_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const id = generateSecureId('eval');
 
         return new Promise((resolve, reject) => {
           evalCallbacks.set(id, { resolve, reject });

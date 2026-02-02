@@ -3,6 +3,7 @@
  *
  * Features:
  * - Generate embeddings using OpenAI API (text-embedding-3-small)
+ * - Local neural embeddings using transformers.js (no API key required)
  * - Store embeddings in SQLite for caching
  * - Cosine similarity search
  * - Batch embedding generation
@@ -10,6 +11,52 @@
 
 import { Database } from '../db/index';
 import { logger } from '../utils/logger';
+import { generateId as generateSecureId } from '../utils/id';
+
+// Transformers.js types
+type Pipeline = (texts: string | string[], options?: { pooling?: string; normalize?: boolean }) => Promise<{ data: Float32Array; dims: number[] }>;
+
+// Lazy-loaded transformers.js pipeline
+let localPipeline: Pipeline | null = null;
+let pipelinePromise: Promise<Pipeline> | null = null;
+const LOCAL_MODEL = 'Xenova/all-MiniLM-L6-v2'; // 384-dim, fast & good quality
+
+/**
+ * Initialize transformers.js pipeline (lazy-loaded, singleton)
+ */
+async function getTransformersPipeline(): Promise<Pipeline> {
+  if (localPipeline) return localPipeline;
+
+  if (pipelinePromise) return pipelinePromise;
+
+  pipelinePromise = (async () => {
+    try {
+      // Dynamic import to avoid loading heavy model at startup
+      const { pipeline, env } = await import('@xenova/transformers');
+
+      // Configure transformers.js
+      env.cacheDir = './.transformers-cache';
+      env.allowLocalModels = true;
+
+      logger.info({ model: LOCAL_MODEL }, 'Loading local embedding model...');
+
+      // Create feature-extraction pipeline
+      const pipe = await pipeline('feature-extraction', LOCAL_MODEL, {
+        quantized: true, // Use quantized model for faster inference
+      });
+
+      localPipeline = pipe as unknown as Pipeline;
+      logger.info({ model: LOCAL_MODEL }, 'Local embedding model loaded');
+
+      return localPipeline;
+    } catch (error) {
+      logger.error({ error }, 'Failed to load transformers.js model');
+      throw error;
+    }
+  })();
+
+  return pipelinePromise;
+}
 
 /** Embedding vector (array of floats) */
 export type EmbeddingVector = number[];
@@ -190,11 +237,55 @@ export function createEmbeddingsService(
   }
 
   /**
-   * Simple local embedding (fallback when no API key)
-   * Uses TF-IDF-like approach - not as good as neural embeddings but works offline
+   * Generate embedding using transformers.js (neural network, runs locally)
+   * Uses all-MiniLM-L6-v2 model - 384 dimensions, good quality
    */
-  function generateLocalEmbedding(text: string): EmbeddingVector {
-    // Very simple bag-of-words approach
+  async function generateTransformersEmbedding(text: string): Promise<EmbeddingVector> {
+    const pipe = await getTransformersPipeline();
+
+    // Generate embedding
+    const output = await pipe(text, {
+      pooling: 'mean',
+      normalize: true,
+    });
+
+    // Convert Float32Array to regular array
+    return Array.from(output.data);
+  }
+
+  /**
+   * Generate embeddings in batch using transformers.js
+   */
+  async function generateTransformersEmbeddingBatch(texts: string[]): Promise<EmbeddingVector[]> {
+    const pipe = await getTransformersPipeline();
+
+    // Process texts in batches for efficiency
+    const batchSize = 8;
+    const results: EmbeddingVector[] = [];
+
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize);
+      const outputs = await pipe(batch, {
+        pooling: 'mean',
+        normalize: true,
+      });
+
+      // Handle batch output - dims[0] is batch size, dims[1] is embedding size
+      const embeddingSize = outputs.dims[1];
+      for (let j = 0; j < batch.length; j++) {
+        const start = j * embeddingSize;
+        const embedding = Array.from(outputs.data.slice(start, start + embeddingSize));
+        results.push(embedding);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Simple fallback embedding (bag-of-words) - used if transformers.js fails
+   */
+  function generateSimpleEmbedding(text: string): EmbeddingVector {
     const words = text.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
     const wordCounts = new Map<string, number>();
 
@@ -202,14 +293,13 @@ export function createEmbeddingsService(
       wordCounts.set(word, (wordCounts.get(word) || 0) + 1);
     }
 
-    // Create a fixed-size vector using word hashes
-    const vectorSize = 256;
+    const vectorSize = 384; // Match transformers.js dimension
     const vector = new Array(vectorSize).fill(0);
 
-    for (const [word, count] of wordCounts) {
+    wordCounts.forEach((count, word) => {
       const hash = Math.abs(hashContent(word).charCodeAt(0)) % vectorSize;
       vector[hash] += count;
-    }
+    });
 
     // Normalize
     const magnitude = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0));
@@ -220,6 +310,30 @@ export function createEmbeddingsService(
     }
 
     return vector;
+  }
+
+  /**
+   * Generate local embedding with transformers.js (fallback to simple if fails)
+   */
+  async function generateLocalEmbedding(text: string): Promise<EmbeddingVector> {
+    try {
+      return await generateTransformersEmbedding(text);
+    } catch (error) {
+      logger.warn({ error }, 'Transformers.js failed, using simple fallback');
+      return generateSimpleEmbedding(text);
+    }
+  }
+
+  /**
+   * Generate local embeddings in batch
+   */
+  async function generateLocalEmbeddingBatch(texts: string[]): Promise<EmbeddingVector[]> {
+    try {
+      return await generateTransformersEmbeddingBatch(texts);
+    } catch (error) {
+      logger.warn({ error }, 'Transformers.js batch failed, using simple fallback');
+      return texts.map(generateSimpleEmbedding);
+    }
   }
 
   const service: EmbeddingsService = {
@@ -247,9 +361,9 @@ export function createEmbeddingsService(
         vector = await generateOpenAIEmbedding(text);
         logger.debug('Generated OpenAI embedding');
       } else {
-        // Default: local embeddings (no API key needed)
-        vector = generateLocalEmbedding(text);
-        logger.debug('Generated local embedding (no API key required)');
+        // Default: local embeddings using transformers.js (no API key needed)
+        vector = await generateLocalEmbedding(text);
+        logger.debug('Generated local embedding using transformers.js');
       }
 
       // Cache the result
@@ -291,9 +405,9 @@ export function createEmbeddingsService(
             needsEmbedding.map((item) => item.text)
           );
         } else {
-          // Default: local embeddings
-          newEmbeddings = needsEmbedding.map((item) =>
-            generateLocalEmbedding(item.text)
+          // Default: local embeddings using transformers.js
+          newEmbeddings = await generateLocalEmbeddingBatch(
+            needsEmbedding.map((item) => item.text)
           );
         }
 
@@ -380,7 +494,7 @@ export function createEmbeddingsService(
     },
 
     cache(contentHash: string, content: string, vector: EmbeddingVector): void {
-      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+      const id = generateSecureId('emb');
       const vectorJson = JSON.stringify(vector);
 
       db.run(

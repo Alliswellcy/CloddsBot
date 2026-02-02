@@ -74,38 +74,46 @@ const builtInExecutors: Map<string, TaskExecutor> = new Map();
 builtInExecutors.set('shell', {
   name: 'shell',
   async execute(task, context) {
-    const { spawn } = require('child_process');
+    const { execFile } = require('child_process');
     const command = task.input?.command as string;
     const args = (task.input?.args as string[]) || [];
     const cwd = (task.input?.cwd as string) || context.workDir;
 
+    // Security: Validate command is not empty and doesn't contain shell metacharacters
+    if (!command || typeof command !== 'string') {
+      throw new Error('Command must be a non-empty string');
+    }
+    const dangerousChars = /[;&|`$(){}[\]<>!\\]/;
+    if (dangerousChars.test(command)) {
+      throw new Error('Command contains potentially dangerous shell metacharacters');
+    }
+    for (const arg of args) {
+      if (typeof arg !== 'string') {
+        throw new Error('All arguments must be strings');
+      }
+    }
+
+    // Security: Only allow specific env vars, not arbitrary ones
+    const allowedEnvKeys = ['PATH', 'HOME', 'USER', 'LANG', 'NODE_ENV', 'TZ'];
+    const safeEnv: Record<string, string> = {};
+    for (const key of allowedEnvKeys) {
+      if (process.env[key]) safeEnv[key] = process.env[key]!;
+    }
+
     return new Promise((resolve, reject) => {
-      const proc = spawn(command, args, {
+      // Security: Use execFile instead of spawn with shell:true
+      execFile(command, args, {
         cwd,
-        shell: true,
-        env: { ...process.env, ...(task.input?.env as Record<string, string>) },
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      proc.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      proc.on('close', (code: number) => {
-        if (code === 0) {
-          resolve({ stdout, stderr, exitCode: code });
+        env: safeEnv,
+        maxBuffer: 10 * 1024 * 1024, // 10MB max output
+        timeout: task.timeout || 60000, // Default 60s timeout
+      }, (error: Error | null, stdout: string, stderr: string) => {
+        if (error) {
+          reject(new Error(`Command failed: ${stderr || error.message}`));
         } else {
-          reject(new Error(`Command failed with code ${code}: ${stderr}`));
+          resolve({ stdout, stderr, exitCode: 0 });
         }
       });
-
-      proc.on('error', reject);
     });
   },
 });
@@ -206,6 +214,22 @@ builtInExecutors.set('llm', {
   },
 });
 
+// Safe property accessor - only allows simple dot-notation paths like "item.name" or "item.data.value"
+function safeGetProperty(obj: unknown, path: string): unknown {
+  if (!path || typeof path !== 'string') return obj;
+  // Only allow alphanumeric property names with dots
+  if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(path)) {
+    throw new Error(`Invalid property path: ${path}`);
+  }
+  const parts = path.split('.');
+  let current: unknown = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
 // Transform executor
 builtInExecutors.set('transform', {
   name: 'transform',
@@ -229,20 +253,75 @@ builtInExecutors.set('transform', {
         return (inputData as string[]).join(joiner);
 
       case 'filter':
-        const predicate = new Function('item', `return ${task.input?.predicate}`);
-        return (inputData as unknown[]).filter(predicate as (item: unknown) => boolean);
+        // Security: Only allow simple property-based filtering
+        // Example: { field: "status", operator: "eq", value: "active" }
+        const filterField = task.input?.field as string;
+        const filterOp = task.input?.operator as string;
+        const filterValue = task.input?.value;
+        if (!filterField || !filterOp) {
+          throw new Error('filter requires field and operator (eq, neq, gt, lt, gte, lte, contains, startsWith, endsWith)');
+        }
+        return (inputData as unknown[]).filter((item) => {
+          const val = safeGetProperty(item, filterField);
+          switch (filterOp) {
+            case 'eq': return val === filterValue;
+            case 'neq': return val !== filterValue;
+            case 'gt': return (val as number) > (filterValue as number);
+            case 'lt': return (val as number) < (filterValue as number);
+            case 'gte': return (val as number) >= (filterValue as number);
+            case 'lte': return (val as number) <= (filterValue as number);
+            case 'contains': return String(val).includes(String(filterValue));
+            case 'startsWith': return String(val).startsWith(String(filterValue));
+            case 'endsWith': return String(val).endsWith(String(filterValue));
+            case 'truthy': return !!val;
+            case 'falsy': return !val;
+            default: throw new Error(`Unknown filter operator: ${filterOp}`);
+          }
+        });
 
       case 'map':
-        const mapper = new Function('item', `return ${task.input?.mapper}`);
-        return (inputData as unknown[]).map(mapper as (item: unknown) => unknown);
+        // Security: Only allow simple property extraction
+        // Example: { field: "name" } or { fields: ["id", "name"] }
+        const mapField = task.input?.field as string;
+        const mapFields = task.input?.fields as string[];
+        if (mapField) {
+          return (inputData as unknown[]).map((item) => safeGetProperty(item, mapField));
+        } else if (mapFields && Array.isArray(mapFields)) {
+          return (inputData as unknown[]).map((item) => {
+            const result: Record<string, unknown> = {};
+            for (const f of mapFields) {
+              result[f] = safeGetProperty(item, f);
+            }
+            return result;
+          });
+        }
+        throw new Error('map requires field or fields array');
 
       case 'reduce':
-        const reducer = new Function('acc', 'item', `return ${task.input?.reducer}`);
+        // Security: Only allow simple sum/count/concat operations
+        const reduceOp = task.input?.operation as string;
+        const reduceField = task.input?.field as string;
         const initial = task.input?.initial;
-        return (inputData as unknown[]).reduce(
-          reducer as (acc: unknown, item: unknown) => unknown,
-          initial
-        );
+        switch (reduceOp) {
+          case 'sum':
+            return (inputData as unknown[]).reduce(
+              (acc, item) => (acc as number) + (safeGetProperty(item, reduceField) as number || 0),
+              initial ?? 0
+            );
+          case 'count':
+            return (inputData as unknown[]).length;
+          case 'concat':
+            return (inputData as unknown[]).reduce(
+              (acc, item) => [...(acc as unknown[]), safeGetProperty(item, reduceField)],
+              initial ?? []
+            );
+          case 'min':
+            return Math.min(...(inputData as unknown[]).map(item => safeGetProperty(item, reduceField) as number));
+          case 'max':
+            return Math.max(...(inputData as unknown[]).map(item => safeGetProperty(item, reduceField) as number));
+          default:
+            throw new Error(`reduce requires operation: sum, count, concat, min, or max`);
+        }
 
       default:
         throw new Error(`Unknown transform: ${transform}`);

@@ -13,6 +13,7 @@
 
 import { EventEmitter } from 'events';
 import { logger } from '../../utils/logger';
+import { generateId as generateSecureId } from '../../utils/id';
 
 // =============================================================================
 // TYPES
@@ -136,7 +137,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
 
   // Generate order ID
   function generateOrderId(): string {
-    return `drift_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    return generateSecureId('drift');
   }
 
   // Create order (internal)

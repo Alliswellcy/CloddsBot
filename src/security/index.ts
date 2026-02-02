@@ -546,20 +546,44 @@ export interface SandboxOptions {
  * - Development/testing environments
  * - Code that has already been validated
  */
+/**
+ * SECURITY: Sandbox is DISABLED by default
+ *
+ * The previous implementation using new Function() was NOT secure and could be
+ * trivially escaped. Dynamic code execution is inherently dangerous.
+ *
+ * To enable (NOT RECOMMENDED), set ALLOW_UNSAFE_SANDBOX=true
+ * Only enable for trusted code in development/testing environments.
+ */
 export function createSandbox(options: SandboxOptions = {}): {
   eval: (code: string) => unknown;
   require: (module: string) => unknown;
 } {
   const allowedModules = new Set(options.allowedModules || []);
+  const allowUnsafe = process.env.ALLOW_UNSAFE_SANDBOX === 'true';
 
-  // Log warning if used in production
-  if (process.env.NODE_ENV === 'production') {
-    logger.warn('createSandbox: Using basic sandbox in production - NOT secure against malicious code');
+  if (!allowUnsafe) {
+    logger.warn('createSandbox: Sandbox is disabled for security. Set ALLOW_UNSAFE_SANDBOX=true to enable (NOT RECOMMENDED)');
+    return {
+      eval(_code: string): unknown {
+        throw new Error('Sandbox eval is disabled for security. Dynamic code execution is not allowed.');
+      },
+      require(module: string): unknown {
+        if (!allowedModules.has(module)) {
+          throw new Error(`Module '${module}' not allowed in sandbox`);
+        }
+        return require(module);
+      },
+    };
   }
+
+  // Log strong warning if enabled
+  logger.warn('createSandbox: UNSAFE SANDBOX ENABLED - This is NOT secure against malicious code!');
 
   return {
     eval(code: string): unknown {
-      // ⚠️ SECURITY: This is NOT a secure sandbox - new Function can be escaped
+      // ⚠️ SECURITY WARNING: This is NOT a secure sandbox - new Function can be escaped
+      // Only use with fully trusted code
       const sandbox = {
         console: {
           log: (...args: unknown[]) => logger.info({ sandbox: true }, String(args)),

@@ -18,6 +18,7 @@ import * as http from 'http';
 import { execFile, spawnSync } from 'child_process';
 import { promisify } from 'util';
 import { randomBytes } from 'crypto';
+import { generateId as generateSecureId } from '../utils/id';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -111,7 +112,7 @@ function ensureMediaDir(): void {
 
 /** Generate unique file ID */
 function generateId(): string {
-  return `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return generateSecureId('media');
 }
 
 /** Detect MIME type from buffer magic bytes */

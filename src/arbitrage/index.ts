@@ -14,6 +14,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { logger } from '../utils/logger';
+import { generateId as generateSecureId } from '../utils/id';
 import { Database } from '../db/index';
 import type { Platform, Market, PriceUpdate } from '../types';
 
@@ -245,7 +246,7 @@ export function createArbitrageService(
 
   // Generate ID
   function generateId(prefix: string): string {
-    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    return generateSecureId(prefix);
   }
 
   // Cache key

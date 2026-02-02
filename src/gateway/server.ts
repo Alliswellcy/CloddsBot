@@ -9,6 +9,12 @@ import { logger } from '../utils/logger';
 import type { Config } from '../types';
 import type { WebhookManager } from '../automation/webhooks';
 import { createWebhookMiddleware } from '../automation/webhooks';
+import {
+  runHealthCheck,
+  getErrorStats,
+  getRequestMetrics,
+  type HealthStatus,
+} from '../utils/production';
 
 export interface GatewayServer {
   start(): Promise<void>;
@@ -88,7 +94,11 @@ export type PerformanceDashboardHandler = (
   byStrategy: Array<{ strategy: string; trades: number; winRate: number; pnl: number }>;
 } | { error: string; status?: number }>;
 
-export function createServer(config: Config['gateway'], webhooks?: WebhookManager): GatewayServer {
+export function createServer(
+  config: Config['gateway'],
+  webhooks?: WebhookManager,
+  db?: { query: <T>(sql: string) => T[] }
+): GatewayServer {
   const app = express();
   let httpServer: Server | null = null;
   let wss: WebSocketServer | null = null;
@@ -99,6 +109,21 @@ export function createServer(config: Config['gateway'], webhooks?: WebhookManage
   let performanceDashboardHandler: PerformanceDashboardHandler | null = null;
   let backtestHandler: BacktestHandler | null = null;
 
+  // Auth middleware for sensitive endpoints
+  const authToken = process.env.CLODDS_TOKEN;
+  const requireAuth = (req: Request, res: express.Response, next: express.NextFunction) => {
+    if (!authToken) {
+      // No token configured - allow access (for development)
+      return next();
+    }
+    const providedToken = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
+    if (providedToken !== authToken) {
+      res.status(401).json({ error: 'Unauthorized - provide valid token via Authorization header or ?token= param' });
+      return;
+    }
+    next();
+  };
+
   const corsConfig = config.cors ?? false;
   app.use((req, res, next) => {
     if (!corsConfig) {
@@ -106,22 +131,107 @@ export function createServer(config: Config['gateway'], webhooks?: WebhookManage
     }
 
     const originHeader = req.headers.origin;
-    let origin = '*';
+    let origin = '';
+    let allowCredentials = false;
+
     if (Array.isArray(corsConfig)) {
-      origin = originHeader && corsConfig.includes(originHeader) ? originHeader : '';
+      // Security: Only allow specific origins from allowlist
+      if (originHeader && corsConfig.includes(originHeader)) {
+        origin = originHeader;
+        allowCredentials = true; // Safe to allow credentials with specific origin
+      }
     } else if (corsConfig === true) {
+      // Security: Wildcard origin - do NOT allow credentials
       origin = '*';
+      allowCredentials = false;
     }
 
     if (origin) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      // Security: Only allow credentials with specific origins, never with wildcard
+      if (allowCredentials) {
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+      }
     }
 
     if (req.method === 'OPTIONS') {
       res.status(204).end();
+      return;
+    }
+
+    next();
+  });
+
+  // IP-based rate limiting
+  const ipRequestCounts = new Map<string, { count: number; resetAt: number }>();
+  const IP_RATE_LIMIT = parseInt(process.env.CLODDS_IP_RATE_LIMIT || '100', 10); // requests per minute
+  const IP_RATE_WINDOW_MS = 60 * 1000; // 1 minute
+
+  app.use((req, res, next) => {
+    // Skip rate limiting for health checks
+    if (req.path === '/health') return next();
+
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    let record = ipRequestCounts.get(ip);
+
+    if (!record || now > record.resetAt) {
+      record = { count: 0, resetAt: now + IP_RATE_WINDOW_MS };
+      ipRequestCounts.set(ip, record);
+    }
+
+    record.count++;
+
+    // Set rate limit headers
+    res.setHeader('X-RateLimit-Limit', IP_RATE_LIMIT);
+    res.setHeader('X-RateLimit-Remaining', Math.max(0, IP_RATE_LIMIT - record.count));
+    res.setHeader('X-RateLimit-Reset', Math.ceil(record.resetAt / 1000));
+
+    if (record.count > IP_RATE_LIMIT) {
+      logger.warn({ ip, count: record.count }, 'Rate limit exceeded');
+      res.status(429).json({
+        error: 'Too many requests',
+        retryAfter: Math.ceil((record.resetAt - now) / 1000),
+      });
+      return;
+    }
+
+    next();
+  });
+
+  // Cleanup old IP records every 5 minutes
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, record] of ipRequestCounts) {
+      if (now > record.resetAt + IP_RATE_WINDOW_MS) {
+        ipRequestCounts.delete(ip);
+      }
+    }
+  }, 5 * 60 * 1000);
+
+  // HTTPS enforcement & security headers
+  app.use((req, res, next) => {
+    // HSTS header (only send over HTTPS or if explicitly enabled)
+    const hstsEnabled = process.env.CLODDS_HSTS_ENABLED === 'true';
+    const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+
+    if (hstsEnabled || isSecure) {
+      // 1 year HSTS with includeSubDomains
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+
+    // Additional security headers
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+
+    // Redirect HTTP to HTTPS if forced
+    const forceHttps = process.env.CLODDS_FORCE_HTTPS === 'true';
+    if (forceHttps && !isSecure) {
+      const host = req.headers.host || 'localhost';
+      res.redirect(301, `https://${host}${req.url}`);
       return;
     }
 
@@ -136,21 +246,69 @@ export function createServer(config: Config['gateway'], webhooks?: WebhookManage
     },
   }));
 
-  // Health check endpoint
-  app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: Date.now() });
+  // Health check endpoint (enhanced for production)
+  app.get('/health', async (req, res) => {
+    const deep = req.query.deep === 'true';
+
+    if (!db) {
+      // Simple health check if no DB provided
+      res.json({ status: 'healthy', timestamp: Date.now() });
+      return;
+    }
+
+    try {
+      const health: HealthStatus = await runHealthCheck(db, {
+        checkExternalApis: deep,
+      });
+
+      const httpStatus = health.status === 'healthy' ? 200 :
+                         health.status === 'degraded' ? 200 : 503;
+
+      res.status(httpStatus).json(health);
+    } catch (err) {
+      logger.error({ err }, 'Health check failed');
+      res.status(503).json({
+        status: 'unhealthy',
+        timestamp: Date.now(),
+        error: 'Health check failed',
+      });
+    }
+  });
+
+  // Metrics endpoint (for monitoring) - requires auth if CLODDS_TOKEN is set
+  app.get('/metrics', requireAuth, (_req, res) => {
+    const requestMetrics = getRequestMetrics();
+    const errorStats = getErrorStats();
+    const memUsage = process.memoryUsage();
+
+    res.json({
+      timestamp: Date.now(),
+      requests: requestMetrics,
+      errors: {
+        recentCount: errorStats.recentCount,
+        topErrors: errorStats.topErrors,
+      },
+      memory: {
+        heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
+        heapTotalMB: Math.round(memUsage.heapTotal / 1024 / 1024),
+        rssMB: Math.round(memUsage.rss / 1024 / 1024),
+      },
+    });
   });
 
   // API info endpoint
   app.get('/', (_req, res) => {
     res.json({
       name: 'clodds',
-      version: '0.1.0',
+      version: process.env.npm_package_version || '0.1.0',
       description: 'AI assistant for prediction markets',
       endpoints: {
         websocket: '/ws',
         webchat: '/chat',
         health: '/health',
+        healthDeep: '/health?deep=true',
+        metrics: '/metrics',
+        dashboard: '/dashboard',
       },
     });
   });

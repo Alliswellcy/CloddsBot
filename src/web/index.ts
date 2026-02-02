@@ -17,6 +17,7 @@ import { URL } from 'url';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { EventEmitter } from 'events';
+import { randomBytes } from 'crypto';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -81,6 +82,19 @@ export interface WebMessage {
   timestamp: number;
 }
 
+// Security: Validate WebSocket message structure
+function isValidWebMessage(obj: unknown): obj is WebMessage {
+  if (typeof obj !== 'object' || obj === null) return false;
+  const msg = obj as Record<string, unknown>;
+  return (
+    typeof msg.type === 'string' &&
+    msg.type.length > 0 &&
+    msg.type.length <= 100 &&
+    typeof msg.timestamp === 'number' &&
+    msg.timestamp > 0
+  );
+}
+
 // =============================================================================
 // CONSTANTS
 // =============================================================================
@@ -138,7 +152,8 @@ export class SessionManager {
   }
 
   private generateId(): string {
-    return Math.random().toString(36).substring(2) + Date.now().toString(36);
+    // Security: Use cryptographically secure random bytes for session IDs
+    return randomBytes(16).toString('hex');
   }
 }
 
@@ -402,10 +417,24 @@ export class WebServer extends EventEmitter {
 
     ws.on('message', (data) => {
       try {
-        const message = JSON.parse(data.toString()) as WebMessage;
-        this.emit('message', { clientId, message });
+        // Security: Limit message size to prevent DoS
+        const dataStr = data.toString();
+        if (dataStr.length > 1024 * 1024) { // 1MB limit
+          logger.warn({ clientId, size: dataStr.length }, 'WebSocket message too large');
+          return;
+        }
+
+        const parsed = JSON.parse(dataStr);
+
+        // Security: Validate message structure
+        if (!isValidWebMessage(parsed)) {
+          logger.warn({ clientId }, 'Invalid WebSocket message structure');
+          return;
+        }
+
+        this.emit('message', { clientId, message: parsed });
       } catch {
-        logger.warn({ clientId }, 'Invalid WebSocket message');
+        logger.warn({ clientId }, 'Invalid WebSocket message JSON');
       }
     });
 

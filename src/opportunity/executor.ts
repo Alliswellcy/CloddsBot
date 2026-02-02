@@ -24,6 +24,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { logger } from '../utils/logger';
+import { generateId as generateSecureId } from '../utils/id';
 import type { Platform } from '../types';
 import type { OpportunityFinder, Opportunity, ExecutionStep } from './index';
 import type { ExecutionService, OrderResult } from '../execution/index';
@@ -241,7 +242,7 @@ export function createOpportunityExecutor(
           // Simulate order
           orderResult = {
             success: true,
-            orderId: `dry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            orderId: generateSecureId('dry'),
             status: 'filled',
             filledSize: size,
             avgFillPrice: step.price,

@@ -11,6 +11,7 @@
 
 import { Database } from '../db/index';
 import { logger } from '../utils/logger';
+import { generateId } from '../utils/id';
 
 /** Model pricing (per 1M tokens) */
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -84,10 +85,7 @@ export interface UsageService {
   estimateCost(model: string, inputTokens: number, outputTokens: number): number;
 }
 
-/** Generate unique ID */
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
-}
+/** Generate unique ID - uses imported generateId from utils/id */
 
 export function createUsageService(db: Database): UsageService {
   // Initialize database table
