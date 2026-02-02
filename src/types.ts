@@ -1156,6 +1156,21 @@ export interface Config {
     ttlMs?: number;
     cleanupIntervalMs?: number;
   };
+  /** Tick recorder for TimescaleDB historical data storage */
+  tickRecorder?: {
+    /** Enable tick recording (default: false) */
+    enabled: boolean;
+    /** PostgreSQL/TimescaleDB connection string */
+    connectionString: string;
+    /** Batch size before flushing to DB (default: 100) */
+    batchSize?: number;
+    /** Flush interval in ms (default: 1000) */
+    flushIntervalMs?: number;
+    /** Retention period in days (default: 365) */
+    retentionDays?: number;
+    /** Platforms to record (default: all enabled) */
+    platforms?: Platform[];
+  };
   /** Session configuration (Clawdbot-style) */
   session?: {
     /** How to scope DM sessions */

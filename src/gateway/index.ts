@@ -17,7 +17,7 @@ import { EventEmitter } from 'events';
 import { randomBytes } from 'crypto';
 import { logger } from '../utils/logger';
 import { RateLimiter, type RateLimitConfig } from '../security';
-import type { Config, IncomingMessage, OutgoingMessage, ReactionMessage, PollMessage } from '../types';
+import type { Config, IncomingMessage, OutgoingMessage, ReactionMessage, PollMessage, Platform } from '../types';
 import { createServer as createHttpGatewayServer } from './server';
 import { createDatabase } from '../db';
 import { createMigrationRunner } from '../db/migrations';
@@ -44,6 +44,7 @@ import { createSmartRouter, type SmartRouter } from '../execution/smart-router';
 import { createExecutionService, type ExecutionService, createFuturesExecutionService, type FuturesExecutionService } from '../execution';
 import { createRealtimeAlertsService, connectWhaleTracker, connectOpportunityFinder, type RealtimeAlertsService } from '../alerts';
 import { createOpportunityExecutor, type OpportunityExecutor } from '../opportunity/executor';
+import { createTickRecorder, type TickRecorder } from '../services/tick-recorder';
 import chokidar, { FSWatcher } from 'chokidar';
 import path from 'path';
 import { loadConfig, CONFIG_FILE } from '../utils/config';
@@ -612,6 +613,9 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   // Auto-arbitrage executor
   let arbitrageExecutor: OpportunityExecutor | null = null;
 
+  // Tick recorder for historical data
+  let tickRecorder: TickRecorder | null = null;
+
   const sendMessage = async (message: OutgoingMessage): Promise<string | null> => {
     if (!channels) {
       logger.warn({ platform: message.platform }, 'Channel manager not ready; dropping message');
@@ -702,6 +706,31 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     });
 
     logger.info({ dryRun: effectiveDryRun, hasExecutionService: !!executionService }, 'Arbitrage executor initialized');
+  }
+
+  // Initialize tick recorder if enabled
+  if (config.tickRecorder?.enabled && config.tickRecorder.connectionString) {
+    tickRecorder = createTickRecorder({
+      enabled: true,
+      connectionString: config.tickRecorder.connectionString,
+      batchSize: config.tickRecorder.batchSize,
+      flushIntervalMs: config.tickRecorder.flushIntervalMs,
+      retentionDays: config.tickRecorder.retentionDays,
+      platforms: config.tickRecorder.platforms,
+    });
+
+    // Subscribe to feed events
+    feeds.on('price', (update) => {
+      tickRecorder?.recordTick(update);
+    });
+
+    // Note: orderbook events would need to be added to the feed manager
+    // For now, we record price updates which is the most common use case
+
+    logger.info(
+      { platforms: config.tickRecorder.platforms ?? 'all' },
+      'Tick recorder initialized (will start with gateway)'
+    );
   }
 
   const startMonitoring = () => {
@@ -1580,6 +1609,112 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     };
   });
 
+  // Tick recorder handlers
+  httpGateway.setTicksHandler(async (req) => {
+    if (!tickRecorder) {
+      return { error: 'Tick recorder not enabled', status: 503 };
+    }
+
+    const platform = req.params.platform as Platform;
+    const marketId = req.params.marketId;
+    const outcomeId = typeof req.query.outcomeId === 'string' ? req.query.outcomeId : undefined;
+    const startTime = req.query.startTime ? Number(req.query.startTime) : Date.now() - 24 * 60 * 60 * 1000;
+    const endTime = req.query.endTime ? Number(req.query.endTime) : Date.now();
+    const limit = req.query.limit ? Number(req.query.limit) : 1000;
+
+    const ticks = await tickRecorder.getTicks({
+      platform,
+      marketId,
+      outcomeId,
+      startTime,
+      endTime,
+      limit,
+    });
+
+    return {
+      ticks: ticks.map((t) => ({
+        time: t.time.toISOString(),
+        platform: t.platform,
+        marketId: t.marketId,
+        outcomeId: t.outcomeId,
+        price: t.price,
+        prevPrice: t.prevPrice,
+      })),
+    };
+  });
+
+  httpGateway.setOHLCHandler(async (req) => {
+    if (!tickRecorder) {
+      return { error: 'Tick recorder not enabled', status: 503 };
+    }
+
+    const platform = req.params.platform as Platform;
+    const marketId = req.params.marketId;
+    const outcomeId = typeof req.query.outcomeId === 'string' ? req.query.outcomeId : undefined;
+    const interval = (typeof req.query.interval === 'string' ? req.query.interval : '1h') as '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
+    const startTime = req.query.startTime ? Number(req.query.startTime) : Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const endTime = req.query.endTime ? Number(req.query.endTime) : Date.now();
+
+    if (!outcomeId) {
+      return { error: 'Missing required query parameter: outcomeId', status: 400 };
+    }
+
+    const candles = await tickRecorder.getOHLC({
+      platform,
+      marketId,
+      outcomeId,
+      interval,
+      startTime,
+      endTime,
+    });
+
+    return { candles };
+  });
+
+  httpGateway.setOrderbookHistoryHandler(async (req) => {
+    if (!tickRecorder) {
+      return { error: 'Tick recorder not enabled', status: 503 };
+    }
+
+    const platform = req.params.platform as Platform;
+    const marketId = req.params.marketId;
+    const outcomeId = typeof req.query.outcomeId === 'string' ? req.query.outcomeId : undefined;
+    const startTime = req.query.startTime ? Number(req.query.startTime) : Date.now() - 60 * 60 * 1000;
+    const endTime = req.query.endTime ? Number(req.query.endTime) : Date.now();
+    const limit = req.query.limit ? Number(req.query.limit) : 100;
+
+    const snapshots = await tickRecorder.getOrderbookSnapshots({
+      platform,
+      marketId,
+      outcomeId,
+      startTime,
+      endTime,
+      limit,
+    });
+
+    return {
+      snapshots: snapshots.map((s) => ({
+        time: s.time.toISOString(),
+        platform: s.platform,
+        marketId: s.marketId,
+        outcomeId: s.outcomeId,
+        bids: s.bids,
+        asks: s.asks,
+        spread: s.spread,
+        midPrice: s.midPrice,
+      })),
+    };
+  });
+
+  httpGateway.setTickRecorderStatsHandler(async (_req) => {
+    if (!tickRecorder) {
+      return { error: 'Tick recorder not enabled', status: 503 };
+    }
+
+    const stats = tickRecorder.getStats();
+    return { stats };
+  });
+
   return {
     async start(): Promise<void> {
       logger.info('Starting gateway services');
@@ -1594,6 +1729,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         if (copyTrading) copyTrading.stop();
         if (realtimeAlerts) realtimeAlerts.stop();
         if (arbitrageExecutor) arbitrageExecutor.stop();
+        if (tickRecorder) await tickRecorder.stop();
         if (cronService) await cronService.stop();
         if (monitoring) monitoring.stop();
         providerHealth?.stop();
@@ -1638,6 +1774,12 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       if (arbitrageExecutor) {
         arbitrageExecutor.start();
         logger.info('Arbitrage executor started');
+      }
+
+      // Start tick recorder if enabled
+      if (tickRecorder) {
+        await tickRecorder.start();
+        logger.info('Tick recorder started');
       }
 
       started = true;
@@ -1726,6 +1868,12 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       if (arbitrageExecutor) {
         arbitrageExecutor.stop();
         arbitrageExecutor = null;
+      }
+
+      // Stop tick recorder
+      if (tickRecorder) {
+        await tickRecorder.stop();
+        tickRecorder = null;
       }
 
       // Stop realtime alerts and cleanup subscriptions

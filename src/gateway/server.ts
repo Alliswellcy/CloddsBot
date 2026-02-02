@@ -26,6 +26,10 @@ export interface GatewayServer {
   setMarketIndexSyncHandler(handler: MarketIndexSyncHandler | null): void;
   setPerformanceDashboardHandler(handler: PerformanceDashboardHandler | null): void;
   setBacktestHandler(handler: BacktestHandler | null): void;
+  setTicksHandler(handler: TicksHandler | null): void;
+  setOHLCHandler(handler: OHLCHandler | null): void;
+  setOrderbookHistoryHandler(handler: OrderbookHistoryHandler | null): void;
+  setTickRecorderStatsHandler(handler: TickRecorderStatsHandler | null): void;
 }
 
 export type ChannelWebhookHandler = (
@@ -94,6 +98,61 @@ export type PerformanceDashboardHandler = (
   byStrategy: Array<{ strategy: string; trades: number; winRate: number; pnl: number }>;
 } | { error: string; status?: number }>;
 
+export type TicksHandler = (
+  req: Request
+) => Promise<{
+  ticks: Array<{
+    time: string;
+    platform: string;
+    marketId: string;
+    outcomeId: string;
+    price: number;
+    prevPrice: number | null;
+  }>;
+} | { error: string; status?: number }>;
+
+export type OHLCHandler = (
+  req: Request
+) => Promise<{
+  candles: Array<{
+    time: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    tickCount: number;
+  }>;
+} | { error: string; status?: number }>;
+
+export type OrderbookHistoryHandler = (
+  req: Request
+) => Promise<{
+  snapshots: Array<{
+    time: string;
+    platform: string;
+    marketId: string;
+    outcomeId: string;
+    bids: Array<[number, number]>;
+    asks: Array<[number, number]>;
+    spread: number | null;
+    midPrice: number | null;
+  }>;
+} | { error: string; status?: number }>;
+
+export type TickRecorderStatsHandler = (
+  req: Request
+) => Promise<{
+  stats: {
+    ticksRecorded: number;
+    orderbooksRecorded: number;
+    ticksInBuffer: number;
+    orderbooksInBuffer: number;
+    lastFlushTime: number | null;
+    dbConnected: boolean;
+    platforms: string[];
+  };
+} | { error: string; status?: number }>;
+
 export function createServer(
   config: Config['gateway'],
   webhooks?: WebhookManager,
@@ -108,6 +167,10 @@ export function createServer(
   let marketIndexSyncHandler: MarketIndexSyncHandler | null = null;
   let performanceDashboardHandler: PerformanceDashboardHandler | null = null;
   let backtestHandler: BacktestHandler | null = null;
+  let ticksHandler: TicksHandler | null = null;
+  let ohlcHandler: OHLCHandler | null = null;
+  let orderbookHistoryHandler: OrderbookHistoryHandler | null = null;
+  let tickRecorderStatsHandler: TickRecorderStatsHandler | null = null;
 
   // Auth middleware for sensitive endpoints
   const authToken = process.env.CLODDS_TOKEN;
@@ -691,6 +754,83 @@ export function createServer(
     }
   });
 
+  // Tick recorder endpoints
+  app.get('/api/ticks/:platform/:marketId', async (req, res) => {
+    if (!ticksHandler) {
+      res.status(404).json({ error: 'Tick recorder not enabled' });
+      return;
+    }
+
+    try {
+      const result = await ticksHandler(req);
+      if ('error' in result) {
+        res.status(result.status ?? 400).json({ error: result.error });
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      logger.error({ error }, 'Ticks handler failed');
+      res.status(500).json({ error: 'Ticks query error' });
+    }
+  });
+
+  app.get('/api/ohlc/:platform/:marketId', async (req, res) => {
+    if (!ohlcHandler) {
+      res.status(404).json({ error: 'Tick recorder not enabled' });
+      return;
+    }
+
+    try {
+      const result = await ohlcHandler(req);
+      if ('error' in result) {
+        res.status(result.status ?? 400).json({ error: result.error });
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      logger.error({ error }, 'OHLC handler failed');
+      res.status(500).json({ error: 'OHLC query error' });
+    }
+  });
+
+  app.get('/api/orderbook-history/:platform/:marketId', async (req, res) => {
+    if (!orderbookHistoryHandler) {
+      res.status(404).json({ error: 'Tick recorder not enabled' });
+      return;
+    }
+
+    try {
+      const result = await orderbookHistoryHandler(req);
+      if ('error' in result) {
+        res.status(result.status ?? 400).json({ error: result.error });
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      logger.error({ error }, 'Orderbook history handler failed');
+      res.status(500).json({ error: 'Orderbook history query error' });
+    }
+  });
+
+  app.get('/api/tick-recorder/stats', async (req, res) => {
+    if (!tickRecorderStatsHandler) {
+      res.status(404).json({ error: 'Tick recorder not enabled' });
+      return;
+    }
+
+    try {
+      const result = await tickRecorderStatsHandler(req);
+      if ('error' in result) {
+        res.status(result.status ?? 400).json({ error: result.error });
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      logger.error({ error }, 'Tick recorder stats handler failed');
+      res.status(500).json({ error: 'Tick recorder stats error' });
+    }
+  });
+
   // Telegram Mini App
   app.get('/miniapp', (_req, res) => {
     res.send(`<!DOCTYPE html>
@@ -1240,6 +1380,18 @@ export function createServer(
     },
     setBacktestHandler(handler: BacktestHandler | null): void {
       backtestHandler = handler;
+    },
+    setTicksHandler(handler: TicksHandler | null): void {
+      ticksHandler = handler;
+    },
+    setOHLCHandler(handler: OHLCHandler | null): void {
+      ohlcHandler = handler;
+    },
+    setOrderbookHistoryHandler(handler: OrderbookHistoryHandler | null): void {
+      orderbookHistoryHandler = handler;
+    },
+    setTickRecorderStatsHandler(handler: TickRecorderStatsHandler | null): void {
+      tickRecorderStatsHandler = handler;
     },
   };
 }
