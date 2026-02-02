@@ -724,8 +724,9 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       tickRecorder?.recordTick(update);
     });
 
-    // Note: orderbook events would need to be added to the feed manager
-    // For now, we record price updates which is the most common use case
+    feeds.on('orderbook', (update) => {
+      tickRecorder?.recordOrderbook(update);
+    });
 
     logger.info(
       { platforms: config.tickRecorder.platforms ?? 'all' },

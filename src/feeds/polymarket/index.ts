@@ -8,7 +8,7 @@
 import { EventEmitter } from 'eventemitter3';
 import WebSocket from 'ws';
 import { logger } from '../../utils/logger';
-import type { Market, PriceUpdate, Orderbook, Platform } from '../../types';
+import type { Market, PriceUpdate, Orderbook, OrderbookUpdate, Platform } from '../../types';
 import { getGlobalFreshnessTracker, type FreshnessTracker } from '../freshness';
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
@@ -191,6 +191,25 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
     }
   }
 
+  function emitOrderbookUpdate(
+    assetId: string,
+    marketId: string,
+    bids: Array<[number, number]>,
+    asks: Array<[number, number]>,
+    timestamp: number
+  ) {
+    const orderbookUpdate: OrderbookUpdate = {
+      platform: 'polymarket' as Platform,
+      marketId,
+      outcomeId: assetId,
+      bids,
+      asks,
+      timestamp,
+    };
+
+    emitter.emit('orderbook', orderbookUpdate);
+  }
+
   function handleMessage(message: unknown) {
     if (!message || typeof message !== 'object') return;
     const msg = message as Record<string, unknown>;
@@ -203,31 +222,51 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
         const marketId = (msg.market as string | undefined) || assetId;
         if (!assetId || !marketId) return;
 
-        const bidsRaw = (msg.bids || msg.buys) as Array<{ price?: string | number }> | undefined;
-        const asksRaw = (msg.asks || msg.sells) as Array<{ price?: string | number }> | undefined;
+        const bidsRaw = (msg.bids || msg.buys) as Array<{ price?: string | number; size?: string | number }> | undefined;
+        const asksRaw = (msg.asks || msg.sells) as Array<{ price?: string | number; size?: string | number }> | undefined;
 
         let bestBid: number | null = null;
         let bestAsk: number | null = null;
 
+        // Parse bids with sizes for orderbook recording
+        const bids: Array<[number, number]> = [];
         if (Array.isArray(bidsRaw)) {
           for (const bid of bidsRaw) {
             const price = toNumber(bid?.price);
+            const size = toNumber(bid?.size) ?? 0;
             if (price === null) continue;
+            bids.push([price, size]);
             if (bestBid === null || price > bestBid) bestBid = price;
           }
+          // Sort bids descending by price
+          bids.sort((a, b) => b[0] - a[0]);
         }
 
+        // Parse asks with sizes for orderbook recording
+        const asks: Array<[number, number]> = [];
         if (Array.isArray(asksRaw)) {
           for (const ask of asksRaw) {
             const price = toNumber(ask?.price);
+            const size = toNumber(ask?.size) ?? 0;
             if (price === null) continue;
+            asks.push([price, size]);
             if (bestAsk === null || price < bestAsk) bestAsk = price;
           }
+          // Sort asks ascending by price
+          asks.sort((a, b) => a[0] - b[0]);
         }
 
+        const timestamp = toTimestamp(msg.timestamp);
+
+        // Emit orderbook update for tick recording
+        if (bids.length > 0 || asks.length > 0) {
+          emitOrderbookUpdate(assetId, marketId, bids, asks, timestamp);
+        }
+
+        // Emit price update from mid price
         const mid = pickMidPrice(bestBid, bestAsk);
         if (mid !== null) {
-          emitPriceUpdate(assetId, marketId, mid, toTimestamp(msg.timestamp));
+          emitPriceUpdate(assetId, marketId, mid, timestamp);
         }
         return;
       }

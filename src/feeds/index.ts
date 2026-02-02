@@ -18,7 +18,7 @@ import { createPredictFunFeed, PredictFunFeed } from './predictfun/index';
 import { createNewsFeed, NewsFeed } from './news/index';
 import { analyzeEdge, calculateKelly, EdgeAnalysis } from './external/index';
 import { logger } from '../utils/logger';
-import type { Config, Market, PriceUpdate, Orderbook, NewsItem, Platform } from '../types';
+import type { Config, Market, PriceUpdate, OrderbookUpdate, Orderbook, NewsItem, Platform } from '../types';
 
 export interface FeedManager extends EventEmitter {
   start(): Promise<void>;
@@ -84,6 +84,10 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
 
     polymarket.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
+    });
+
+    polymarket.on('orderbook', (update: OrderbookUpdate) => {
+      emitter.emit('orderbook', update);
     });
 
     if (config.polymarket.rtds?.enabled) {
@@ -200,6 +204,9 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
     opinion.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
     });
+
+    // Note: Opinion orderbook events have non-standard format (raw data instead of bids/asks)
+    // TODO: Fix Opinion feed to emit proper OrderbookUpdate format before enabling
   }
 
   // Initialize Virtuals Protocol (Base chain AI agents)
