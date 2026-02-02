@@ -5,6 +5,44 @@ All notable changes to Clodds will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-02-02
+
+### Added
+
+#### TimescaleDB Tick Recorder
+- Historical tick and orderbook data storage in TimescaleDB
+- Batched writes (100 ticks or 1s flush interval) for performance
+- Automatic schema initialization with hypertables
+- Compression policy (7 days) and retention policy (365 days)
+- OHLC aggregation using `time_bucket()` / `date_trunc()`
+- REST endpoints: `/api/ticks/:platform/:marketId`, `/api/ohlc/:platform/:marketId`, `/api/orderbook-history/:platform/:marketId`
+- Stats endpoint: `/api/tick-recorder/stats`
+- New skill: `ticks` with `/ticks` command for querying historical data
+
+#### Real-time WebSocket Tick Streaming
+- Push-based streaming at `/api/ticks/stream` WebSocket endpoint
+- Subscribe to specific platform/market pairs
+- Receive live price ticks and orderbook updates
+- Subscription management with per-client limits (100 max)
+- Stats endpoint: `/api/tick-streamer/stats`
+
+#### Feed Improvements
+- Orderbook events now emitted from Polymarket feed
+- Feed events wired to both tick recorder and tick streamer
+
+### Configuration
+
+New config options in `clodds.config.yaml`:
+```yaml
+tickRecorder:
+  enabled: true
+  connectionString: postgres://user:pass@localhost:5432/clodds
+  batchSize: 100
+  flushIntervalMs: 1000
+  retentionDays: 365
+  platforms: [polymarket, kalshi]  # optional, defaults to all
+```
+
 ## [0.3.4] - 2026-02-02
 
 ### Added

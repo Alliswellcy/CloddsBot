@@ -137,6 +137,122 @@ Response:
 { "result": { "indexed": 123, "byPlatform": { "polymarket": 100 } } }
 ```
 
+### GET /api/ticks/:platform/:marketId
+
+Get historical tick data (requires `tickRecorder.enabled`).
+
+Query parameters:
+- `outcomeId` (string, optional): filter by outcome
+- `startTime` (number, optional): Unix timestamp in ms (default: 24h ago)
+- `endTime` (number, optional): Unix timestamp in ms (default: now)
+- `limit` (number, optional): max results (default: 1000)
+
+Response:
+```json
+{
+  "ticks": [
+    {
+      "time": "2026-02-02T12:00:00.000Z",
+      "platform": "polymarket",
+      "marketId": "0x123",
+      "outcomeId": "yes",
+      "price": 0.55,
+      "prevPrice": 0.54
+    }
+  ]
+}
+```
+
+### GET /api/ohlc/:platform/:marketId
+
+Get OHLC candle data (requires `tickRecorder.enabled`).
+
+Query parameters:
+- `outcomeId` (string, required): outcome ID
+- `interval` (string, optional): `1m|5m|15m|1h|4h|1d` (default: `1h`)
+- `startTime` (number, optional): Unix timestamp in ms (default: 7d ago)
+- `endTime` (number, optional): Unix timestamp in ms (default: now)
+
+Response:
+```json
+{
+  "candles": [
+    {
+      "time": 1706500000000,
+      "open": 0.50,
+      "high": 0.56,
+      "low": 0.49,
+      "close": 0.55,
+      "tickCount": 42
+    }
+  ]
+}
+```
+
+### GET /api/orderbook-history/:platform/:marketId
+
+Get historical orderbook snapshots (requires `tickRecorder.enabled`).
+
+Query parameters:
+- `outcomeId` (string, optional): filter by outcome
+- `startTime` (number, optional): Unix timestamp in ms (default: 1h ago)
+- `endTime` (number, optional): Unix timestamp in ms (default: now)
+- `limit` (number, optional): max results (default: 100)
+
+Response:
+```json
+{
+  "snapshots": [
+    {
+      "time": "2026-02-02T12:00:00.000Z",
+      "platform": "polymarket",
+      "marketId": "0x123",
+      "outcomeId": "yes",
+      "bids": [[0.54, 1000], [0.53, 500]],
+      "asks": [[0.56, 800], [0.57, 1200]],
+      "spread": 0.02,
+      "midPrice": 0.55
+    }
+  ]
+}
+```
+
+### GET /api/tick-recorder/stats
+
+Get tick recorder statistics (requires `tickRecorder.enabled`).
+
+Response:
+```json
+{
+  "stats": {
+    "ticksRecorded": 150000,
+    "orderbooksRecorded": 50000,
+    "ticksInBuffer": 45,
+    "orderbooksInBuffer": 12,
+    "lastFlushTime": 1706500000000,
+    "dbConnected": true,
+    "platforms": ["polymarket", "kalshi"]
+  }
+}
+```
+
+### GET /api/tick-streamer/stats
+
+Get tick streamer statistics.
+
+Response:
+```json
+{
+  "stats": {
+    "connectedClients": 5,
+    "totalSubscriptions": 12,
+    "ticksBroadcast": 45000,
+    "orderbooksBroadcast": 15000,
+    "uptime": 3600000
+  }
+}
+```
+
 ## WebSocket endpoints
 
 ### WS /ws
@@ -145,6 +261,67 @@ Development WebSocket endpoint. Currently echoes incoming JSON with a wrapper:
 
 ```
 { "type": "res", "id": "<client id>", "ok": true, "payload": { "echo": <message> } }
+```
+
+### WS /api/ticks/stream (Tick Streaming)
+
+Real-time tick data streaming via WebSocket. Subscribe to specific markets and receive live price/orderbook updates.
+
+**Client messages:**
+
+```json
+// Subscribe to a market (ticks enabled by default, orderbook opt-in)
+{ "type": "subscribe", "platform": "polymarket", "marketId": "0x123", "ticks": true, "orderbook": true }
+
+// Unsubscribe
+{ "type": "unsubscribe", "platform": "polymarket", "marketId": "0x123" }
+
+// Ping (keepalive)
+{ "type": "ping" }
+```
+
+**Server messages:**
+
+```json
+// Subscription confirmed
+{ "type": "subscribed", "platform": "polymarket", "marketId": "0x123", "ticks": true, "orderbook": true }
+
+// Price tick
+{ "type": "tick", "platform": "polymarket", "marketId": "0x123", "outcomeId": "yes", "price": 0.55, "prevPrice": 0.54, "timestamp": 1706500000000 }
+
+// Orderbook update
+{ "type": "orderbook", "platform": "polymarket", "marketId": "0x123", "outcomeId": "yes", "bids": [[0.54, 1000]], "asks": [[0.56, 800]], "spread": 0.02, "midPrice": 0.55, "timestamp": 1706500000000 }
+
+// Pong (keepalive response)
+{ "type": "pong", "timestamp": 1706500000000 }
+
+// Error
+{ "type": "error", "message": "Max subscriptions reached", "code": "MAX_SUBSCRIPTIONS" }
+```
+
+**Example usage (JavaScript):**
+
+```javascript
+const ws = new WebSocket('ws://localhost:18789/api/ticks/stream');
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    type: 'subscribe',
+    platform: 'polymarket',
+    marketId: '0x123abc',
+    ticks: true,
+    orderbook: true
+  }));
+};
+
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.type === 'tick') {
+    console.log(`Price: ${msg.price}, Change: ${msg.price - msg.prevPrice}`);
+  } else if (msg.type === 'orderbook') {
+    console.log(`Spread: ${msg.spread}, Mid: ${msg.midPrice}`);
+  }
+};
 ```
 
 ### WS /chat (WebChat)
