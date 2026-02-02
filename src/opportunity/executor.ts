@@ -141,6 +141,7 @@ const DEFAULT_CONFIG: Required<OpportunityExecutorConfig> = {
   maxPriceSlippage: 0.5,
   useFeatureFilters: true,
   featureThresholds: {},
+  circuitBreaker: undefined as unknown as CircuitBreaker, // Optional - set at runtime
 };
 
 export function createOpportunityExecutor(
@@ -227,7 +228,7 @@ export function createOpportunityExecutor(
     // Feature-based checks (if enabled)
     if (cfg.useFeatureFilters) {
       for (const market of opp.markets) {
-        const features = getMarketFeatures(market.platform, market.marketId, market.outcomeId);
+        const features = getMarketFeatures(market.platform, market.marketId, market.outcome);
 
         // Skip if features unavailable - don't block execution
         if (!features) continue;
