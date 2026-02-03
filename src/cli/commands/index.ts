@@ -2499,6 +2499,278 @@ export function createLocaleCommands(program: Command): void {
 }
 
 // =============================================================================
+// LEDGER COMMANDS
+// =============================================================================
+
+export function createLedgerCommands(program: Command): void {
+  const ledger = program
+    .command('ledger')
+    .description('Trade ledger - decision audit trail');
+
+  const withDb = async <T,>(fn: (db: ReturnType<typeof createDatabase>) => T | Promise<T>) => {
+    const db = createDatabase();
+    createMigrationRunner(db).migrate();
+    try {
+      return await fn(db);
+    } finally {
+      db.close();
+    }
+  };
+
+  ledger
+    .command('list [userId]')
+    .description('List recent decisions')
+    .option('-n, --limit <n>', 'Number of records', '20')
+    .option('-c, --category <cat>', 'Filter by category (trade/copy/arbitrage/risk)')
+    .option('-d, --decision <dec>', 'Filter by decision (approved/rejected/blocked)')
+    .option('-p, --platform <plt>', 'Filter by platform')
+    .action(async (userId?: string, options?: { limit?: string; category?: string; decision?: string; platform?: string }) => {
+      await withDb(async (db) => {
+        const { LedgerStorage } = await import('../../ledger/storage');
+        const storage = new LedgerStorage(db as unknown as import('../../ledger/storage').LedgerDb);
+        storage.init();
+
+        const uid = userId || 'default';
+        const records = storage.list(uid, {
+          limit: parseInt(options?.limit || '20', 10),
+          category: options?.category as import('../../ledger/types').DecisionCategory,
+          decision: options?.decision as import('../../ledger/types').DecisionOutcome,
+          platform: options?.platform,
+        });
+
+        if (records.length === 0) {
+          console.log('\nNo decisions found\n');
+          return;
+        }
+
+        console.log(`\n📒 Trade Ledger (${records.length} decisions)\n`);
+        const { formatDecision } = await import('../../ledger/index');
+        for (const record of records) {
+          console.log(formatDecision(record));
+        }
+      });
+    });
+
+  ledger
+    .command('stats [userId]')
+    .description('Show decision statistics')
+    .option('-p, --period <p>', 'Period (24h/7d/30d/90d/all)', '7d')
+    .option('-c, --category <cat>', 'Filter by category')
+    .action(async (userId?: string, options?: { period?: string; category?: string }) => {
+      await withDb(async (db) => {
+        const { LedgerStorage } = await import('../../ledger/storage');
+        const storage = new LedgerStorage(db as unknown as import('../../ledger/storage').LedgerDb);
+        storage.init();
+
+        const uid = userId || 'default';
+        const stats = storage.stats(uid, {
+          period: options?.period as '24h' | '7d' | '30d' | '90d' | 'all',
+          category: options?.category as import('../../ledger/types').DecisionCategory,
+        });
+
+        const { formatStats } = await import('../../ledger/index');
+        console.log('\n' + formatStats(stats));
+      });
+    });
+
+  ledger
+    .command('calibration [userId]')
+    .description('Show confidence calibration')
+    .action(async (userId?: string) => {
+      await withDb(async (db) => {
+        const { LedgerStorage } = await import('../../ledger/storage');
+        const storage = new LedgerStorage(db as unknown as import('../../ledger/storage').LedgerDb);
+        storage.init();
+
+        const uid = userId || 'default';
+        const cal = storage.calibration(uid);
+
+        console.log('\n📊 Confidence Calibration\n');
+        console.log(`Overall accuracy: ${cal.overallAccuracy.toFixed(1)}% (${cal.totalWithOutcome} decisions with outcome)\n`);
+
+        if (cal.totalWithOutcome > 0) {
+          console.log('By confidence bucket:');
+          for (const bucket of cal.buckets) {
+            if (bucket.count > 0) {
+              const bar = '█'.repeat(Math.round(bucket.accuracyRate / 10));
+              console.log(`  ${bucket.range.padEnd(8)} ${bucket.accuracyRate.toFixed(0).padStart(3)}% ${bar} (${bucket.count} decisions)`);
+            }
+          }
+        }
+        console.log('');
+      });
+    });
+
+  ledger
+    .command('export [userId]')
+    .description('Export decisions to file')
+    .option('-f, --format <fmt>', 'Format (json/csv)', 'json')
+    .option('-o, --output <file>', 'Output file')
+    .action(async (userId?: string, options?: { format?: string; output?: string }) => {
+      await withDb(async (db) => {
+        const { LedgerStorage } = await import('../../ledger/storage');
+        const storage = new LedgerStorage(db as unknown as import('../../ledger/storage').LedgerDb);
+        storage.init();
+
+        const uid = userId || 'default';
+        const format = (options?.format || 'json') as 'json' | 'csv';
+        const data = storage.export(uid, format);
+
+        const output = options?.output || `ledger-${uid}-${Date.now()}.${format}`;
+        writeFileSync(output, data);
+        console.log(`\n✅ Exported to ${output}\n`);
+      });
+    });
+
+  ledger
+    .command('prune')
+    .description('Delete old decisions')
+    .option('-d, --days <n>', 'Retention days', '90')
+    .option('-y, --yes', 'Skip confirmation')
+    .action(async (options: { days?: string; yes?: boolean }) => {
+      const days = parseInt(options.days || '90', 10);
+
+      if (!options.yes) {
+        console.log(`\n⚠️  This will delete decisions older than ${days} days.`);
+        console.log('Run with --yes to confirm\n');
+        return;
+      }
+
+      await withDb(async (db) => {
+        const { LedgerStorage } = await import('../../ledger/storage');
+        const storage = new LedgerStorage(db as unknown as import('../../ledger/storage').LedgerDb);
+        storage.init();
+
+        const count = storage.prune(days);
+        console.log(`\n🗑️  Pruned ${count} old decisions\n`);
+      });
+    });
+
+  ledger
+    .command('verify <id>')
+    .description('Verify decision hash integrity')
+    .action(async (id: string) => {
+      await withDb(async (db) => {
+        const { LedgerStorage } = await import('../../ledger/storage');
+        const { verifyHash } = await import('../../ledger/hash');
+        const storage = new LedgerStorage(db as unknown as import('../../ledger/storage').LedgerDb);
+        storage.init();
+
+        const record = storage.get(id);
+        if (!record) {
+          console.log(`\n❌ Decision not found: ${id}\n`);
+          process.exitCode = 1;
+          return;
+        }
+
+        if (!record.hash) {
+          console.log(`\n⚠️  No hash stored for decision ${id.slice(0, 8)}\n`);
+          console.log('Enable hashIntegrity in ledger config to store hashes.\n');
+          return;
+        }
+
+        const valid = verifyHash(record, record.hash);
+        if (valid) {
+          console.log(`\n✅ Hash verified: ${record.hash.slice(0, 16)}...\n`);
+        } else {
+          console.log(`\n❌ Hash mismatch - record may have been tampered with\n`);
+          process.exitCode = 1;
+        }
+      });
+    });
+
+  ledger
+    .command('config')
+    .description('Show ledger configuration')
+    .action(async () => {
+      const configPath = join(homedir(), '.clodds', 'config.json');
+      let ledgerConfig = {
+        enabled: false,
+        captureAll: false,
+        hashIntegrity: false,
+        retentionDays: 90,
+        onchainAnchor: false,
+      };
+
+      if (existsSync(configPath)) {
+        const data = JSON.parse(readFileSync(configPath, 'utf-8'));
+        ledgerConfig = { ...ledgerConfig, ...data.ledger };
+      }
+
+      console.log('\n📒 Trade Ledger Configuration\n');
+      console.log(`  enabled:        ${ledgerConfig.enabled ? '✅' : '❌'}`);
+      console.log(`  captureAll:     ${ledgerConfig.captureAll ? 'All tools' : 'Trading tools only'}`);
+      console.log(`  hashIntegrity:  ${ledgerConfig.hashIntegrity ? 'SHA-256 enabled' : 'Disabled'}`);
+      console.log(`  retentionDays:  ${ledgerConfig.retentionDays}`);
+      console.log(`  onchainAnchor:  ${ledgerConfig.onchainAnchor ? 'Enabled' : 'Disabled'}`);
+      console.log('\nEnable with: clodds config set ledger.enabled true\n');
+    });
+
+  ledger
+    .command('anchor <id>')
+    .description('Anchor decision hash to blockchain')
+    .option('-c, --chain <chain>', 'Chain to use (solana/polygon/base)', 'solana')
+    .action(async (id: string, options: { chain?: string }) => {
+      await withDb(async (db) => {
+        const { LedgerStorage } = await import('../../ledger/storage');
+        const { createAnchorService } = await import('../../ledger/anchor');
+        const storage = new LedgerStorage(db as unknown as import('../../ledger/storage').LedgerDb);
+        storage.init();
+
+        const record = storage.get(id);
+        if (!record) {
+          console.log(`\n❌ Decision not found: ${id}\n`);
+          process.exitCode = 1;
+          return;
+        }
+
+        if (!record.hash) {
+          console.log(`\n⚠️  No hash stored for decision ${id.slice(0, 8)}`);
+          console.log('Enable hashIntegrity in ledger config first.\n');
+          return;
+        }
+
+        const chain = (options.chain || 'solana') as 'solana' | 'polygon' | 'base';
+        console.log(`\n⏳ Anchoring to ${chain}...`);
+
+        const anchor = createAnchorService({ chain });
+        const result = await anchor.anchor(record.hash);
+
+        if (result.success) {
+          console.log(`\n✅ Anchored to ${chain}`);
+          console.log(`   Hash: ${record.hash.slice(0, 16)}...`);
+          console.log(`   Tx: ${result.txHash}\n`);
+        } else {
+          console.log(`\n❌ Anchor failed: ${result.error}\n`);
+          process.exitCode = 1;
+        }
+      });
+    });
+
+  ledger
+    .command('verify-anchor <txHash> <hash>')
+    .description('Verify an onchain anchor')
+    .option('-c, --chain <chain>', 'Chain to check (solana/polygon/base)', 'solana')
+    .action(async (txHash: string, hash: string, options: { chain?: string }) => {
+      const { verifyAnchor } = await import('../../ledger/anchor');
+      const chain = (options.chain || 'solana') as 'solana' | 'polygon' | 'base';
+
+      console.log(`\n⏳ Verifying on ${chain}...`);
+
+      const result = await verifyAnchor(txHash, hash, chain);
+
+      if (result.verified) {
+        console.log(`\n✅ Anchor verified on ${chain}`);
+        console.log(`   Tx: ${txHash}`);
+        console.log(`   Hash: ${hash.slice(0, 16)}...\n`);
+      } else {
+        console.log(`\n❌ Verification failed: ${result.error}\n`);
+        process.exitCode = 1;
+      }
+    });
+}
+
+// =============================================================================
 // MAIN EXPORT
 // =============================================================================
 
@@ -2517,6 +2789,7 @@ export function addAllCommands(program: Command): void {
   createUsageCommands(program);
   createCredsCommands(program);
   createLocaleCommands(program);
+  createLedgerCommands(program);
   createInitCommand(program);
   createUpgradeCommand(program);
   createLoginCommand(program);

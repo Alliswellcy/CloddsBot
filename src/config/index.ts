@@ -341,6 +341,15 @@ export interface MetaConfig {
   lastTouchedAt?: string;
 }
 
+export interface LedgerConfig {
+  enabled?: boolean;
+  captureAll?: boolean;
+  hashIntegrity?: boolean;
+  retentionDays?: number;
+  onchainAnchor?: boolean;
+  anchorChain?: 'solana' | 'polygon' | 'base';
+}
+
 export interface CloddsConfig {
   agent?: AgentConfig;
   gateway?: GatewayConfig;
@@ -373,6 +382,7 @@ export interface CloddsConfig {
   logging?: LoggingConfig;
   http?: HttpRateLimitConfig;
   monitoring?: MonitoringConfig;
+  ledger?: LedgerConfig;
   meta?: MetaConfig;
 }
 

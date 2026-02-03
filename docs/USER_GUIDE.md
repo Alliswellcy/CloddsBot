@@ -209,6 +209,39 @@ clodds locale set <code>        # Set locale (en, zh, es, ja, ko, de, fr, pt, ru
 clodds locale test [key]        # Test a translation key
 ```
 
+### Trade Ledger Commands
+
+Decision audit trail for AI trading transparency.
+
+```bash
+clodds ledger list [userId]         # List recent decisions
+clodds ledger list -n 50            # List more decisions
+clodds ledger list -c trade         # Filter by category (trade/copy/arbitrage/risk)
+clodds ledger list -d rejected      # Filter by decision (approved/rejected/blocked)
+clodds ledger stats [userId]        # Show decision statistics
+clodds ledger stats -p 30d          # Stats for last 30 days
+clodds ledger calibration [userId]  # Show confidence calibration
+clodds ledger export [userId]       # Export decisions to JSON
+clodds ledger export -f csv         # Export as CSV
+clodds ledger prune --days 90       # Delete decisions older than 90 days
+clodds ledger verify <id>           # Verify decision hash integrity
+clodds ledger config                # Show ledger configuration
+```
+
+Enable the ledger:
+```bash
+clodds config set ledger.enabled true
+clodds config set ledger.hashIntegrity true  # Optional: SHA-256 hashing
+```
+
+Onchain anchoring (tamper-proof verification):
+```bash
+clodds ledger anchor <id>                    # Anchor to Solana (default)
+clodds ledger anchor <id> -c polygon         # Anchor to Polygon
+clodds ledger anchor <id> -c base            # Anchor to Base
+clodds ledger verify-anchor <txHash> <hash>  # Verify onchain anchor
+```
+
 ### Auth Commands
 
 ```bash

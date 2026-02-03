@@ -132,6 +132,7 @@ See [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) for all commands.
 | **Solana DeFi** | Jupiter, Raydium, Orca, Meteora, Pump.fun integration |
 | **EVM DeFi** | Uniswap V3, 1inch, Virtuals Protocol (ETH, ARB, OP, Base, Polygon) |
 | **Smart Trading** | Whale tracking, copy trading, smart routing, MEV protection |
+| **Trade Ledger** | Decision audit trail with confidence calibration, SHA-256 integrity hashing, statistics |
 | **Crypto Whale Tracking** | Multi-chain whale monitoring (Solana, ETH, Polygon, ARB, Base, OP) |
 | **Payments** | x402 protocol for machine-to-machine USDC payments (Base + Solana) |
 | **Bridging** | Wormhole cross-chain token transfers |
@@ -248,6 +249,27 @@ Features: Configurable sizing, SL/TP, backtesting, live trading with safety limi
 - Sandboxed execution (shell commands need approval)
 - Encrypted credentials (AES-256-GCM)
 - Audit logging for all trades
+
+---
+
+## Trade Ledger
+
+Decision audit trail for AI trading transparency:
+
+- **Decision Capture:** Every trade, copy, and risk decision logged with reasoning
+- **Confidence Calibration:** Track AI prediction accuracy vs confidence levels
+- **Integrity Hashing:** Optional SHA-256 hashes for tamper-proof records
+- **Onchain Anchoring:** Anchor hashes to Solana, Polygon, or Base for immutable proof
+- **Statistics:** Win rates, P&L, block reasons, accuracy by confidence bucket
+
+```bash
+clodds ledger stats              # Show decision statistics
+clodds ledger calibration        # Confidence vs accuracy analysis
+clodds ledger verify <id>        # Verify record integrity
+clodds ledger anchor <id>        # Anchor hash to Solana
+```
+
+Enable: `clodds config set ledger.enabled true`
 
 ---
 
