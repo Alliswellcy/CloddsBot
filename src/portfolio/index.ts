@@ -322,6 +322,33 @@ interface KalshiBalanceResponse {
   portfolio_value?: number;
 }
 
+async function fetchKalshiMarketPrice(
+  auth: KalshiApiKeyAuth,
+  ticker: string
+): Promise<{ yesPrice: number; noPrice: number } | null> {
+  const url = `${KALSHI_API_URL}/markets/${ticker}`;
+  const headers = buildKalshiHeadersForUrl(auth, 'GET', url);
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as {
+      market: { yes_price?: number; yes_bid?: number; no_bid?: number };
+    };
+    const m = data.market;
+    const yesPrice = (m.yes_price ?? m.yes_bid ?? 0) / 100;
+    const noPrice = (m.no_bid ?? 0) / 100 || Math.max(0, 1 - yesPrice);
+    return { yesPrice, noPrice };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchKalshiPositions(auth: KalshiApiKeyAuth): Promise<Position[]> {
   const url = `${KALSHI_API_URL}/portfolio/positions`;
   const headers = buildKalshiHeadersForUrl(auth, 'GET', url);
@@ -341,11 +368,27 @@ async function fetchKalshiPositions(auth: KalshiApiKeyAuth): Promise<Position[]>
     }
 
     const data = (await response.json()) as { market_positions: KalshiPosition[] };
+    const positions = data.market_positions || [];
 
-    return (data.market_positions || []).map((p) => {
+    // Fetch current prices for all positions in parallel
+    const priceMap = new Map<string, { yesPrice: number; noPrice: number }>();
+    const uniqueMarkets = Array.from(new Set(positions.map((p) => p.market_id)));
+
+    const prices = await Promise.all(
+      uniqueMarkets.map((ticker) => fetchKalshiMarketPrice(auth, ticker))
+    );
+    uniqueMarkets.forEach((ticker, i) => {
+      if (prices[i]) priceMap.set(ticker, prices[i]!);
+    });
+
+    return positions.map((p) => {
       const shares = Math.abs(p.position);
       const avgPrice = p.average_price / 100; // Kalshi uses cents
-      const currentPrice = avgPrice; // Would need separate price fetch
+      const isYes = p.position > 0;
+      const marketPrice = priceMap.get(p.market_id);
+      const currentPrice = marketPrice
+        ? (isYes ? marketPrice.yesPrice : marketPrice.noPrice)
+        : avgPrice; // Fall back to avgPrice if price fetch fails
       const costBasis = p.total_cost / 100;
       const value = shares * currentPrice;
       const unrealizedPnL = value - costBasis;
@@ -356,7 +399,7 @@ async function fetchKalshiPositions(auth: KalshiApiKeyAuth): Promise<Position[]>
         platform: 'kalshi' as const,
         marketId: p.market_id,
         marketQuestion: p.market_title,
-        outcome: p.position > 0 ? 'Yes' : 'No',
+        outcome: isYes ? 'Yes' : 'No',
         shares,
         avgPrice,
         currentPrice,
