@@ -200,6 +200,15 @@ clodds market-index sync        # Sync market index
 clodds whatsapp login           # Login with QR code
 ```
 
+### Locale Commands (i18n)
+
+```bash
+clodds locale list              # List supported languages
+clodds locale get               # Show current locale
+clodds locale set <code>        # Set locale (en, zh, es, ja, ko, de, fr, pt, ru, ar)
+clodds locale test [key]        # Test a translation key
+```
+
 ### Auth Commands
 
 ```bash

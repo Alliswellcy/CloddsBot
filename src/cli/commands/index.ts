@@ -2415,6 +2415,90 @@ export function createCredsCommands(program: Command): void {
 }
 
 // =============================================================================
+// LOCALE COMMANDS
+// =============================================================================
+
+export function createLocaleCommands(program: Command): void {
+  const locale = program
+    .command('locale')
+    .description('Manage language/locale settings');
+
+  locale
+    .command('list')
+    .description('List supported languages')
+    .action(async () => {
+      const { getSupportedLocales, getLocale } = await import('../../i18n/index');
+      const current = getLocale();
+      const locales = getSupportedLocales();
+
+      console.log('\n📍 Supported Languages\n');
+      for (const loc of locales) {
+        const marker = loc.code === current ? ' ← current' : '';
+        console.log(`  ${loc.code}  ${loc.nativeName.padEnd(10)} (${loc.name})${marker}`);
+      }
+      console.log('\nSet with: clodds locale set <code>');
+      console.log('Or: CLODDS_LOCALE=<code> in .env\n');
+    });
+
+  locale
+    .command('get')
+    .description('Show current locale')
+    .action(async () => {
+      const { getLocale, getSupportedLocales } = await import('../../i18n/index');
+      const current = getLocale();
+      const info = getSupportedLocales().find(l => l.code === current);
+      console.log(`\nCurrent locale: ${current} (${info?.nativeName || current})\n`);
+    });
+
+  locale
+    .command('set <code>')
+    .description('Set locale (e.g., en, zh, es, ja)')
+    .action(async (code: string) => {
+      const { setLocale, isLocaleSupported, getSupportedLocales } = await import('../../i18n/index');
+
+      if (!isLocaleSupported(code)) {
+        console.error(`\n❌ Unsupported locale: ${code}`);
+        console.log('\nSupported locales:');
+        for (const loc of getSupportedLocales()) {
+          console.log(`  ${loc.code}  ${loc.nativeName}`);
+        }
+        process.exit(1);
+      }
+
+      // Save to config
+      const configPath = join(homedir(), '.clodds', 'config.json');
+      let config: Record<string, unknown> = {};
+
+      if (existsSync(configPath)) {
+        config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      }
+
+      config.locale = code.toLowerCase();
+      const configDir = join(homedir(), '.clodds');
+      if (!existsSync(configDir)) {
+        mkdirSync(configDir, { recursive: true });
+      }
+      writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      setLocale(code);
+      const info = getSupportedLocales().find(l => l.code === code.toLowerCase());
+      console.log(`\n✅ Locale set to: ${code} (${info?.nativeName || code})\n`);
+    });
+
+  locale
+    .command('test [key]')
+    .description('Test translation (default: welcome.message)')
+    .action(async (key?: string) => {
+      const { t, getLocale } = await import('../../i18n/index');
+      const testKey = key || 'welcome.message';
+      const result = t(testKey);
+      console.log(`\nLocale: ${getLocale()}`);
+      console.log(`Key: ${testKey}`);
+      console.log(`Result: ${result}\n`);
+    });
+}
+
+// =============================================================================
 // MAIN EXPORT
 // =============================================================================
 
@@ -2432,6 +2516,7 @@ export function addAllCommands(program: Command): void {
   createPermissionCommands(program);
   createUsageCommands(program);
   createCredsCommands(program);
+  createLocaleCommands(program);
   createInitCommand(program);
   createUpgradeCommand(program);
   createLoginCommand(program);

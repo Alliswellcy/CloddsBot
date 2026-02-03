@@ -109,6 +109,7 @@ clodds start       # Start the gateway
 clodds repl        # Interactive REPL
 clodds doctor      # System diagnostics
 clodds secure      # Harden security
+clodds locale set zh  # Change language
 ```
 
 See [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) for all commands.
@@ -127,8 +128,9 @@ See [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) for all commands.
 | **Trading** | Order execution on 5 platforms, portfolio tracking, P&L, trade logging |
 | **Arbitrage** | Cross-platform detection, combinatorial analysis, semantic matching, real-time scanning |
 | **AI** | 6 LLM providers, 4 specialized agents, semantic memory, 21 tools |
+| **i18n** | 10 languages (EN, ZH, ES, JA, KO, DE, FR, PT, RU, AR) |
 | **Solana DeFi** | Jupiter, Raydium, Orca, Meteora, Pump.fun integration |
-| **EVM DeFi** | Uniswap V3, 1inch aggregator (ETH, ARB, OP, Base, Polygon) |
+| **EVM DeFi** | Uniswap V3, 1inch, Virtuals Protocol (ETH, ARB, OP, Base, Polygon) |
 | **Smart Trading** | Whale tracking, copy trading, smart routing, MEV protection |
 | **Crypto Whale Tracking** | Multi-chain whale monitoring (Solana, ETH, Polygon, ARB, Base, OP) |
 | **Payments** | x402 protocol for machine-to-machine USDC payments (Base + Solana) |
@@ -166,7 +168,7 @@ Supports limit/market orders, maker rebates, real-time orderbooks, P&L tracking,
 
 **Solana:** Jupiter, Raydium, Orca, Meteora, Pump.fun — with Jito MEV protection
 
-**EVM (5 chains):** Uniswap V3, 1inch on Ethereum, Arbitrum, Optimism, Base, Polygon — with Flashbots MEV protection
+**EVM (5 chains):** Uniswap V3, 1inch, Virtuals Protocol on Ethereum, Arbitrum, Optimism, Base, Polygon — with Flashbots MEV protection
 
 **Bridging:** Wormhole cross-chain transfers (ETH ↔ Solana, Polygon ↔ Base)
 
