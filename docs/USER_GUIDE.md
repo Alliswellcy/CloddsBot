@@ -5,22 +5,20 @@ chat commands, and common workflows.
 
 ## Quick start
 
-1. Install dependencies:
-
-```
-npm install
-```
-
-2. Create `.env` from `.env.example` and add at least:
-   - `ANTHROPIC_API_KEY`
-   - `TELEGRAM_BOT_TOKEN` (if using Telegram)
-
-3. Start the gateway:
-
-```
-npm run dev
-# or
+**Option 1: npm install**
+```bash
+echo "@alsk1992:registry=https://npm.pkg.github.com" >> ~/.npmrc
+npm install -g @alsk1992/clodds
+export ANTHROPIC_API_KEY=sk-ant-...
 clodds start
+```
+
+**Option 2: From source**
+```bash
+git clone https://github.com/alsk1992/CloddsBot.git && cd CloddsBot
+npm install
+cp .env.example .env  # Add ANTHROPIC_API_KEY
+npm run dev
 ```
 
 The gateway listens on `http://127.0.0.1:18789` by default.

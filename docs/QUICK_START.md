@@ -9,29 +9,34 @@ You need an Anthropic API key:
 2. Create an account or sign in
 3. Generate an API key
 
-## 2. Configure
+## 2. Install
 
+**Option A: npm (recommended)**
 ```bash
-# Copy the example config
+# One-time: configure npm for @alsk1992 scope
+echo "@alsk1992:registry=https://npm.pkg.github.com" >> ~/.npmrc
+
+# Install globally
+npm install -g @alsk1992/clodds
+```
+
+**Option B: From source**
+```bash
+git clone https://github.com/alsk1992/CloddsBot.git
+cd CloddsBot
+npm install
 cp .env.example .env
-
-# Edit .env and add your API key
-# Only ANTHROPIC_API_KEY is required!
-```
-
-**Minimum .env file:**
-```
-ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 
 ## 3. Run
 
 ```bash
-# Install dependencies (first time only)
-npm install
+# Set your API key
+export ANTHROPIC_API_KEY=sk-ant-your-key-here
 
-# Start the gateway
-npm start
+# Start
+clodds start
+# Or if from source: npm start
 ```
 
 ## 4. Try It Out

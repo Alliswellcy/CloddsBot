@@ -33,9 +33,24 @@ You can control paths for config and workspace with:
 
 ## Deployment options
 
-### 1) Node.js (bare metal)
+### 1) npm install (recommended)
+
+```bash
+# One-time: configure npm for @alsk1992 scope
+echo "@alsk1992:registry=https://npm.pkg.github.com" >> ~/.npmrc
+
+# Install globally
+npm install -g @alsk1992/clodds
+
+# Run
+export ANTHROPIC_API_KEY=sk-ant-...
+clodds start
+```
+
+### 2) Node.js (from source)
 
 ```
+git clone https://github.com/alsk1992/CloddsBot.git && cd CloddsBot
 npm ci
 npm run build
 node dist/index.js

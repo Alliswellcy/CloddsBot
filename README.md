@@ -79,18 +79,28 @@ See [docs/API.md](./docs/API.md#clodds-compute-api) for full documentation.
 
 ## Quick Start
 
+**Option 1: npm (recommended)**
 ```bash
-git clone https://github.com/alsk1992/CloddsBot.git
-cd CloddsBot
-npm install
-cp .env.example .env
+# One-time: configure npm for @alsk1992 scope
+echo "@alsk1992:registry=https://npm.pkg.github.com" >> ~/.npmrc
+
+# Install globally
+npm install -g @alsk1992/clodds
+
+# Run
+export ANTHROPIC_API_KEY=sk-ant-...
+clodds start
+```
+
+**Option 2: From source**
+```bash
+git clone https://github.com/alsk1992/CloddsBot.git && cd CloddsBot
+npm install && cp .env.example .env
 # Add ANTHROPIC_API_KEY to .env
 npm run build && npm start
 ```
 
 Open `http://localhost:18789/webchat` — no account needed.
-
-For Telegram: add `TELEGRAM_BOT_TOKEN` to `.env` and message your bot.
 
 ## CLI
 
