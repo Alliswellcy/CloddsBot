@@ -1111,4 +1111,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'pumpfun',
+  description: 'Pump.fun Solana memecoin launchpad - trade, launch, and monitor tokens',
+  commands: ['/pumpfun', '/pump'],
+  handle: execute,
+};

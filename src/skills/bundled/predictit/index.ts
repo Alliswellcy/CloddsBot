@@ -141,4 +141,9 @@ Note: PredictIt is read-only (no trading API).`;
   }
 }
 
-export default { execute };
+export default {
+  name: 'predictit',
+  description: 'PredictIt prediction market - search and view political markets (read-only)',
+  commands: ['/predictit', '/pi'],
+  handle: execute,
+};

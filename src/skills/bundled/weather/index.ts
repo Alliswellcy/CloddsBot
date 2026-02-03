@@ -534,4 +534,9 @@ Use NOAA forecasts to find edge on Polymarket weather markets.
   }
 }
 
-export default { execute };
+export default {
+  name: 'weather',
+  description: 'Weather betting - use NOAA forecasts to find edge on Polymarket weather markets',
+  commands: ['/weather'],
+  handle: execute,
+};

@@ -147,4 +147,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'raydium',
+  description: 'Raydium DEX - swap tokens, get quotes, and list pools on Solana',
+  commands: ['/raydium', '/ray'],
+  handle: execute,
+};

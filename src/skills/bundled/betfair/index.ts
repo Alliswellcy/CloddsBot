@@ -417,4 +417,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'betfair',
+  description: 'Betfair Exchange - Market data, orderbook, and trading on Betfair',
+  commands: ['/betfair', '/bf'],
+  handle: execute,
+};

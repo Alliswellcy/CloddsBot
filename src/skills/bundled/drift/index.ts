@@ -305,4 +305,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'drift',
+  description: 'Drift Protocol - Perpetual futures and prediction markets on Solana',
+  commands: ['/drift'],
+  handle: execute,
+};

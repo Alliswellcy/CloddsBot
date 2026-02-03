@@ -271,4 +271,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'virtuals',
+  description: 'Virtuals Protocol - search, browse, and analyze AI agents on Base',
+  commands: ['/virtuals'],
+  handle: execute,
+};

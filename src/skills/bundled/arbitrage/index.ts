@@ -1,0 +1,282 @@
+/**
+ * Arbitrage CLI Skill
+ *
+ * Commands:
+ * /arb start - Start arbitrage monitoring
+ * /arb stop - Stop monitoring
+ * /arb status - Check monitoring status
+ * /arb check [query] - Run one-time scan
+ * /arb compare <market-a> <market-b> - Compare two markets
+ * /arb opportunities - List current opportunities
+ * /arb link <market-a> <market-b> - Manually link markets
+ * /arb unlink <match-id> - Remove link
+ * /arb links - View all links
+ * /arb auto-match <query> - Auto-detect matches
+ * /arb stats - Arbitrage statistics
+ */
+
+import {
+  createArbitrageService,
+  type ArbitrageService,
+  type PriceProvider,
+} from '../../../arbitrage/index';
+import { logger } from '../../../utils/logger';
+import type { Platform } from '../../../types';
+
+let arbService: ArbitrageService | null = null;
+
+function getService(): ArbitrageService {
+  if (!arbService) {
+    arbService = createArbitrageService(new Map());
+  }
+  return arbService;
+}
+
+async function handleStart(): Promise<string> {
+  const service = getService();
+  service.start();
+  return 'Arbitrage monitoring started.';
+}
+
+async function handleStop(): Promise<string> {
+  const service = getService();
+  service.stop();
+  return 'Arbitrage monitoring stopped.';
+}
+
+async function handleStatus(): Promise<string> {
+  const service = getService();
+  const stats = service.getStats();
+  return `**Arbitrage Status**\n\n` +
+    `Matched market pairs: ${stats.matchCount}\n` +
+    `Active opportunities: ${stats.activeOpportunities}\n` +
+    `Average spread: ${stats.avgSpread.toFixed(2)}%\n` +
+    `Platforms: ${stats.platforms.join(', ')}`;
+}
+
+async function handleCheck(query: string): Promise<string> {
+  const service = getService();
+  try {
+    const opps = await service.checkArbitrage();
+    if (opps.length === 0) {
+      return 'No new arbitrage opportunities found.';
+    }
+
+    let output = `**Found ${opps.length} Arbitrage Opportunities**\n\n`;
+    for (const opp of opps.slice(0, 10)) {
+      output += `**${opp.spreadPct.toFixed(1)}% spread**\n`;
+      output += `  Buy on ${opp.buyPlatform}: $${opp.buyPrice.toFixed(3)}\n`;
+      output += `  Sell on ${opp.sellPlatform}: $${opp.sellPrice.toFixed(3)}\n`;
+      output += `  Profit per $100: $${opp.profitPer100.toFixed(2)}\n\n`;
+    }
+    return output;
+  } catch (error) {
+    return `Error checking arbitrage: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleCompare(marketA: string, marketB: string): Promise<string> {
+  const service = getService();
+
+  // Parse platform:id format
+  const parseMarket = (m: string): { platform: Platform; id: string } => {
+    const parts = m.split(':');
+    if (parts.length === 2) {
+      return { platform: parts[0] as Platform, id: parts[1] };
+    }
+    return { platform: 'polymarket', id: m };
+  };
+
+  const a = parseMarket(marketA);
+  const b = parseMarket(marketB);
+
+  try {
+    const result = await service.compareMarkets(a.platform, a.id, b.platform, b.id);
+    if (!result) {
+      return 'No arbitrage found between these markets.';
+    }
+
+    return `**Market Comparison**\n\n` +
+      `Spread: ${result.spreadPct.toFixed(2)}%\n` +
+      `Buy on ${result.buyPlatform}: $${result.buyPrice.toFixed(3)}\n` +
+      `Sell on ${result.sellPlatform}: $${result.sellPrice.toFixed(3)}\n` +
+      `Profit per $100: $${result.profitPer100.toFixed(2)}\n` +
+      `Confidence: ${(result.confidence * 100).toFixed(0)}%`;
+  } catch (error) {
+    return `Error comparing markets: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleOpportunities(): Promise<string> {
+  const service = getService();
+  return service.formatOpportunities();
+}
+
+async function handleLinks(): Promise<string> {
+  const service = getService();
+  const matches = service.getMatches();
+
+  if (matches.length === 0) {
+    return 'No linked market pairs.';
+  }
+
+  let output = `**Linked Markets** (${matches.length})\n\n`;
+  for (const match of matches) {
+    output += `ID: \`${match.id}\`\n`;
+    output += `  Similarity: ${(match.similarity * 100).toFixed(0)}%\n`;
+    output += `  Matched by: ${match.matchedBy}\n`;
+    for (const m of match.markets) {
+      output += `  - ${m.platform}: ${m.question}\n`;
+    }
+    output += '\n';
+  }
+  return output;
+}
+
+async function handleLink(marketA: string, marketB: string): Promise<string> {
+  const service = getService();
+
+  const parseMarket = (m: string) => {
+    const parts = m.split(':');
+    if (parts.length === 2) {
+      return { platform: parts[0] as Platform, marketId: parts[1], question: parts[1] };
+    }
+    return { platform: 'polymarket' as Platform, marketId: m, question: m };
+  };
+
+  const a = parseMarket(marketA);
+  const b = parseMarket(marketB);
+
+  const match = service.addMatch({
+    markets: [a, b],
+    similarity: 1.0,
+    matchedBy: 'manual',
+  });
+
+  return `Markets linked. Match ID: \`${match.id}\``;
+}
+
+async function handleUnlink(matchId: string): Promise<string> {
+  const service = getService();
+  const success = service.removeMatch(matchId);
+  return success
+    ? `Match \`${matchId}\` removed.`
+    : `Match \`${matchId}\` not found.`;
+}
+
+async function handleAutoMatch(query: string): Promise<string> {
+  const service = getService();
+  try {
+    const matches = await service.autoMatchMarkets(query);
+    if (matches.length === 0) {
+      return 'No matching markets found across platforms.';
+    }
+
+    let output = `**Auto-Matched ${matches.length} Market Pairs**\n\n`;
+    for (const match of matches) {
+      output += `Similarity: ${(match.similarity * 100).toFixed(0)}%\n`;
+      for (const m of match.markets) {
+        output += `  - ${m.platform}: ${m.question}\n`;
+      }
+      output += '\n';
+    }
+    return output;
+  } catch (error) {
+    return `Error auto-matching: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleStats(): Promise<string> {
+  const service = getService();
+  const stats = service.getStats();
+
+  return `**Arbitrage Statistics**\n\n` +
+    `Linked market pairs: ${stats.matchCount}\n` +
+    `Active opportunities: ${stats.activeOpportunities}\n` +
+    `Average spread: ${stats.avgSpread.toFixed(2)}%\n` +
+    `Monitored platforms: ${stats.platforms.join(', ')}`;
+}
+
+export async function execute(args: string): Promise<string> {
+  const parts = args.trim().split(/\s+/);
+  const command = parts[0]?.toLowerCase() || 'help';
+  const rest = parts.slice(1);
+
+  switch (command) {
+    case 'start':
+      return handleStart();
+
+    case 'stop':
+      return handleStop();
+
+    case 'status':
+      return handleStatus();
+
+    case 'check':
+    case 'scan':
+      return handleCheck(rest.join(' '));
+
+    case 'compare':
+      if (rest.length < 2) return 'Usage: /arb compare <market-a> <market-b>';
+      return handleCompare(rest[0], rest[1]);
+
+    case 'opportunities':
+    case 'opps':
+      return handleOpportunities();
+
+    case 'link':
+      if (rest.length < 2) return 'Usage: /arb link <market-a> <market-b>';
+      return handleLink(rest[0], rest[1]);
+
+    case 'unlink':
+      if (!rest[0]) return 'Usage: /arb unlink <match-id>';
+      return handleUnlink(rest[0]);
+
+    case 'links':
+    case 'matches':
+      return handleLinks();
+
+    case 'auto-match':
+    case 'automatch':
+      if (!rest[0]) return 'Usage: /arb auto-match <query>';
+      return handleAutoMatch(rest.join(' '));
+
+    case 'stats':
+      return handleStats();
+
+    case 'help':
+    default:
+      return `**Arbitrage Commands**
+
+**Monitoring:**
+  /arb start                          - Start monitoring
+  /arb stop                           - Stop monitoring
+  /arb status                         - Check status
+
+**Scanning:**
+  /arb check [query]                  - One-time scan
+  /arb compare <market-a> <market-b>  - Compare two markets
+  /arb opportunities                  - List opportunities
+
+**Market Linking:**
+  /arb link <market-a> <market-b>     - Link markets manually
+  /arb unlink <match-id>              - Remove link
+  /arb links                          - View all links
+  /arb auto-match <query>             - Auto-detect matches
+
+**Statistics:**
+  /arb stats                          - View statistics
+
+**Examples:**
+  /arb check "trump election"
+  /arb compare poly:12345 kalshi:TRUMP
+  /arb link poly:abc123 kalshi:XYZ`;
+  }
+}
+
+export default {
+  name: 'arbitrage',
+  description: 'Automated cross-platform arbitrage detection and monitoring',
+  commands: ['/arbitrage', '/arb'],
+  handle: execute,
+};

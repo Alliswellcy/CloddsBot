@@ -730,4 +730,9 @@ export async function executeCommand(args: string): Promise<string> {
   return handleExecute(args.trim().split(/\s+/));
 }
 
-export default { execute };
+export default {
+  name: 'ai-strategy',
+  description: 'AI Strategy - Convert natural language to automated trades on Solana',
+  commands: ['/ai-strategy', '/strategy'],
+  handle: execute,
+};

@@ -117,12 +117,40 @@ function readProjectInfo(projectPath: string): ProjectInfo | null {
   }
 }
 
+// Cache for fetched trends (refresh every 10 minutes)
+let trendCache: { trends: string[]; fetchedAt: number } = { trends: [], fetchedAt: 0 };
+const TREND_CACHE_TTL = 10 * 60 * 1000;
+
+async function fetchTrendsFromNews(): Promise<string[]> {
+  try {
+    const { createNewsFeed } = await import('../../../feeds/news/index');
+    const feed = await createNewsFeed();
+    await feed.start();
+    const items = feed.getRecentNews(15);
+    feed.stop();
+    if (items.length > 0) {
+      return items.map(item => item.title).filter(Boolean).slice(0, 7);
+    }
+  } catch {
+    // Fall through to fallback
+  }
+  return [];
+}
+
 function getTrends(): string[] {
-  // In a real implementation, this would pull from:
-  // - Crypto news feeds
-  // - Market movers
-  // - Social signals
-  // For now, return placeholder trends
+  // Return cached trends if fresh enough
+  if (trendCache.trends.length > 0 && Date.now() - trendCache.fetchedAt < TREND_CACHE_TTL) {
+    return trendCache.trends;
+  }
+  // Trigger async refresh for next call
+  fetchTrendsFromNews().then(trends => {
+    if (trends.length > 0) {
+      trendCache = { trends, fetchedAt: Date.now() };
+    }
+  }).catch(() => {});
+
+  // Return cached if available, otherwise static fallback
+  if (trendCache.trends.length > 0) return trendCache.trends;
   return [
     'Bitcoin ETF flows hitting records',
     'Solana memecoin season',

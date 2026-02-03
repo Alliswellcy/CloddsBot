@@ -172,6 +172,13 @@ function getHelp(): string {
 // Agent Tools
 // =============================================================================
 
+export default {
+  name: 'bankr',
+  description: 'AI-powered crypto trading via natural language',
+  commands: ['/bankr'],
+  handle: execute,
+};
+
 export const tools = [
   {
     name: 'bankr_execute',

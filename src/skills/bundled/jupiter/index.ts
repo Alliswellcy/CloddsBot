@@ -167,4 +167,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'jupiter',
+  description: 'Jupiter aggregator for Solana token swaps, quotes, and route details',
+  commands: ['/jupiter', '/jup'],
+  handle: execute,
+};

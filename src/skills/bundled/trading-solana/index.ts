@@ -377,4 +377,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'trading-solana',
+  description: 'Solana DEX trading - swap, quote, pools, routes across Jupiter, Raydium, Orca, and Meteora',
+  commands: ['/trade-sol', '/tradesol'],
+  handle: execute,
+};

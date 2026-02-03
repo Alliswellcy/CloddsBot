@@ -369,4 +369,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'smarkets',
+  description: 'Smarkets exchange - search markets, trade, manage orders, and check balances',
+  commands: ['/smarkets', '/sm'],
+  handle: execute,
+};

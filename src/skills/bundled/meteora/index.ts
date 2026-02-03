@@ -161,4 +161,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'meteora',
+  description: 'Meteora DLMM swaps, quotes, and pool discovery on Solana',
+  commands: ['/meteora'],
+  handle: execute,
+};

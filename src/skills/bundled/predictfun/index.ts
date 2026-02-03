@@ -612,4 +612,9 @@ export async function handle(args: string): Promise<string> {
   }
 }
 
-export default { handle };
+export default {
+  name: 'predictfun',
+  description: 'Predict.fun prediction market on BNB Chain - trade, manage positions, and browse markets',
+  commands: ['/predictfun', '/pf'],
+  handle,
+};

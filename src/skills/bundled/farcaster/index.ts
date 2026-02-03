@@ -269,6 +269,13 @@ function getHelp(): string {
 \`/fc unfollow <username>\` - Unfollow`;
 }
 
+export default {
+  name: 'farcaster',
+  description: 'Farcaster social protocol - browse feeds, search casts, post, and interact via Neynar API',
+  commands: ['/farcaster', '/fc'],
+  handle: execute,
+};
+
 // =============================================================================
 // Agent Tools
 // =============================================================================

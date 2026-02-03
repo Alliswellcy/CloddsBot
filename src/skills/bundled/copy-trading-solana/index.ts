@@ -454,4 +454,9 @@ Monitor wallets and automatically mirror their trades.
   }
 }
 
-export default { execute };
+export default {
+  name: 'copy-trading-solana',
+  description: 'Copy Trading - Monitor and mirror Solana wallet trades automatically',
+  commands: ['/copy-sol', '/copysol'],
+  handle: execute,
+};

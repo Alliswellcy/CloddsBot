@@ -1152,4 +1152,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'bags',
+  description: 'Bags.fm - Solana token launchpad and trading platform with creator monetization',
+  commands: ['/bags'],
+  handle: execute,
+};

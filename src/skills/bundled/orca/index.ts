@@ -159,4 +159,9 @@ export async function execute(args: string): Promise<string> {
   }
 }
 
-export default { execute };
+export default {
+  name: 'orca',
+  description: 'Orca Whirlpools swaps, quotes, and pool discovery on Solana',
+  commands: ['/orca'],
+  handle: execute,
+};
