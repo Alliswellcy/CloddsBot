@@ -49,6 +49,18 @@ export function getPlatformFeeRate(platform: string, is15MinCrypto = false): num
     case 'metaculus':
       // Play money / no fees
       return 0;
+    case 'hyperliquid':
+      // Maker: 0.01%, Taker: 0.035%
+      return 0.00035;
+    case 'binance':
+      // Maker: 0.02%, Taker: 0.04%
+      return 0.0004;
+    case 'bybit':
+      // Maker: 0.02%, Taker: 0.055%
+      return 0.00055;
+    case 'mexc':
+      // Maker: 0.02%, Taker: 0.06%
+      return 0.0006;
     default:
       // Conservative default for unknown platforms
       return 0.02;

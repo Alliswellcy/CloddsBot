@@ -1,30 +1,44 @@
 ---
 name: portfolio
-description: "Track your positions and P&L across prediction market platforms"
+description: "Track your positions and P&L across prediction markets and futures exchanges"
 emoji: "💼"
 ---
 
 # Portfolio Skill
 
-Track your positions and performance across all prediction market platforms.
+Track your positions and performance across prediction markets and futures exchanges.
 
 ## Commands
 
 ### View Portfolio
 ```
 /portfolio
-/positions
-/pnl
+/portfolio positions
+/portfolio pnl
 ```
 
-### Add Position (Manual)
+### History
 ```
-/position add polymarket "Trump 2028" YES 100 @ 0.45
+/portfolio history          # Last 7 days (default)
+/portfolio history 30d      # Last 30 days
+/portfolio history 90d      # Last 90 days
 ```
 
 ### Sync Positions (Auto)
 ```
 /portfolio sync
+```
+
+### Filter by Platform
+```
+/portfolio platform polymarket
+/portfolio platform binance
+```
+
+### Risk
+```
+/portfolio risk          # Full risk metrics
+/portfolio exposure      # Category exposure breakdown
 ```
 
 ## Features
@@ -35,6 +49,13 @@ Track your positions and performance across all prediction market platforms.
 - Unrealized P&L ($ and %)
 - Platform breakdown
 
+### Futures Support
+- Leverage display
+- Long/Short side indicator
+- Liquidation price
+- Notional value
+- Margin type (cross/isolated)
+
 ### P&L Summary
 - Total portfolio value
 - Daily/weekly/monthly P&L
@@ -42,22 +63,35 @@ Track your positions and performance across all prediction market platforms.
 - Platform-level P&L
 
 ### Multi-Platform Support
-- Polymarket (via wallet address)
-- Kalshi (via API)
+
+**Prediction Markets:**
+- Polymarket (via API key)
+- Kalshi (via API key)
 - Manifold (via API key)
+
+**Futures Exchanges:**
+- Hyperliquid (via wallet address + private key)
+- Binance Futures (via API key + secret)
+- Bybit (via API key + secret)
+- MEXC (via API key + secret)
+
+### Balance Tracking
+- Available and locked balance per platform
+- Polymarket: locked USDC calculated from open buy orders
+- Futures: margin used vs available
+
+### Portfolio History
+- Snapshots taken automatically during hourly cron sync
+- ASCII sparkline chart
+- Start/end value with change ($, %)
+- Peak and low values
+- Table of recent data points
 
 ### Risk Analytics
 - **Correlation Matrix**: See how your positions correlate with each other
 - **Category Exposure**: Breakdown by politics, crypto, sports, economics, etc.
 - **Concentration Risk**: HHI score and diversification metrics
 - **Hedged Pairs**: Identify offsetting positions (long YES + short NO)
-
-### Risk Commands
-```
-/portfolio risk          # Full risk metrics
-/portfolio correlation   # Position correlation matrix
-/portfolio exposure      # Category exposure breakdown
-```
 
 ### Whale Tracking Integration
 Track what large traders are doing:
@@ -75,6 +109,20 @@ Monitor large crypto transactions across chains:
 /portfolio crypto-whales top 10   # Top 10 by volume
 ```
 
+## Environment Variables
+
+```
+# Prediction Markets
+POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE
+KALSHI_API_KEY, KALSHI_PRIVATE_KEY
+
+# Futures Exchanges
+HL_WALLET_ADDRESS, HL_PRIVATE_KEY
+BINANCE_FUTURES_KEY, BINANCE_FUTURES_SECRET
+BYBIT_API_KEY, BYBIT_API_SECRET
+MEXC_API_KEY, MEXC_API_SECRET
+```
+
 ## Examples
 
 User: "What's my portfolio looking like?"
@@ -86,22 +134,28 @@ User: "How much am I up today?"
 User: "What's my exposure to politics markets?"
 → Filter positions by category, sum exposure
 
+User: "Show my Binance positions"
+→ Filter to Binance futures positions with leverage info
+
 ## Output Format
 
 ```
-📊 PORTFOLIO
+Portfolio Summary
 
-💰 Total Value: $2,450
-📈 P&L: +$320 (+15.0%)
+Total Value: $12,450
+Positions: 8
+Unrealized P&L: +$320 (+2.6%)
+Realized P&L: $150
 
-POSITIONS:
-┌─────────────────────────────────────┐
-│ Trump 2028 (Polymarket)             │
-│ YES 100 shares @ $0.45 → $0.52      │
-│ +$70 (+15.6%)                       │
-├─────────────────────────────────────┤
-│ Fed Rate Cut March (Kalshi)         │
-│ YES 50 shares @ $0.30 → $0.35       │
-│ +$25 (+16.7%)                       │
-└─────────────────────────────────────┘
+Balances:
+  polymarket: $2,500 ($2,100 avail, $400 locked)
+  binance: $5,000 ($3,200 avail, $1,800 locked)
+
+BTCUSDT Perp [binance]
+  LONG 10x: 0.5000 @ $98,500.00
+  +$250.00 (+5.1%) | liq $89,100.00
+
+Trump 2028 [polymarket]
+  Yes: 100.00 @ $0.520
+  +$70.00 (+15.6%)
 ```

@@ -517,7 +517,7 @@ function buildKalshiEnv(creds: KalshiCredentials): NodeJS.ProcessEnv {
     marketQuestion: string;
     outcome: string;
     outcomeId: string;
-    side: 'YES' | 'NO';
+    side: string;
     shares: number;
     avgPrice: number;
     currentPrice: number;
@@ -532,7 +532,7 @@ function buildKalshiEnv(creds: KalshiCredentials): NodeJS.ProcessEnv {
       marketQuestion: params.marketQuestion,
       outcome: params.outcome,
       outcomeId: params.outcomeId,
-      side: params.side,
+      side: (params.side === 'YES' || params.side === 'NO' ? params.side : params.side.toUpperCase() === 'LONG' ? 'YES' : 'NO') as 'YES' | 'NO',
       shares: params.shares,
       avgPrice: params.avgPrice,
       currentPrice: params.currentPrice,
@@ -905,6 +905,99 @@ function buildKalshiEnv(creds: KalshiCredentials): NodeJS.ProcessEnv {
           } else if (platform === 'manifold') {
             const creds = await credentials.getCredentials<ManifoldCredentials>(userId, 'manifold');
             if (creds) positions = await fetchManifoldPositions(userId, creds);
+          } else if (platform === 'hyperliquid') {
+            const creds = await credentials.getCredentials<{ walletAddress: string; privateKey: string }>(userId, 'hyperliquid' as Platform);
+            if (creds) {
+              const hl = await import('../exchanges/hyperliquid/index');
+              const state = await hl.getUserState(creds.walletAddress);
+              positions = state.assetPositions
+                .filter((ap) => parseFloat(ap.position.szi) !== 0)
+                .map((ap) => {
+                  const p = ap.position;
+                  const shares = Math.abs(parseFloat(p.szi));
+                  const entryPrice = parseFloat(p.entryPx);
+                  const uPnl = parseFloat(p.unrealizedPnl);
+                  const isLong = parseFloat(p.szi) > 0;
+                  const currentPrice = shares > 0 ? entryPrice + uPnl / shares : entryPrice;
+                  return buildPosition({
+                    platform: 'hyperliquid',
+                    marketId: p.coin,
+                    marketQuestion: `${p.coin} Perp`,
+                    outcome: isLong ? 'Long' : 'Short',
+                    outcomeId: `hl_${p.coin}_${isLong ? 'long' : 'short'}`,
+                    side: isLong ? 'LONG' : 'SHORT',
+                    shares,
+                    avgPrice: entryPrice,
+                    currentPrice,
+                  });
+                });
+            }
+          } else if (platform === 'binance') {
+            const creds = await credentials.getCredentials<{ apiKey: string; apiSecret: string }>(userId, 'binance' as Platform);
+            if (creds) {
+              const bin = await import('../exchanges/binance-futures/index');
+              const rawPositions = await bin.getPositions(creds);
+              positions = rawPositions
+                .filter((p) => p.positionAmt !== 0)
+                .map((p) => {
+                  const isLong = p.positionAmt > 0;
+                  return buildPosition({
+                    platform: 'binance',
+                    marketId: p.symbol,
+                    marketQuestion: `${p.symbol} Perp`,
+                    outcome: isLong ? 'Long' : 'Short',
+                    outcomeId: `binance_${p.symbol}_${p.positionSide}`,
+                    side: isLong ? 'LONG' : 'SHORT',
+                    shares: Math.abs(p.positionAmt),
+                    avgPrice: p.entryPrice,
+                    currentPrice: p.markPrice,
+                  });
+                });
+            }
+          } else if (platform === 'bybit') {
+            const creds = await credentials.getCredentials<{ apiKey: string; apiSecret: string }>(userId, 'bybit' as Platform);
+            if (creds) {
+              const bb = await import('../exchanges/bybit/index');
+              const rawPositions = await bb.getPositions(creds);
+              positions = rawPositions
+                .filter((p) => p.size !== 0)
+                .map((p) => {
+                  const isLong = p.side === 'Buy';
+                  return buildPosition({
+                    platform: 'bybit',
+                    marketId: p.symbol,
+                    marketQuestion: `${p.symbol} Perp`,
+                    outcome: isLong ? 'Long' : 'Short',
+                    outcomeId: `bybit_${p.symbol}_${p.side}`,
+                    side: isLong ? 'LONG' : 'SHORT',
+                    shares: p.size,
+                    avgPrice: p.entryPrice,
+                    currentPrice: p.markPrice,
+                  });
+                });
+            }
+          } else if (platform === 'mexc') {
+            const creds = await credentials.getCredentials<{ apiKey: string; apiSecret: string }>(userId, 'mexc' as Platform);
+            if (creds) {
+              const mx = await import('../exchanges/mexc/index');
+              const rawPositions = await mx.getPositions(creds);
+              positions = rawPositions
+                .filter((p) => p.holdVol !== 0)
+                .map((p) => {
+                  const isLong = p.positionType === 1;
+                  return buildPosition({
+                    platform: 'mexc',
+                    marketId: p.symbol,
+                    marketQuestion: `${p.symbol} Perp`,
+                    outcome: isLong ? 'Long' : 'Short',
+                    outcomeId: `mexc_${p.symbol}_${isLong ? 'long' : 'short'}`,
+                    side: isLong ? 'LONG' : 'SHORT',
+                    shares: p.holdVol,
+                    avgPrice: p.openAvgPrice,
+                    currentPrice: p.markPrice,
+                  });
+                });
+            }
           }
 
           if (!positions) continue;
@@ -931,6 +1024,46 @@ function buildKalshiEnv(creds: KalshiCredentials): NodeJS.ProcessEnv {
           await credentials.markFailure(userId, platform);
         }
       }
+
+      // Create portfolio snapshot after syncing all platforms for this user
+      try {
+        const allPositions = deps.db.getPositions(userId);
+        if (allPositions.length > 0) {
+          const totalValue = allPositions.reduce((sum, p) => sum + p.value, 0);
+          const totalCostBasis = allPositions.reduce((sum, p) => sum + (p.shares * p.avgPrice), 0);
+          const totalPnl = totalValue - totalCostBasis;
+          const totalPnlPct = totalCostBasis > 0 ? (totalPnl / totalCostBasis) * 100 : 0;
+
+          const byPlatform: Record<string, { value: number; pnl: number }> = {};
+          for (const p of allPositions) {
+            const entry = byPlatform[p.platform] || { value: 0, pnl: 0 };
+            entry.value += p.value;
+            entry.pnl += p.value - (p.shares * p.avgPrice);
+            byPlatform[p.platform] = entry;
+          }
+
+          deps.db.createPortfolioSnapshot({
+            userId,
+            totalValue,
+            totalPnl,
+            totalPnlPct,
+            totalCostBasis,
+            positionsCount: allPositions.length,
+            byPlatform,
+          });
+          logger.debug({ userId, totalValue, positionsCount: allPositions.length }, 'Portfolio snapshot created');
+        }
+      } catch (error) {
+        logger.warn({ error, userId }, 'Failed to create portfolio snapshot');
+      }
+    }
+
+    // Clean up old snapshots (>90 days)
+    try {
+      const cutoffMs = Date.now() - 90 * 24 * 60 * 60 * 1000;
+      deps.db.deletePortfolioSnapshotsBefore(cutoffMs);
+    } catch (error) {
+      logger.warn({ error }, 'Failed to clean up old portfolio snapshots');
     }
   }
 

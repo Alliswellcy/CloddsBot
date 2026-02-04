@@ -151,6 +151,10 @@ const PLATFORM_RISK_SCORES: Record<Platform, number> = {
   opinion: 40,      // BNB Chain, newer platform
   virtuals: 50,     // Base chain AI agents, high volatility
   hedgehog: 40,     // Solana-based prediction market, newer
+  hyperliquid: 25,  // Established perp DEX, on-chain
+  binance: 15,      // Largest CEX
+  bybit: 20,        // Major CEX
+  mexc: 30,         // Mid-tier CEX
 };
 
 // =============================================================================

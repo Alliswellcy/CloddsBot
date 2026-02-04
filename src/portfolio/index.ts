@@ -3,9 +3,11 @@
  *
  * Features:
  * - Fetch positions from Polymarket/Kalshi APIs
+ * - Fetch positions from futures exchanges (Hyperliquid, Binance, Bybit, MEXC)
  * - Calculate unrealized PnL
  * - Track portfolio value over time
- * - Multi-platform aggregation
+ * - Multi-platform aggregation with Promise.allSettled
+ * - Locked balance calculation (Polymarket open orders, futures margin)
  */
 
 import { logger } from '../utils/logger';
@@ -25,7 +27,7 @@ import {
 
 export interface Position {
   id: string;
-  platform: 'polymarket' | 'kalshi';
+  platform: string;
   marketId: string;
   marketQuestion?: string;
   outcome: string;
@@ -38,10 +40,16 @@ export interface Position {
   unrealizedPnL: number;
   unrealizedPnLPct: number;
   realizedPnL: number;
+  /** Futures-specific fields */
+  leverage?: number;
+  marginType?: string;
+  liquidationPrice?: number;
+  notionalValue?: number;
+  side?: 'long' | 'short';
 }
 
 export interface PortfolioBalance {
-  platform: 'polymarket' | 'kalshi';
+  platform: string;
   available: number;
   locked: number;
   total: number;
@@ -62,6 +70,10 @@ export interface PortfolioSummary {
 export interface PortfolioConfig {
   polymarket?: PolymarketApiKeyAuth;
   kalshi?: KalshiApiKeyAuth;
+  hyperliquid?: { walletAddress: string; privateKey: string };
+  binance?: { apiKey: string; apiSecret: string };
+  bybit?: { apiKey: string; apiSecret: string };
+  mexc?: { apiKey: string; apiSecret: string };
   /** Cache TTL in seconds */
   cacheTtlSeconds?: number;
 }
@@ -148,7 +160,7 @@ export interface PortfolioService {
   getSummary(): Promise<PortfolioSummary>;
 
   /** Get positions for a specific platform */
-  getPositionsByPlatform(platform: 'polymarket' | 'kalshi'): Promise<Position[]>;
+  getPositionsByPlatform(platform: string): Promise<Position[]>;
 
   /** Get a specific position */
   getPosition(platform: string, marketId: string, outcome: string): Promise<Position | null>;
@@ -287,13 +299,41 @@ async function fetchPolymarketBalance(auth: PolymarketApiKeyAuth): Promise<Portf
     }
 
     const data = (await response.json()) as PolymarketBalanceResponse;
-    const available = parseFloat(data.balance) / 1e6; // USDC has 6 decimals
+    const total = parseFloat(data.balance) / 1e6; // USDC has 6 decimals
+
+    // Calculate locked USDC from open buy orders
+    let locked = 0;
+    try {
+      const ordersUrl = `${POLY_CLOB_URL}/orders?state=OPEN`;
+      const ordersHeaders = buildPolymarketHeadersForUrl(auth, 'GET', ordersUrl);
+      const ordersRes = await fetch(ordersUrl, {
+        method: 'GET',
+        headers: { ...ordersHeaders, 'Content-Type': 'application/json' },
+      });
+      if (ordersRes.ok) {
+        const orders = (await ordersRes.json()) as Array<{
+          side: string;
+          price: string;
+          size_matched: string;
+          original_size: string;
+        }>;
+        for (const order of orders) {
+          if (order.side === 'BUY') {
+            const remaining =
+              parseFloat(order.original_size) - parseFloat(order.size_matched);
+            locked += remaining * parseFloat(order.price);
+          }
+        }
+      }
+    } catch {
+      // Non-critical — just leave locked at 0
+    }
 
     return {
       platform: 'polymarket',
-      available,
-      locked: 0, // Would need to calculate from open orders
-      total: available,
+      available: total - locked,
+      locked,
+      total,
     };
   } catch (error) {
     logger.error({ error }, 'Error fetching Polymarket balance');
@@ -450,6 +490,253 @@ async function fetchKalshiBalance(auth: KalshiApiKeyAuth): Promise<PortfolioBala
 }
 
 // =============================================================================
+// EXCHANGE FETCHERS (dynamic imports — SDKs only load when credentials present)
+// =============================================================================
+
+async function fetchHyperliquidPositions(
+  config: { walletAddress: string; privateKey: string }
+): Promise<Position[]> {
+  try {
+    const hl = await import('../exchanges/hyperliquid/index');
+    const state = await hl.getUserState(config.walletAddress);
+    return state.assetPositions
+      .filter((ap) => parseFloat(ap.position.szi) !== 0)
+      .map((ap) => {
+        const p = ap.position;
+        const shares = Math.abs(parseFloat(p.szi));
+        const entryPrice = parseFloat(p.entryPx);
+        const unrealizedPnL = parseFloat(p.unrealizedPnl);
+        const isLong = parseFloat(p.szi) > 0;
+        const currentPrice = shares > 0 ? entryPrice + unrealizedPnL / shares : entryPrice;
+        const costBasis = shares * entryPrice;
+        const value = shares * currentPrice;
+        const unrealizedPnLPct = costBasis > 0 ? (unrealizedPnL / costBasis) * 100 : 0;
+
+        return {
+          id: `hl_${p.coin}_${isLong ? 'long' : 'short'}`,
+          platform: 'hyperliquid',
+          marketId: p.coin,
+          marketQuestion: `${p.coin} Perp`,
+          outcome: isLong ? 'Long' : 'Short',
+          shares,
+          avgPrice: entryPrice,
+          currentPrice,
+          value,
+          costBasis,
+          unrealizedPnL,
+          unrealizedPnLPct,
+          realizedPnL: 0,
+          side: isLong ? 'long' as const : 'short' as const,
+          liquidationPrice: parseFloat(p.liquidationPx) || undefined,
+        };
+      });
+  } catch (error) {
+    logger.error({ error }, 'Error fetching Hyperliquid positions');
+    return [];
+  }
+}
+
+async function fetchHyperliquidBalance(
+  config: { walletAddress: string; privateKey: string }
+): Promise<PortfolioBalance> {
+  try {
+    const hl = await import('../exchanges/hyperliquid/index');
+    const state = await hl.getUserState(config.walletAddress);
+    const accountValue = parseFloat(state.marginSummary.accountValue);
+    const marginUsed = parseFloat(state.marginSummary.totalMarginUsed);
+    return {
+      platform: 'hyperliquid',
+      available: accountValue - marginUsed,
+      locked: marginUsed,
+      total: accountValue,
+    };
+  } catch (error) {
+    logger.error({ error }, 'Error fetching Hyperliquid balance');
+    return { platform: 'hyperliquid', available: 0, locked: 0, total: 0 };
+  }
+}
+
+async function fetchBinancePositions(
+  config: { apiKey: string; apiSecret: string }
+): Promise<Position[]> {
+  try {
+    const bin = await import('../exchanges/binance-futures/index');
+    const positions = await bin.getPositions(config);
+    return positions
+      .filter((p) => p.positionAmt !== 0)
+      .map((p) => {
+        const isLong = p.positionAmt > 0;
+        const shares = Math.abs(p.positionAmt);
+        const costBasis = shares * p.entryPrice;
+        const value = Math.abs(p.notional);
+        const unrealizedPnLPct = costBasis > 0 ? (p.unrealizedProfit / costBasis) * 100 : 0;
+
+        return {
+          id: `binance_${p.symbol}_${p.positionSide}`,
+          platform: 'binance',
+          marketId: p.symbol,
+          marketQuestion: `${p.symbol} Perp`,
+          outcome: isLong ? 'Long' : 'Short',
+          shares,
+          avgPrice: p.entryPrice,
+          currentPrice: p.markPrice,
+          value,
+          costBasis,
+          unrealizedPnL: p.unrealizedProfit,
+          unrealizedPnLPct,
+          realizedPnL: 0,
+          leverage: p.leverage,
+          marginType: p.marginType,
+          liquidationPrice: p.liquidationPrice || undefined,
+          notionalValue: Math.abs(p.notional),
+          side: isLong ? 'long' as const : 'short' as const,
+        };
+      });
+  } catch (error) {
+    logger.error({ error }, 'Error fetching Binance positions');
+    return [];
+  }
+}
+
+async function fetchBinanceBalance(
+  config: { apiKey: string; apiSecret: string }
+): Promise<PortfolioBalance> {
+  try {
+    const bin = await import('../exchanges/binance-futures/index');
+    const balances = await bin.getBalance(config);
+    const usdt = balances.find((b) => b.asset === 'USDT');
+    if (!usdt) return { platform: 'binance', available: 0, locked: 0, total: 0 };
+    return {
+      platform: 'binance',
+      available: usdt.availableBalance,
+      locked: usdt.balance - usdt.availableBalance,
+      total: usdt.balance,
+    };
+  } catch (error) {
+    logger.error({ error }, 'Error fetching Binance balance');
+    return { platform: 'binance', available: 0, locked: 0, total: 0 };
+  }
+}
+
+async function fetchBybitPositions(
+  config: { apiKey: string; apiSecret: string }
+): Promise<Position[]> {
+  try {
+    const bb = await import('../exchanges/bybit/index');
+    const positions = await bb.getPositions(config);
+    return positions
+      .filter((p) => p.size !== 0)
+      .map((p) => {
+        const isLong = p.side === 'Buy';
+        const costBasis = p.size * p.entryPrice;
+        const unrealizedPnLPct = costBasis > 0 ? (p.unrealisedPnl / costBasis) * 100 : 0;
+
+        return {
+          id: `bybit_${p.symbol}_${p.side}`,
+          platform: 'bybit',
+          marketId: p.symbol,
+          marketQuestion: `${p.symbol} Perp`,
+          outcome: isLong ? 'Long' : 'Short',
+          shares: p.size,
+          avgPrice: p.entryPrice,
+          currentPrice: p.markPrice,
+          value: p.positionValue,
+          costBasis,
+          unrealizedPnL: p.unrealisedPnl,
+          unrealizedPnLPct,
+          realizedPnL: p.cumRealisedPnl,
+          leverage: p.leverage,
+          liquidationPrice: p.liqPrice || undefined,
+          notionalValue: p.positionValue,
+          side: isLong ? 'long' as const : 'short' as const,
+        };
+      });
+  } catch (error) {
+    logger.error({ error }, 'Error fetching Bybit positions');
+    return [];
+  }
+}
+
+async function fetchBybitBalance(
+  config: { apiKey: string; apiSecret: string }
+): Promise<PortfolioBalance> {
+  try {
+    const bb = await import('../exchanges/bybit/index');
+    const balances = await bb.getBalance(config);
+    const usdt = balances.find((b) => b.coin === 'USDT');
+    if (!usdt) return { platform: 'bybit', available: 0, locked: 0, total: 0 };
+    return {
+      platform: 'bybit',
+      available: usdt.availableBalance,
+      locked: usdt.equity - usdt.availableBalance,
+      total: usdt.equity,
+    };
+  } catch (error) {
+    logger.error({ error }, 'Error fetching Bybit balance');
+    return { platform: 'bybit', available: 0, locked: 0, total: 0 };
+  }
+}
+
+async function fetchMexcPositions(
+  config: { apiKey: string; apiSecret: string }
+): Promise<Position[]> {
+  try {
+    const mx = await import('../exchanges/mexc/index');
+    const positions = await mx.getPositions(config);
+    return positions
+      .filter((p) => p.holdVol !== 0)
+      .map((p) => {
+        const isLong = p.positionType === 1;
+        const costBasis = p.holdVol * p.openAvgPrice;
+        const unrealizedPnLPct = costBasis > 0 ? (p.unrealisedPnl / costBasis) * 100 : 0;
+
+        return {
+          id: `mexc_${p.symbol}_${isLong ? 'long' : 'short'}`,
+          platform: 'mexc',
+          marketId: p.symbol,
+          marketQuestion: `${p.symbol} Perp`,
+          outcome: isLong ? 'Long' : 'Short',
+          shares: p.holdVol,
+          avgPrice: p.openAvgPrice,
+          currentPrice: p.markPrice,
+          value: p.positionValue,
+          costBasis,
+          unrealizedPnL: p.unrealisedPnl,
+          unrealizedPnLPct,
+          realizedPnL: p.realisedPnl,
+          leverage: p.leverage,
+          liquidationPrice: p.liquidatePrice || undefined,
+          notionalValue: p.positionValue,
+          side: isLong ? 'long' as const : 'short' as const,
+        };
+      });
+  } catch (error) {
+    logger.error({ error }, 'Error fetching MEXC positions');
+    return [];
+  }
+}
+
+async function fetchMexcBalance(
+  config: { apiKey: string; apiSecret: string }
+): Promise<PortfolioBalance> {
+  try {
+    const mx = await import('../exchanges/mexc/index');
+    const balances = await mx.getBalance(config);
+    const usdt = balances.find((b) => b.currency === 'USDT');
+    if (!usdt) return { platform: 'mexc', available: 0, locked: 0, total: 0 };
+    return {
+      platform: 'mexc',
+      available: usdt.availableBalance,
+      locked: usdt.frozenBalance,
+      total: usdt.equity,
+    };
+  } catch (error) {
+    logger.error({ error }, 'Error fetching MEXC balance');
+    return { platform: 'mexc', available: 0, locked: 0, total: 0 };
+  }
+}
+
+// =============================================================================
 // PORTFOLIO SERVICE
 // =============================================================================
 
@@ -467,16 +754,23 @@ export function createPortfolioService(config: PortfolioConfig, db?: Database): 
 
   const service: PortfolioService = {
     async fetchPositions() {
+      const fetchers: Promise<Position[]>[] = [];
+
+      if (config.polymarket) fetchers.push(fetchPolymarketPositions(config.polymarket));
+      if (config.kalshi) fetchers.push(fetchKalshiPositions(config.kalshi));
+      if (config.hyperliquid) fetchers.push(fetchHyperliquidPositions(config.hyperliquid));
+      if (config.binance) fetchers.push(fetchBinancePositions(config.binance));
+      if (config.bybit) fetchers.push(fetchBybitPositions(config.bybit));
+      if (config.mexc) fetchers.push(fetchMexcPositions(config.mexc));
+
+      const results = await Promise.allSettled(fetchers);
       const positions: Position[] = [];
-
-      if (config.polymarket) {
-        const polyPositions = await fetchPolymarketPositions(config.polymarket);
-        positions.push(...polyPositions);
-      }
-
-      if (config.kalshi) {
-        const kalshiPositions = await fetchKalshiPositions(config.kalshi);
-        positions.push(...kalshiPositions);
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          positions.push(...result.value);
+        } else {
+          logger.error({ error: result.reason }, 'Exchange position fetch failed');
+        }
       }
 
       cachedPositions = positions;
@@ -487,16 +781,23 @@ export function createPortfolioService(config: PortfolioConfig, db?: Database): 
     },
 
     async fetchBalances() {
+      const fetchers: Promise<PortfolioBalance>[] = [];
+
+      if (config.polymarket) fetchers.push(fetchPolymarketBalance(config.polymarket));
+      if (config.kalshi) fetchers.push(fetchKalshiBalance(config.kalshi));
+      if (config.hyperliquid) fetchers.push(fetchHyperliquidBalance(config.hyperliquid));
+      if (config.binance) fetchers.push(fetchBinanceBalance(config.binance));
+      if (config.bybit) fetchers.push(fetchBybitBalance(config.bybit));
+      if (config.mexc) fetchers.push(fetchMexcBalance(config.mexc));
+
+      const results = await Promise.allSettled(fetchers);
       const balances: PortfolioBalance[] = [];
-
-      if (config.polymarket) {
-        const polyBalance = await fetchPolymarketBalance(config.polymarket);
-        balances.push(polyBalance);
-      }
-
-      if (config.kalshi) {
-        const kalshiBalance = await fetchKalshiBalance(config.kalshi);
-        balances.push(kalshiBalance);
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          balances.push(result.value);
+        } else {
+          logger.error({ error: result.reason }, 'Exchange balance fetch failed');
+        }
       }
 
       cachedBalances = balances;
@@ -571,7 +872,11 @@ export function createPortfolioService(config: PortfolioConfig, db?: Database): 
 
       text += `**Balances:**\n`;
       for (const bal of summary.balances) {
-        text += `  ${bal.platform}: $${bal.available.toFixed(2)}\n`;
+        let balLine = `  ${bal.platform}: $${bal.total.toFixed(2)}`;
+        if (bal.locked > 0) {
+          balLine += ` ($${bal.available.toFixed(2)} avail, $${bal.locked.toFixed(2)} locked)`;
+        }
+        text += balLine + '\n';
       }
 
       text += `\n_Updated: ${summary.lastUpdated.toLocaleTimeString()}_`;
@@ -596,9 +901,16 @@ export function createPortfolioService(config: PortfolioConfig, db?: Database): 
           ? pos.marketQuestion.slice(0, 40) + (pos.marketQuestion.length > 40 ? '...' : '')
           : pos.marketId.slice(0, 20);
 
-        text += `**${question}**\n`;
-        text += `  ${pos.outcome}: ${pos.shares.toFixed(2)} @ $${pos.currentPrice.toFixed(3)}\n`;
-        text += `  ${pnlEmoji} ${pnlSign}$${pos.unrealizedPnL.toFixed(2)} (${pnlSign}${pos.unrealizedPnLPct.toFixed(1)}%)\n\n`;
+        text += `**${question}** [${pos.platform}]\n`;
+        if (pos.side) {
+          const leverageStr = pos.leverage ? ` ${pos.leverage}x` : '';
+          const liqStr = pos.liquidationPrice ? ` | liq $${pos.liquidationPrice.toFixed(2)}` : '';
+          text += `  ${pos.side.toUpperCase()}${leverageStr}: ${pos.shares.toFixed(4)} @ $${pos.currentPrice.toFixed(2)}\n`;
+          text += `  ${pnlEmoji} ${pnlSign}$${pos.unrealizedPnL.toFixed(2)} (${pnlSign}${pos.unrealizedPnLPct.toFixed(1)}%)${liqStr}\n\n`;
+        } else {
+          text += `  ${pos.outcome}: ${pos.shares.toFixed(2)} @ $${pos.currentPrice.toFixed(3)}\n`;
+          text += `  ${pnlEmoji} ${pnlSign}$${pos.unrealizedPnL.toFixed(2)} (${pnlSign}${pos.unrealizedPnLPct.toFixed(1)}%)\n\n`;
+        }
       }
 
       return text;

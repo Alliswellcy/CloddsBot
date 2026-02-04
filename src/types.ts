@@ -19,7 +19,11 @@ export type Platform =
   | 'smarkets'
   | 'opinion'
   | 'virtuals'
-  | 'hedgehog';
+  | 'hedgehog'
+  | 'hyperliquid'
+  | 'binance'
+  | 'bybit'
+  | 'mexc';
 
 // =============================================================================
 // MARKETS
@@ -112,7 +116,7 @@ export interface Portfolio {
   totalValue: number;
   totalPnl: number;
   totalPnlPct: number;
-  byPlatform: Record<Platform, { value: number; pnl: number }>;
+  byPlatform: Partial<Record<Platform, { value: number; pnl: number }>>;
 }
 
 export interface PortfolioSnapshot {
