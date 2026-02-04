@@ -162,7 +162,7 @@ export interface ExecutionService {
 
   // Batch operations (Opinion only for now)
   placeOrdersBatch(orders: Array<Omit<OrderRequest, 'orderType'>>): Promise<OrderResult[]>;
-  cancelOrdersBatch(platform: 'polymarket' | 'opinion', orderIds: string[]): Promise<Array<{ orderId: string; success: boolean }>>;
+  cancelOrdersBatch(platform: 'polymarket' | 'kalshi' | 'opinion', orderIds: string[]): Promise<Array<{ orderId: string; success: boolean }>>;
 
   // Utilities
   estimateFill(request: OrderRequest): Promise<{ avgPrice: number; filledSize: number }>;
@@ -1039,6 +1039,182 @@ async function getKalshiOpenOrders(auth: KalshiApiKeyAuth): Promise<OpenOrder[]>
   }
 }
 
+/**
+ * Place multiple Kalshi orders in a single batch request.
+ * Kalshi supports up to 20 orders per batch via POST /portfolio/orders/batched.
+ */
+async function placeKalshiOrdersBatch(
+  auth: KalshiApiKeyAuth,
+  orders: Array<{
+    ticker: string;
+    side: 'yes' | 'no';
+    action: OrderSide;
+    price: number;
+    count: number;
+    orderType?: OrderType;
+  }>
+): Promise<OrderResult[]> {
+  if (orders.length === 0) return [];
+
+  const results: OrderResult[] = [];
+
+  // Chunk into batches of 20 (Kalshi limit)
+  for (let i = 0; i < orders.length; i += 20) {
+    const chunk = orders.slice(i, i + 20);
+    const url = `${KALSHI_API_URL}/portfolio/orders/batched`;
+    const headers = buildKalshiHeadersForUrl(auth, 'POST', url);
+
+    const body = {
+      orders: chunk.map(o => ({
+        ticker: o.ticker,
+        side: o.side,
+        action: o.action,
+        type: o.orderType === 'FOK' ? 'market' : 'limit',
+        yes_price: o.side === 'yes' ? Math.round(o.price * 100) : undefined,
+        no_price: o.side === 'no' ? Math.round(o.price * 100) : undefined,
+        count: o.count,
+      })),
+    };
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        logger.error({ status: response.status, error, count: chunk.length }, 'Kalshi batch order failed');
+        results.push(...chunk.map(() => ({ success: false, error: `HTTP ${response.status}` })));
+        continue;
+      }
+
+      const data = (await response.json()) as { orders?: Array<{ order_id: string; status: string; filled_count?: number }> };
+      const respOrders = data.orders || [];
+
+      for (let j = 0; j < chunk.length; j++) {
+        const r = respOrders[j];
+        if (r?.order_id) {
+          results.push({
+            success: true,
+            orderId: r.order_id,
+            status: r.status as OrderStatus || 'open',
+            filledSize: r.filled_count,
+          });
+        } else {
+          results.push({ success: false, error: 'No order_id in response' });
+        }
+      }
+
+      logger.info({ count: chunk.length, successful: respOrders.filter(r => r?.order_id).length }, 'Kalshi batch orders placed');
+    } catch (error) {
+      logger.error({ error }, 'Error placing Kalshi batch orders');
+      results.push(...chunk.map(() => ({
+        success: false,
+        error: error instanceof Error ? error.message : 'Batch order failed',
+      })));
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Cancel multiple Kalshi orders in a single batch request.
+ * Kalshi supports up to 20 cancels per batch via DELETE /portfolio/orders/batched.
+ */
+async function cancelKalshiOrdersBatch(
+  auth: KalshiApiKeyAuth,
+  orderIds: string[],
+): Promise<Array<{ orderId: string; success: boolean }>> {
+  if (orderIds.length === 0) return [];
+
+  const results: Array<{ orderId: string; success: boolean }> = [];
+
+  for (let i = 0; i < orderIds.length; i += 20) {
+    const chunk = orderIds.slice(i, i + 20);
+    const url = `${KALSHI_API_URL}/portfolio/orders/batched`;
+    const headers = buildKalshiHeadersForUrl(auth, 'DELETE', url);
+
+    const body = {
+      orders: chunk.map(id => ({ order_id: id })),
+    };
+
+    try {
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        logger.error({ status: response.status, count: chunk.length }, 'Kalshi batch cancel failed');
+        results.push(...chunk.map(id => ({ orderId: id, success: false })));
+        continue;
+      }
+
+      logger.info({ count: chunk.length }, 'Kalshi batch cancel completed');
+      results.push(...chunk.map(id => ({ orderId: id, success: true })));
+    } catch (error) {
+      logger.error({ error }, 'Error batch cancelling Kalshi orders');
+      results.push(...chunk.map(id => ({ orderId: id, success: false })));
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Amend a Kalshi order (change price and/or count without losing queue position).
+ * POST /portfolio/orders/{order_id}/amend
+ */
+async function amendKalshiOrder(
+  auth: KalshiApiKeyAuth,
+  orderId: string,
+  updates: { price?: number; side?: 'yes' | 'no'; count?: number },
+): Promise<OrderResult> {
+  const url = `${KALSHI_API_URL}/portfolio/orders/${orderId}/amend`;
+  const headers = buildKalshiHeadersForUrl(auth, 'POST', url);
+
+  const body: Record<string, unknown> = {};
+  if (updates.price != null && updates.side) {
+    if (updates.side === 'yes') {
+      body.yes_price = Math.round(updates.price * 100);
+    } else {
+      body.no_price = Math.round(updates.price * 100);
+    }
+  }
+  if (updates.count != null) {
+    body.count = updates.count;
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const data = (await response.json()) as { order?: { order_id: string; status: string } };
+
+    if (!response.ok) {
+      logger.error({ status: response.status, orderId }, 'Kalshi order amend failed');
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+
+    logger.info({ orderId, updates }, 'Kalshi order amended');
+    return {
+      success: true,
+      orderId: data.order?.order_id || orderId,
+      status: data.order?.status as OrderStatus || 'open',
+    };
+  } catch (error) {
+    logger.error({ error, orderId }, 'Error amending Kalshi order');
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
 // =============================================================================
 // OPINION.TRADE EXECUTION
 // =============================================================================
@@ -1649,15 +1825,15 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
         count += await cancelAllPolymarketOrders(config.polymarket, marketId);
       }
 
-      // Kalshi doesn't have cancel-all endpoint, need to cancel individually
+      // Kalshi: fetch open orders, batch cancel matching ones
       if ((!platform || platform === 'kalshi') && config.kalshi) {
         const orders = await getKalshiOpenOrders(config.kalshi);
-        for (const order of orders) {
-          if (!marketId || order.marketId === marketId) {
-            if (await cancelKalshiOrder(config.kalshi, order.orderId)) {
-              count++;
-            }
-          }
+        const toCancel = orders
+          .filter(o => !marketId || o.marketId === marketId)
+          .map(o => o.orderId);
+        if (toCancel.length > 0) {
+          const results = await cancelKalshiOrdersBatch(config.kalshi, toCancel);
+          count += results.filter(r => r.success).length;
         }
       }
 
@@ -1903,8 +2079,9 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
 
     async placeOrdersBatch(orders) {
       const polyOrders = orders.filter(o => o.platform === 'polymarket');
+      const kalshiOrders = orders.filter(o => o.platform === 'kalshi');
       const opinionOrders = orders.filter(o => o.platform === 'opinion');
-      const otherOrders = orders.filter(o => o.platform !== 'opinion' && o.platform !== 'polymarket');
+      const otherOrders = orders.filter(o => o.platform !== 'opinion' && o.platform !== 'polymarket' && o.platform !== 'kalshi');
 
       const results: OrderResult[] = [];
 
@@ -1931,6 +2108,31 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
         results.push(...polyOrders.map(() => ({
           success: false,
           error: 'Polymarket trading not configured',
+        })));
+      }
+
+      // Execute Kalshi batch if we have Kalshi orders and config
+      if (kalshiOrders.length > 0 && config.kalshi) {
+        try {
+          const batchInput = kalshiOrders.map(o => ({
+            ticker: o.marketId,
+            side: (o.outcome?.toLowerCase() as 'yes' | 'no') || 'yes',
+            action: o.side,
+            price: o.price,
+            count: o.size,
+          }));
+          const batchResults = await placeKalshiOrdersBatch(config.kalshi, batchInput);
+          results.push(...batchResults);
+        } catch (err) {
+          results.push(...kalshiOrders.map(() => ({
+            success: false,
+            error: err instanceof Error ? err.message : 'Batch order failed',
+          })));
+        }
+      } else if (kalshiOrders.length > 0) {
+        results.push(...kalshiOrders.map(() => ({
+          success: false,
+          error: 'Kalshi trading not configured',
         })));
       }
 
@@ -1988,6 +2190,14 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
       if (platform === 'polymarket' && config.polymarket) {
         try {
           return await cancelPolymarketOrdersBatch(config.polymarket, orderIds);
+        } catch (err) {
+          return orderIds.map(orderId => ({ orderId, success: false }));
+        }
+      }
+
+      if (platform === 'kalshi' && config.kalshi) {
+        try {
+          return await cancelKalshiOrdersBatch(config.kalshi, orderIds);
         } catch (err) {
           return orderIds.map(orderId => ({ orderId, success: false }));
         }
