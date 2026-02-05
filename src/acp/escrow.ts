@@ -422,10 +422,32 @@ async function checkOracleCondition(
     case 'http':
       actualValue = await fetchHttpOraclePrice(config.feedId, config.jsonPath);
       break;
-    case 'switchboard':
-      // Switchboard support - similar to Pyth but different account format
-      logger.warn({ feedId: config.feedId }, 'Switchboard oracle not yet implemented, treating as passed');
-      return true;
+    case 'switchboard': {
+      // Switchboard V2 AggregatorAccountData (packed, 8-byte Anchor discriminator):
+      // latestConfirmedRound starts at offset 341, result (SwitchboardDecimal) at +25 = 366
+      // SwitchboardDecimal = mantissa: i128 (16 bytes LE) + scale: u32 (4 bytes LE)
+      const SB_RESULT_OFFSET = 366;
+      const SB_MIN_ACCOUNT_SIZE = SB_RESULT_OFFSET + 20; // mantissa(16) + scale(4)
+      try {
+        const feedPubkey = new PublicKey(config.feedId);
+        const accountInfo = await connection.getAccountInfo(feedPubkey);
+        if (!accountInfo?.data || accountInfo.data.length < SB_MIN_ACCOUNT_SIZE) {
+          logger.warn({ feedId: config.feedId }, 'Switchboard feed account not found or too small');
+          return false;
+        }
+        const data = accountInfo.data;
+        const lo = data.readBigUInt64LE(SB_RESULT_OFFSET);
+        const hi = data.readBigInt64LE(SB_RESULT_OFFSET + 8);
+        const mantissa = (hi << 64n) | lo;
+        const scale = data.readUInt32LE(SB_RESULT_OFFSET + 16);
+        actualValue = Number(mantissa) / Math.pow(10, scale);
+        logger.debug({ feedId: config.feedId, value: actualValue, scale }, 'Fetched Switchboard price');
+      } catch (error) {
+        logger.error({ feedId: config.feedId, error }, 'Failed to fetch Switchboard price');
+        return false;
+      }
+      break;
+    }
   }
 
   if (actualValue === null) {

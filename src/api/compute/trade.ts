@@ -5,6 +5,13 @@
  */
 
 import { logger } from '../../utils/logger';
+import { buildPolymarketHeadersForUrl, type PolymarketApiKeyAuth } from '../../utils/polymarket-auth';
+import { placePerpOrder, type HyperliquidConfig, type PerpOrder } from '../../exchanges/hyperliquid';
+import { openLong, openShort, type BinanceFuturesConfig } from '../../exchanges/binance-futures';
+import { executeJupiterSwap, type JupiterSwapParams } from '../../solana/jupiter';
+import { executeUniswapSwap, type UniswapSwapParams, type EvmChain } from '../../evm/uniswap';
+import { Connection, Keypair } from '@solana/web3.js';
+import bs58 from 'bs58';
 import type {
   ComputeRequest,
   TradeRequest,
@@ -30,6 +37,7 @@ export interface TradeExecutor {
 export interface TradeExecutorConfig {
   /** Polymarket API credentials */
   polymarket?: {
+    address: string;
     apiKey: string;
     apiSecret: string;
     passphrase: string;
@@ -243,25 +251,31 @@ export function createTradeExecutor(config: TradeExecutorConfig = {}): TradeExec
     const creds = config.polymarket;
     if (!creds) throw new Error('Polymarket not configured');
 
-    // Build order - simplified implementation
-    // In production, would use py_clob_client or similar
-    const timestamp = Math.floor(Date.now() / 1000);
+    const auth: PolymarketApiKeyAuth = {
+      address: creds.address,
+      apiKey: creds.apiKey,
+      apiSecret: creds.apiSecret,
+      apiPassphrase: creds.passphrase,
+    };
 
-    const response = await fetch('https://clob.polymarket.com/order', {
+    const url = 'https://clob.polymarket.com/order';
+    const orderBody = {
+      market: payload.marketId,
+      side: payload.side.toUpperCase(),
+      size: payload.size,
+      price: payload.price,
+      type: payload.orderType.toUpperCase(),
+    };
+
+    const headers = buildPolymarketHeadersForUrl(auth, 'POST', url, orderBody);
+
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'POLY-API-KEY': creds.apiKey,
-        'POLY-TIMESTAMP': timestamp.toString(),
-        // Would need proper signature here
+        ...headers,
       },
-      body: JSON.stringify({
-        market: payload.marketId,
-        side: payload.side.toUpperCase(),
-        size: payload.size,
-        price: payload.price,
-        type: payload.orderType.toUpperCase(),
-      }),
+      body: JSON.stringify(orderBody),
     });
 
     if (!response.ok) {
@@ -323,40 +337,129 @@ export function createTradeExecutor(config: TradeExecutorConfig = {}): TradeExec
     const creds = config.hyperliquid;
     if (!creds) throw new Error('Hyperliquid not configured');
 
-    // Hyperliquid API implementation
-    // Would need proper signing and API calls
-    throw new Error('Hyperliquid execution not yet implemented');
+    const hlConfig: HyperliquidConfig = {
+      walletAddress: '', // Derived from private key by placePerpOrder
+      privateKey: creds.apiSecret,
+    };
+
+    const order: PerpOrder = {
+      coin: payload.marketId,
+      side: payload.side.toUpperCase() as 'BUY' | 'SELL',
+      size: payload.size,
+      price: payload.price,
+      type: payload.orderType === 'market' ? 'MARKET' : 'LIMIT',
+    };
+
+    const result = await placePerpOrder(hlConfig, order);
+
+    if (!result.success) {
+      throw new Error(`Hyperliquid error: ${result.error || 'Unknown error'}`);
+    }
+
+    return {
+      orderId: String(result.orderId ?? ''),
+      status: 'pending',
+    };
   }
 
   async function executeBinance(payload: TradeRequest): Promise<TradeResponse> {
     const creds = config.binance;
     if (!creds) throw new Error('Binance not configured');
 
-    // Binance API implementation
-    throw new Error('Binance execution not yet implemented');
+    const bnConfig: BinanceFuturesConfig = {
+      apiKey: creds.apiKey,
+      apiSecret: creds.apiSecret,
+    };
+
+    const symbol = payload.marketId.replace('/', '');
+    const quantity = payload.size;
+
+    const result = payload.side === 'buy'
+      ? await openLong(bnConfig, symbol, quantity)
+      : await openShort(bnConfig, symbol, quantity);
+
+    return {
+      orderId: String(result.orderId),
+      status: result.status === 'FILLED' ? 'filled' : result.status === 'PARTIALLY_FILLED' ? 'partial' : 'pending',
+      fillPrice: result.avgPrice || result.price,
+      filledSize: result.executedQty,
+    };
   }
 
   async function executeJupiter(payload: TradeRequest): Promise<TradeResponse> {
     if (!config.privateKey) throw new Error('Private key not configured for DEX');
 
-    // Jupiter swap implementation
-    // Would use @jup-ag/api
-    throw new Error('Jupiter execution not yet implemented');
+    // Derive keypair from private key (base58-encoded)
+    const keypair = Keypair.fromSecretKey(bs58.decode(config.privateKey));
+    const connection = new Connection(
+      process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+    );
+
+    // marketId format: "inputMint/outputMint"
+    const [inputMint, outputMint] = payload.marketId.split('/');
+    if (!inputMint || !outputMint) {
+      throw new Error('Jupiter marketId must be in format "inputMint/outputMint"');
+    }
+
+    const params: JupiterSwapParams = {
+      inputMint,
+      outputMint,
+      amount: String(payload.size),
+      slippageBps: payload.slippagePct ? Math.round(payload.slippagePct * 10000) : undefined,
+    };
+
+    const result = await executeJupiterSwap(connection, keypair, params);
+
+    return {
+      orderId: result.signature,
+      status: 'filled',
+      txHash: result.signature,
+      filledSize: result.outAmount ? Number(result.outAmount) : undefined,
+    };
   }
 
   async function executeUniswap(payload: TradeRequest): Promise<TradeResponse> {
     if (!config.privateKey) throw new Error('Private key not configured for DEX');
 
-    // Uniswap swap implementation
-    // Would use @uniswap/sdk
-    throw new Error('Uniswap execution not yet implemented');
+    // marketId format: "inputToken/outputToken" or "inputToken/outputToken@chain"
+    const [tokenPart, chainPart] = payload.marketId.split('@');
+    const [inputToken, outputToken] = tokenPart.split('/');
+    if (!inputToken || !outputToken) {
+      throw new Error('Uniswap marketId must be in format "inputToken/outputToken" or "inputToken/outputToken@chain"');
+    }
+
+    const chain = (chainPart || 'ethereum') as EvmChain;
+
+    const params: UniswapSwapParams = {
+      chain,
+      inputToken,
+      outputToken,
+      amount: String(payload.size),
+      slippageBps: payload.slippagePct ? Math.round(payload.slippagePct * 10000) : undefined,
+    };
+
+    const result = await executeUniswapSwap(params);
+
+    if (!result.success) {
+      throw new Error(`Uniswap error: ${result.error || 'Unknown error'}`);
+    }
+
+    return {
+      orderId: result.txHash || '',
+      status: 'filled',
+      txHash: result.txHash,
+      filledSize: result.outputAmount ? Number(result.outputAmount) : undefined,
+    };
   }
 
   async function executeAerodrome(payload: TradeRequest): Promise<TradeResponse> {
     if (!config.privateKey) throw new Error('Private key not configured for DEX');
 
-    // Aerodrome swap implementation
-    throw new Error('Aerodrome execution not yet implemented');
+    // Aerodrome uses a Velodrome V2 router interface incompatible with Uniswap V3.
+    // For Base chain swaps, use Uniswap with marketId "token/token@base" instead.
+    throw new Error(
+      'Aerodrome is not yet supported. For Base chain swaps, use the "uniswap" platform with marketId format "inputToken/outputToken@base" instead.'
+    );
   }
 
   return {

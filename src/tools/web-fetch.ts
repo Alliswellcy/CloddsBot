@@ -6,9 +6,89 @@
  * - HTML to markdown conversion
  * - Content truncation
  * - Caching
+ * - Auto-rewrite to LLM-friendly .md URLs for supported doc sites
  */
 
 import { logger } from '../utils/logger';
+
+// =============================================================================
+// LLM-FRIENDLY DOCUMENTATION REGISTRY
+// =============================================================================
+
+/**
+ * Sites that serve clean Markdown when you append .md to the URL.
+ * Following the llms.txt convention: https://llmstxt.org/
+ *
+ * Pattern: hostname -> { pathPrefix, transform }
+ * - pathPrefix: only rewrite URLs under this path (e.g., '/docs')
+ * - transform: 'append-md' appends .md to the path
+ */
+export interface LlmDocSiteRule {
+  /** Only rewrite paths starting with this prefix */
+  pathPrefix: string;
+  /** How to transform the URL */
+  transform: 'append-md';
+  /** Human-readable name */
+  name: string;
+}
+
+export const LLM_DOC_SITES: Record<string, LlmDocSiteRule[]> = {
+  'solana.com': [
+    { pathPrefix: '/docs', transform: 'append-md', name: 'Solana Docs' },
+  ],
+  'docs.anthropic.com': [
+    { pathPrefix: '/', transform: 'append-md', name: 'Anthropic Docs' },
+  ],
+  'docs.stripe.com': [
+    { pathPrefix: '/', transform: 'append-md', name: 'Stripe Docs' },
+  ],
+  'docs.gitbook.com': [
+    { pathPrefix: '/', transform: 'append-md', name: 'GitBook Docs' },
+  ],
+};
+
+/**
+ * Curated LLM-friendly documentation links for blockchain/trading dev.
+ * Agents and devs can reference these for research.
+ */
+export const LLM_DOC_URLS: Record<string, { url: string; llmUrl: string; description: string }> = {
+  'solana-core':       { url: 'https://solana.com/docs/core',              llmUrl: 'https://solana.com/docs/core.md',              description: 'Solana core concepts (accounts, txs, programs)' },
+  'solana-rpc':        { url: 'https://solana.com/docs/rpc',               llmUrl: 'https://solana.com/docs/rpc.md',               description: 'Solana JSON-RPC API reference' },
+  'solana-tokens':     { url: 'https://solana.com/docs/core/tokens',       llmUrl: 'https://solana.com/docs/core/tokens.md',       description: 'SPL tokens, token extensions, metadata' },
+  'solana-programs':   { url: 'https://solana.com/docs/programs',          llmUrl: 'https://solana.com/docs/programs.md',           description: 'On-chain program development' },
+  'solana-web3js':     { url: 'https://solana.com/docs/clients/javascript',llmUrl: 'https://solana.com/docs/clients/javascript.md', description: '@solana/web3.js client SDK' },
+  'anthropic-api':     { url: 'https://docs.anthropic.com/en/api',         llmUrl: 'https://docs.anthropic.com/en/api.md',          description: 'Anthropic Claude API reference' },
+  'stripe-api':        { url: 'https://docs.stripe.com/api',               llmUrl: 'https://docs.stripe.com/api.md',               description: 'Stripe payments API' },
+};
+
+/**
+ * Rewrite a URL to its LLM-friendly .md variant if the site supports it.
+ * Returns the original URL unchanged if no rule matches.
+ */
+export function toLlmFriendlyUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const rules = LLM_DOC_SITES[parsed.hostname];
+    if (!rules) return url;
+
+    // Already ends with .md
+    if (parsed.pathname.endsWith('.md')) return url;
+
+    for (const rule of rules) {
+      if (parsed.pathname.startsWith(rule.pathPrefix)) {
+        // Strip trailing slash before appending .md
+        const cleanPath = parsed.pathname.endsWith('/')
+          ? parsed.pathname.slice(0, -1)
+          : parsed.pathname;
+        parsed.pathname = cleanPath + '.md';
+        return parsed.toString();
+      }
+    }
+    return url;
+  } catch {
+    return url;
+  }
+}
 
 /** Fetch options */
 export interface FetchOptions {
@@ -147,26 +227,33 @@ export function createWebFetchTool(): WebFetchTool {
       const maxLength = options.maxLength || DEFAULT_MAX_LENGTH;
       const format = options.format || 'markdown';
       const timeout = options.timeout || DEFAULT_TIMEOUT;
-      const cacheKey = `${url}:${format}:${maxLength}`;
+
+      // Auto-rewrite to LLM-friendly .md URL if supported
+      const fetchUrl = toLlmFriendlyUrl(url);
+      if (fetchUrl !== url) {
+        logger.debug({ original: url, rewritten: fetchUrl }, 'Rewritten to LLM-friendly URL');
+      }
+
+      const cacheKey = `${fetchUrl}:${format}:${maxLength}`;
 
       // Check cache
       const cached = cache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        logger.debug({ url }, 'Returning cached fetch result');
+        logger.debug({ url: fetchUrl }, 'Returning cached fetch result');
         return { ...cached.result, cached: true };
       }
 
-      logger.info({ url, format }, 'Fetching URL');
+      logger.info({ url: fetchUrl, format }, 'Fetching URL');
 
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-        const response = await fetch(url, {
+        const response = await fetch(fetchUrl, {
           signal: controller.signal,
           headers: {
             'User-Agent': 'Clodds/1.0 (Web Fetch Tool)',
-            Accept: 'text/html,application/xhtml+xml,text/plain,*/*',
+            Accept: 'text/markdown,text/html,application/xhtml+xml,text/plain,*/*',
           },
         });
 
@@ -210,7 +297,7 @@ export function createWebFetchTool(): WebFetchTool {
         }
 
         const result: FetchResult = {
-          url,
+          url: fetchUrl,
           title,
           description,
           content,
@@ -227,7 +314,7 @@ export function createWebFetchTool(): WebFetchTool {
 
         return result;
       } catch (error) {
-        logger.error({ error, url }, 'Web fetch failed');
+        logger.error({ error, url: fetchUrl }, 'Web fetch failed');
         throw error;
       }
     },
