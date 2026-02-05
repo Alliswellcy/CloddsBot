@@ -20,6 +20,8 @@ import { createNewsFeed, NewsFeed } from './news/index';
 import { analyzeEdge, calculateKelly, EdgeAnalysis } from './external/index';
 import { createMarketCache, type MarketCacheKey } from '../cache/index';
 import { logger } from '../utils/logger';
+import { getGlobalFeedRegistry } from './registry';
+import { registerAllFeeds } from './descriptors';
 import type { Config, Market, PriceUpdate, OrderbookUpdate, Orderbook, NewsItem, Platform } from '../types';
 
 export interface FeedManager extends EventEmitter {
@@ -96,11 +98,21 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
   // Subscription tracking for deduplication
   const activeSubscriptions = new Map<string, Set<(update: PriceUpdate) => void>>();
 
+  // Initialize feed registry (non-blocking, registers descriptors only)
+  registerAllFeeds();
+  const registry = getGlobalFeedRegistry();
+
+  // Helper to mark feeds as active in registry
+  const trackFeed = (name: string, feed: FeedAdapter) => {
+    feeds.set(name, feed);
+    registry.markActive(name);
+  };
+
   // Initialize Polymarket
   if (config.polymarket?.enabled) {
     logger.info('Initializing Polymarket feed');
     const polymarket = await createPolymarketFeed();
-    feeds.set('polymarket', polymarket as unknown as FeedAdapter);
+    trackFeed('polymarket', polymarket as unknown as FeedAdapter);
 
     polymarket.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -135,7 +147,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
       email: config.kalshi.email,
       password: config.kalshi.password,
     });
-    feeds.set('kalshi', kalshi as unknown as FeedAdapter);
+    trackFeed('kalshi', kalshi as unknown as FeedAdapter);
 
     kalshi.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -146,7 +158,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
   if (config.manifold?.enabled) {
     logger.info('Initializing Manifold feed');
     const manifold = await createManifoldFeed();
-    feeds.set('manifold', manifold as unknown as FeedAdapter);
+    trackFeed('manifold', manifold as unknown as FeedAdapter);
 
     manifold.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -157,14 +169,14 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
   if (config.metaculus?.enabled) {
     logger.info('Initializing Metaculus feed');
     const metaculus = await createMetaculusFeed();
-    feeds.set('metaculus', metaculus as unknown as FeedAdapter);
+    trackFeed('metaculus', metaculus as unknown as FeedAdapter);
   }
 
   // Initialize PredictIt (read-only)
   // Always enable PredictIt since it's free and read-only
   logger.info('Initializing PredictIt feed (read-only)');
   const predictit = await createPredictItFeed();
-  feeds.set('predictit', predictit as unknown as FeedAdapter);
+  trackFeed('predictit', predictit as unknown as FeedAdapter);
 
   // Initialize Drift BET (Solana)
   if (config.drift?.enabled) {
@@ -173,7 +185,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
       betApiUrl: config.drift.betApiUrl,
       requestTimeoutMs: config.drift.requestTimeoutMs,
     });
-    feeds.set('drift', drift as unknown as FeedAdapter);
+    trackFeed('drift', drift as unknown as FeedAdapter);
 
     drift.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -190,7 +202,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
       password: betfairConfig.password,
       sessionToken: betfairConfig.sessionToken,
     });
-    feeds.set('betfair', betfair as unknown as FeedAdapter);
+    trackFeed('betfair', betfair as unknown as FeedAdapter);
 
     betfair.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -205,7 +217,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
       apiToken: smarketsConfig.apiToken,
       sessionToken: smarketsConfig.sessionToken,
     });
-    feeds.set('smarkets', smarkets as unknown as FeedAdapter);
+    trackFeed('smarkets', smarkets as unknown as FeedAdapter);
 
     smarkets.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -219,7 +231,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
     const opinion = await createOpinionFeed({
       apiKey: opinionConfig.apiKey,
     });
-    feeds.set('opinion', opinion as unknown as FeedAdapter);
+    trackFeed('opinion', opinion as unknown as FeedAdapter);
 
     opinion.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -240,7 +252,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
       minMarketCap: virtualsConfig.minMarketCap,
       categories: virtualsConfig.categories,
     });
-    feeds.set('virtuals', virtuals as unknown as FeedAdapter);
+    trackFeed('virtuals', virtuals as unknown as FeedAdapter);
 
     virtuals.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -254,7 +266,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
     const predictfun = await createPredictFunFeed({
       apiKey: predictfunConfig.apiKey,
     });
-    feeds.set('predictfun', predictfun as unknown as FeedAdapter);
+    trackFeed('predictfun', predictfun as unknown as FeedAdapter);
 
     predictfun.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -272,7 +284,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
       minVolume: hedgehogConfig.minVolume,
       categories: hedgehogConfig.categories,
     });
-    feeds.set('hedgehog', hedgehog as unknown as FeedAdapter);
+    trackFeed('hedgehog', hedgehog as unknown as FeedAdapter);
 
     hedgehog.on('price', (update: PriceUpdate) => {
       emitter.emit('price', update);
@@ -328,6 +340,7 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
       } else if (feed.disconnect) {
         feed.disconnect();
       }
+      registry.markInactive(name);
     }
 
     if (newsFeed) {
@@ -550,3 +563,8 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
 
 // Re-export freshness tracking
 export * from './freshness';
+
+// Re-export feed registry
+export { getGlobalFeedRegistry, FeedCapability } from './registry';
+export type { FeedRegistry, FeedDescriptor, FeedSummary, FeedCategory, ConnectionType } from './registry';
+export { registerAllFeeds } from './descriptors';
