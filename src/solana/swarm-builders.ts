@@ -85,7 +85,7 @@ const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 export class PumpFunBuilder implements SwarmTransactionBuilder {
   name = 'pumpfun';
-  supportedPools = ['pump', 'raydium', 'auto'];
+  supportedPools = ['pump', 'raydium', 'pump-amm', 'launchlab', 'raydium-cpmm', 'bonk', 'auto'];
 
   async buildBuyTransaction(
     _connection: Connection,
@@ -107,9 +107,9 @@ export class PumpFunBuilder implements SwarmTransactionBuilder {
         action: 'buy',
         mint,
         amount: amountSol,
-        denominatedInSol: true,
+        denominatedInSol: 'true',
         slippage: options.slippageBps / 100,
-        priorityFee: options.priorityFeeLamports ?? 10000,
+        priorityFee: (options.priorityFeeLamports ?? 10000) / 1_000_000_000,
         pool: options.pool ?? 'auto',
       }),
     });
@@ -143,9 +143,9 @@ export class PumpFunBuilder implements SwarmTransactionBuilder {
         action: 'sell',
         mint,
         amount: tokenAmount,
-        denominatedInSol: false,
+        denominatedInSol: 'false',
         slippage: options.slippageBps / 100,
-        priorityFee: options.priorityFeeLamports ?? 10000,
+        priorityFee: (options.priorityFeeLamports ?? 10000) / 1_000_000_000,
         pool: options.pool ?? 'auto',
       }),
     });
@@ -164,42 +164,56 @@ export class PumpFunBuilder implements SwarmTransactionBuilder {
     mint: string,
     amount: number,
     isBuy: boolean,
-    options?: Partial<BuilderOptions>
+    _options?: Partial<BuilderOptions>
   ): Promise<SwarmQuote> {
-    const apiKey = process.env.PUMPPORTAL_API_KEY;
-    const url = apiKey
-      ? `${PUMPPORTAL_API}/quote?api-key=${apiKey}`
-      : `${PUMPPORTAL_API}/quote`;
+    // PumpPortal has no /quote endpoint — compute estimate from token price data
+    const headers: Record<string, string> = {
+      'Accept': 'application/json',
+      'Origin': 'https://pump.fun',
+    };
+    const jwt = process.env.PUMPFUN_JWT;
+    if (jwt) {
+      headers['Authorization'] = `Bearer ${jwt}`;
+    }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: isBuy ? 'buy' : 'sell',
-        mint,
-        amount,
-        denominatedInSol: isBuy,
-        slippage: (options?.slippageBps ?? 500) / 100,
-        pool: options?.pool ?? 'auto',
-      }),
-    });
-
+    const response = await fetch(`https://frontend-api-v3.pump.fun/coins/${mint}`, { headers });
     if (!response.ok) {
-      throw new Error(`PumpPortal quote failed: ${response.status}`);
+      throw new Error(`Pump.fun token lookup failed: ${response.status}`);
     }
 
     const data = await response.json() as {
-      inputAmount?: number;
-      outputAmount?: number;
-      priceImpact?: number;
+      market_cap?: number;
+      virtual_sol_reserves?: number;
+      virtual_token_reserves?: number;
     };
 
-    return {
-      inputAmount: data.inputAmount ?? amount,
-      outputAmount: data.outputAmount ?? 0,
-      priceImpact: data.priceImpact,
-      route: 'pumpfun',
-    };
+    const solReserves = data.virtual_sol_reserves ?? 0;
+    const tokenReserves = data.virtual_token_reserves ?? 0;
+
+    if (solReserves <= 0 || tokenReserves <= 0) {
+      return { inputAmount: amount, outputAmount: 0, route: 'pumpfun' };
+    }
+
+    // Constant product AMM estimate: outputAmount = (inputAmount * outputReserve) / (inputReserve + inputAmount)
+    if (isBuy) {
+      // SOL → Token
+      const inputLamports = amount * 1e9;
+      const outputTokens = (inputLamports * tokenReserves) / (solReserves + inputLamports);
+      return {
+        inputAmount: amount,
+        outputAmount: outputTokens / 1e6, // tokens have 6 decimals
+        route: 'pumpfun',
+      };
+    } else {
+      // Token → SOL
+      const inputTokens = amount * 1e6;
+      const outputLamports = (inputTokens * solReserves) / (tokenReserves + inputTokens);
+      return {
+        inputAmount: amount,
+        outputAmount: outputLamports / 1e9,
+        route: 'pumpfun',
+      };
+    }
   }
 }
 
@@ -231,7 +245,11 @@ export class BagsBuilder implements SwarmTransactionBuilder {
       const error = await response.text();
       throw new Error(`Bags API error: ${response.status} - ${error}`);
     }
-    return response.json() as Promise<T>;
+    const json = await response.json() as { success?: boolean; response?: T; error?: string };
+    if (json.success === false) {
+      throw new Error(`Bags API error: ${json.error || 'Unknown error'}`);
+    }
+    return (json.response !== undefined ? json.response : json) as T;
   }
 
   async buildBuyTransaction(
@@ -239,22 +257,27 @@ export class BagsBuilder implements SwarmTransactionBuilder {
     wallet: SwarmWallet,
     mint: string,
     amountSol: number,
-    options: BuilderOptions
+    _options: BuilderOptions
   ): Promise<VersionedTransaction> {
     const amountLamports = Math.floor(amountSol * 1e9);
 
-    const txResponse = await this.bagsRequest<{ transaction: string }>('/trade/swap', {
+    // Step 1: Get quote
+    const quote = await this.bagsRequest<Record<string, unknown>>(
+      `/trade/quote?inputMint=${SOL_MINT}&outputMint=${mint}&amount=${amountLamports}&slippageMode=auto`
+    );
+
+    // Step 2: Create swap from quote
+    const txResponse = await this.bagsRequest<{ swapTransaction: string }>('/trade/swap', {
       method: 'POST',
       body: JSON.stringify({
-        inputMint: SOL_MINT,
-        outputMint: mint,
-        amount: amountLamports.toString(),
-        wallet: wallet.publicKey,
-        slippageBps: options.slippageBps,
+        quoteResponse: quote,
+        userPublicKey: wallet.publicKey,
       }),
     });
 
-    return VersionedTransaction.deserialize(Buffer.from(txResponse.transaction, 'base64'));
+    // Base58 encoded
+    const { bs58 } = await import('@coral-xyz/anchor/dist/cjs/utils/bytes');
+    return VersionedTransaction.deserialize(bs58.decode(txResponse.swapTransaction));
   }
 
   async buildSellTransaction(
@@ -262,21 +285,25 @@ export class BagsBuilder implements SwarmTransactionBuilder {
     wallet: SwarmWallet,
     mint: string,
     tokenAmount: number,
-    options: BuilderOptions
+    _options: BuilderOptions
   ): Promise<VersionedTransaction> {
-    // Token amount is in raw units (no decimals adjustment here - caller handles it)
-    const txResponse = await this.bagsRequest<{ transaction: string }>('/trade/swap', {
+    // Step 1: Get quote
+    const quote = await this.bagsRequest<Record<string, unknown>>(
+      `/trade/quote?inputMint=${mint}&outputMint=${SOL_MINT}&amount=${Math.floor(tokenAmount)}&slippageMode=auto`
+    );
+
+    // Step 2: Create swap from quote
+    const txResponse = await this.bagsRequest<{ swapTransaction: string }>('/trade/swap', {
       method: 'POST',
       body: JSON.stringify({
-        inputMint: mint,
-        outputMint: SOL_MINT,
-        amount: Math.floor(tokenAmount).toString(),
-        wallet: wallet.publicKey,
-        slippageBps: options.slippageBps,
+        quoteResponse: quote,
+        userPublicKey: wallet.publicKey,
       }),
     });
 
-    return VersionedTransaction.deserialize(Buffer.from(txResponse.transaction, 'base64'));
+    // Base58 encoded
+    const { bs58 } = await import('@coral-xyz/anchor/dist/cjs/utils/bytes');
+    return VersionedTransaction.deserialize(bs58.decode(txResponse.swapTransaction));
   }
 
   async getQuote(
@@ -284,22 +311,22 @@ export class BagsBuilder implements SwarmTransactionBuilder {
     mint: string,
     amount: number,
     isBuy: boolean,
-    options?: Partial<BuilderOptions>
+    _options?: Partial<BuilderOptions>
   ): Promise<SwarmQuote> {
     const inputMint = isBuy ? SOL_MINT : mint;
     const outputMint = isBuy ? mint : SOL_MINT;
     const amountStr = isBuy ? Math.floor(amount * 1e9).toString() : Math.floor(amount).toString();
 
     const quote = await this.bagsRequest<{
-      inputAmount: string;
-      outputAmount: string;
-      priceImpact: number;
-    }>(`/trade/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountStr}`);
+      inAmount: string;
+      outAmount: string;
+      priceImpactPct: string;
+    }>(`/trade/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountStr}&slippageMode=auto`);
 
     return {
-      inputAmount: parseFloat(quote.inputAmount),
-      outputAmount: parseFloat(quote.outputAmount),
-      priceImpact: quote.priceImpact,
+      inputAmount: parseFloat(quote.inAmount),
+      outputAmount: parseFloat(quote.outAmount),
+      priceImpact: parseFloat(quote.priceImpactPct) / 100,
       route: 'bags',
     };
   }

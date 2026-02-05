@@ -967,7 +967,7 @@ Trade on Solana DEXes via unified interface or direct DEX commands:
 /bags launch <name> <symbol> <desc>    Launch new token
 /bags fee-config <mint> <wallet:bps>   Set up fee shares
 
-# Wallet Lookup
+# Wallet Lookup (providers: twitter, github, kick, tiktok, instagram, onlyfans, solana, apple, google, email, moltbook)
 /bags wallet twitter <username>        Lookup by social
 /bags wallets github user1,user2       Bulk lookup
 

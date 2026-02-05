@@ -31,6 +31,7 @@ import {
   buildOpinionHeaders,
   OpinionApiAuth,
 } from '../utils/opinion-auth';
+import * as opinion from '../exchanges/opinion';
 import * as predictfun from '../exchanges/predictfun';
 
 // =============================================================================
@@ -162,7 +163,7 @@ export interface ExecutionService {
 
   // Batch operations (Opinion only for now)
   placeOrdersBatch(orders: Array<Omit<OrderRequest, 'orderType'>>): Promise<OrderResult[]>;
-  cancelOrdersBatch(platform: 'polymarket' | 'kalshi' | 'opinion', orderIds: string[]): Promise<Array<{ orderId: string; success: boolean }>>;
+  cancelOrdersBatch(platform: 'polymarket' | 'kalshi' | 'opinion' | 'predictfun', orderIds: string[]): Promise<Array<{ orderId: string; success: boolean }>>;
 
   // Utilities
   estimateFill(request: OrderRequest): Promise<{ avgPrice: number; filledSize: number }>;
@@ -1216,140 +1217,88 @@ async function amendKalshiOrder(
 }
 
 // =============================================================================
-// OPINION.TRADE EXECUTION
+// OPINION.TRADE EXECUTION (delegates to exchange module with EIP-712 signing)
 // =============================================================================
 
-const OPINION_API_URL = 'https://proxy.opinion.trade:8443/openapi';
-
-interface OpinionOrderResponse {
-  orderId?: string;
-  order_id?: string;
-  success?: boolean;
-  error?: string;
-  message?: string;
-  status?: string;
-}
-
-interface OpinionOpenOrder {
-  id: string;
-  orderId: string;
-  marketId: number;
-  tokenId: string;
-  side: 'BUY' | 'SELL';
-  price: string;
-  size: string;
-  filledSize: string;
-  status: string;
-  createdAt: string;
-  type?: string;
+/**
+ * Convert ExecutionConfig opinion fields to OpinionConfig for the exchange module.
+ * The exchange module uses the unofficial-opinion-clob-sdk which handles
+ * EIP-712 order signing internally — raw REST calls skip signing entirely.
+ */
+function toOpinionConfig(
+  auth: OpinionApiAuth & { privateKey?: string; multiSigAddress?: string; rpcUrl?: string }
+): opinion.OpinionConfig {
+  return {
+    apiKey: auth.apiKey,
+    privateKey: auth.privateKey || '',
+    vaultAddress: auth.multiSigAddress || '',
+    rpcUrl: auth.rpcUrl,
+  };
 }
 
 async function placeOpinionOrder(
-  auth: OpinionApiAuth & { privateKey?: string; multiSigAddress?: string },
+  auth: OpinionApiAuth & { privateKey?: string; multiSigAddress?: string; rpcUrl?: string },
   tokenId: string,
   side: OrderSide,
   price: number,
   size: number,
   orderType: OrderType = 'GTC'
 ): Promise<OrderResult> {
-  const url = `${OPINION_API_URL}/order`;
+  if (!auth.privateKey) {
+    return { success: false, error: 'Opinion privateKey required for order signing' };
+  }
+  if (!auth.multiSigAddress) {
+    return { success: false, error: 'Opinion multiSigAddress (vaultAddress) required for trading' };
+  }
 
-  const order = {
+  const config = toOpinionConfig(auth);
+  // Opinion SDK needs a marketId (number) — we extract it from context or use 0
+  // The tokenId is what the SDK actually uses for order matching
+  const result = await opinion.placeOrder(
+    config,
+    0, // marketId not available at this level — SDK uses tokenId for matching
     tokenId,
-    side: side.toUpperCase(),
-    price: price.toString(),
-    size: size.toString(),
-    type: orderType === 'FOK' ? 'MARKET' : 'LIMIT',
+    side === 'buy' ? 'BUY' : 'SELL',
+    price,
+    size,
+    orderType === 'FOK' ? 'MARKET' : 'LIMIT'
+  );
+
+  return {
+    success: result.success,
+    orderId: result.orderId,
+    status: result.status as OrderStatus | undefined,
+    error: result.error,
   };
-
-  const headers = buildOpinionHeaders(auth);
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(order),
-    });
-
-    const data = (await response.json()) as OpinionOrderResponse;
-
-    if (!response.ok || data.error) {
-      logger.error({ status: response.status, error: data.error || data.message }, 'Opinion order failed');
-      return {
-        success: false,
-        error: data.error || data.message || `HTTP ${response.status}`,
-      };
-    }
-
-    const orderId = data.orderId || data.order_id;
-    logger.info({ orderId, tokenId, side, price, size }, 'Opinion order placed');
-
-    return {
-      success: true,
-      orderId,
-      status: 'open',
-    };
-  } catch (error) {
-    logger.error({ error }, 'Error placing Opinion order');
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
-  }
 }
 
-async function cancelOpinionOrder(auth: OpinionApiAuth, orderId: string): Promise<boolean> {
-  const url = `${OPINION_API_URL}/order/${orderId}`;
-  const headers = buildOpinionHeaders(auth);
-
-  try {
-    const response = await fetch(url, {
-      method: 'DELETE',
-      headers,
-    });
-
-    if (!response.ok) {
-      logger.error({ status: response.status, orderId }, 'Failed to cancel Opinion order');
-      return false;
-    }
-
-    logger.info({ orderId }, 'Opinion order cancelled');
-    return true;
-  } catch (error) {
-    logger.error({ error, orderId }, 'Error cancelling Opinion order');
-    return false;
-  }
+async function cancelOpinionOrder(
+  auth: OpinionApiAuth & { privateKey?: string; multiSigAddress?: string; rpcUrl?: string },
+  orderId: string
+): Promise<boolean> {
+  const config = toOpinionConfig(auth);
+  return opinion.cancelOrder(config, orderId);
 }
 
-async function getOpinionOpenOrders(auth: OpinionApiAuth): Promise<OpenOrder[]> {
-  const url = `${OPINION_API_URL}/orders?status=OPEN`;
-  const headers = buildOpinionHeaders(auth);
+async function getOpinionOpenOrders(
+  auth: OpinionApiAuth & { privateKey?: string; multiSigAddress?: string; rpcUrl?: string }
+): Promise<OpenOrder[]> {
+  const config = toOpinionConfig(auth);
 
   try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers,
-    });
-
-    if (!response.ok) {
-      logger.error({ status: response.status }, 'Failed to fetch Opinion orders');
-      return [];
-    }
-
-    const data = (await response.json()) as { orders?: OpinionOpenOrder[] } | OpinionOpenOrder[];
-    const orders = Array.isArray(data) ? data : (data.orders || []);
+    const orders = await opinion.getOpenOrders(config);
 
     return orders.map((o) => ({
-      orderId: o.orderId || o.id,
+      orderId: o.orderId,
       platform: 'opinion' as const,
       marketId: o.marketId?.toString() || '',
-      tokenId: o.tokenId,
+      tokenId: o.orderId, // tokenId not directly available from getOpenOrders
       side: o.side.toLowerCase() as OrderSide,
       price: parseFloat(o.price),
-      originalSize: parseFloat(o.size),
-      remainingSize: parseFloat(o.size) - parseFloat(o.filledSize || '0'),
-      filledSize: parseFloat(o.filledSize || '0'),
-      orderType: (o.type === 'MARKET' ? 'FOK' : 'GTC') as OrderType,
+      originalSize: parseFloat(o.orderShares),
+      remainingSize: parseFloat(o.orderShares) - parseFloat(o.filledShares || '0'),
+      filledSize: parseFloat(o.filledShares || '0'),
+      orderType: 'GTC' as OrderType,
       status: o.status.toLowerCase() as OrderStatus,
       createdAt: new Date(o.createdAt),
     }));
@@ -1360,7 +1309,7 @@ async function getOpinionOpenOrders(auth: OpinionApiAuth): Promise<OpenOrder[]> 
 }
 
 async function placeOpinionOrdersBatch(
-  auth: OpinionApiAuth & { privateKey?: string; multiSigAddress?: string },
+  auth: OpinionApiAuth & { privateKey?: string; multiSigAddress?: string; rpcUrl?: string },
   orders: Array<{
     marketId: number;
     tokenId: string;
@@ -1369,80 +1318,43 @@ async function placeOpinionOrdersBatch(
     amount: number;
   }>
 ): Promise<OrderResult[]> {
-  const url = `${OPINION_API_URL}/orders/batch`;
-  const headers = buildOpinionHeaders(auth);
-
-  const orderInputs = orders.map(o => ({
-    marketId: o.marketId,
-    tokenId: o.tokenId,
-    price: o.price.toString(),
-    side: o.side,
-    orderType: 'LIMIT_ORDER',
-    ...(o.side === 'BUY'
-      ? { makerAmountInQuoteToken: o.amount.toString() }
-      : { makerAmountInBaseToken: o.amount.toString() }),
-  }));
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orders: orderInputs }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      logger.error({ status: response.status, error }, 'Opinion batch order failed');
-      return orders.map(() => ({ success: false, error: `HTTP ${response.status}` }));
-    }
-
-    const data = (await response.json()) as Array<{ orderId?: string; id?: string; error?: string }>;
-    logger.info({ count: orders.length, successful: data.filter(r => r.orderId || r.id).length }, 'Opinion batch orders placed');
-
-    return data.map(r => ({
-      success: !r.error,
-      orderId: r.orderId || r.id,
-      error: r.error,
-    }));
-  } catch (error) {
-    logger.error({ error }, 'Error placing Opinion batch orders');
+  if (!auth.privateKey || !auth.multiSigAddress) {
     return orders.map(() => ({
       success: false,
-      error: error instanceof Error ? error.message : 'Batch order failed',
+      error: 'Opinion privateKey and multiSigAddress required for order signing',
     }));
   }
+
+  const config = toOpinionConfig(auth);
+
+  const results = await opinion.placeOrdersBatch(config, orders);
+  return results.map(r => ({
+    success: r.success,
+    orderId: r.orderId,
+    error: r.error,
+  }));
 }
 
 async function cancelOpinionOrdersBatch(
-  auth: OpinionApiAuth,
+  auth: OpinionApiAuth & { privateKey?: string; multiSigAddress?: string; rpcUrl?: string },
   orderIds: string[]
 ): Promise<Array<{ orderId: string; success: boolean }>> {
-  const url = `${OPINION_API_URL}/orders/cancel/batch`;
-  const headers = buildOpinionHeaders(auth);
+  const config = toOpinionConfig(auth);
 
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderIds }),
-    });
+  return opinion.cancelOrdersBatch(config, orderIds);
+}
 
-    if (!response.ok) {
-      logger.error({ status: response.status }, 'Opinion batch cancel failed');
-      return orderIds.map(orderId => ({ orderId, success: false }));
-    }
+async function cancelAllOpinionOrders(
+  auth: OpinionApiAuth & { privateKey?: string; multiSigAddress?: string; rpcUrl?: string },
+  marketId?: string
+): Promise<number> {
+  const config = toOpinionConfig(auth);
 
-    const data = (await response.json()) as Array<{ orderId?: string; success?: boolean; error?: string }>;
-    logger.info({ count: orderIds.length, successful: data.filter(r => r.success !== false).length }, 'Opinion batch cancel completed');
-
-    return orderIds.map((orderId, i) => ({
-      orderId,
-      success: data[i]?.success !== false && !data[i]?.error,
-    }));
-  } catch (error) {
-    logger.error({ error }, 'Error cancelling Opinion orders batch');
-    return orderIds.map(orderId => ({ orderId, success: false }));
-  }
+  const result = await opinion.cancelAllOrders(
+    config,
+    marketId ? parseInt(marketId, 10) : undefined
+  );
+  return result.cancelled;
 }
 
 // =============================================================================
@@ -1605,7 +1517,7 @@ async function fetchPredictFunOrderbook(
  */
 async function fetchOpinionOrderbook(tokenId: string): Promise<OrderbookData | null> {
   try {
-    const response = await fetch(`${OPINION_API_URL}/token/orderbook?tokenId=${encodeURIComponent(tokenId)}`);
+    const response = await fetch(`https://proxy.opinion.trade:8443/openapi/token/orderbook?tokenId=${encodeURIComponent(tokenId)}`);
     if (!response.ok) return null;
 
     const data = await response.json() as {
@@ -1837,16 +1749,9 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
         }
       }
 
-      // Opinion doesn't have cancel-all endpoint, need to cancel individually
+      // Opinion: use SDK's cancelAllOrders (handles batch internally)
       if ((!platform || platform === 'opinion') && config.opinion) {
-        const orders = await getOpinionOpenOrders(config.opinion);
-        for (const order of orders) {
-          if (!marketId || order.marketId === marketId) {
-            if (await cancelOpinionOrder(config.opinion, order.orderId)) {
-              count++;
-            }
-          }
-        }
+        count += await cancelAllOpinionOrders(config.opinion, marketId);
       }
 
       // PredictFun has bulk cancel support
@@ -2081,7 +1986,8 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
       const polyOrders = orders.filter(o => o.platform === 'polymarket');
       const kalshiOrders = orders.filter(o => o.platform === 'kalshi');
       const opinionOrders = orders.filter(o => o.platform === 'opinion');
-      const otherOrders = orders.filter(o => o.platform !== 'opinion' && o.platform !== 'polymarket' && o.platform !== 'kalshi');
+      const predictfunOrders = orders.filter(o => o.platform === 'predictfun');
+      const otherOrders = orders.filter(o => o.platform !== 'opinion' && o.platform !== 'polymarket' && o.platform !== 'kalshi' && o.platform !== 'predictfun');
 
       const results: OrderResult[] = [];
 
@@ -2168,6 +2074,33 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
         })));
       }
 
+      // Execute PredictFun orders (no native batch API — sequential via SDK with EIP-712 signing)
+      if (predictfunOrders.length > 0 && config.predictfun) {
+        for (const order of predictfunOrders) {
+          try {
+            const result = await placePredictFunOrder(
+              config.predictfun,
+              order.tokenId!,
+              order.side,
+              order.price,
+              order.size,
+              order.marketId
+            );
+            results.push(result);
+          } catch (err) {
+            results.push({
+              success: false,
+              error: err instanceof Error ? err.message : 'Order failed',
+            });
+          }
+        }
+      } else if (predictfunOrders.length > 0) {
+        results.push(...predictfunOrders.map(() => ({
+          success: false,
+          error: 'PredictFun trading not configured',
+        })));
+      }
+
       // Execute other orders individually (fallback)
       for (const order of otherOrders) {
         try {
@@ -2212,6 +2145,16 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
             success: false,
           }));
         }
+      }
+
+      if (platform === 'predictfun' && config.predictfun) {
+        // PredictFun cancel requires isNegRisk/isYieldBearing — cancel individually via SDK
+        const results: Array<{ orderId: string; success: boolean }> = [];
+        for (const orderId of orderIds) {
+          const success = await cancelPredictFunOrder(config.predictfun, orderId);
+          results.push({ orderId, success });
+        }
+        return results;
       }
 
       // Fallback: cancel individually

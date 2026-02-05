@@ -232,7 +232,7 @@ import {
 // Constants
 // ============================================================================
 
-const PUMPPORTAL_API = 'https://pumpportal.fun/api';
+const PUMPFUN_FRONTEND_API = 'https://frontend-api-v3.pump.fun';
 const JITO_BLOCK_ENGINE = 'https://mainnet.block-engine.jito.wtf';
 const JITO_TIP_ACCOUNTS = [
   '96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5',
@@ -1751,12 +1751,23 @@ export class PumpFunSwarm extends EventEmitter {
 
     for (const mint of mints) {
       try {
-        // Get current price from PumpPortal
-        const response = await fetch(`${PUMPPORTAL_API}/token/${mint}`);
+        // Get current price from Pump.fun frontend API
+        const priceHeaders: Record<string, string> = {
+          'Accept': 'application/json',
+          'Origin': 'https://pump.fun',
+        };
+        const jwt = process.env.PUMPFUN_JWT;
+        if (jwt) {
+          priceHeaders['Authorization'] = `Bearer ${jwt}`;
+        }
+        const response = await fetch(`${PUMPFUN_FRONTEND_API}/coins/${mint}`, { headers: priceHeaders });
         if (!response.ok) continue;
 
-        const data = await response.json() as { price?: number };
-        const currentPrice = data.price;
+        const data = await response.json() as { market_cap?: number; virtual_sol_reserves?: number; virtual_token_reserves?: number; usd_market_cap?: number };
+        // Estimate price from reserves: price ≈ solReserves / tokenReserves
+        const solReserves = data.virtual_sol_reserves ?? 0;
+        const tokenReserves = data.virtual_token_reserves ?? 0;
+        const currentPrice = (solReserves > 0 && tokenReserves > 0) ? solReserves / tokenReserves : undefined;
         if (!currentPrice) continue;
 
         // Check stop loss

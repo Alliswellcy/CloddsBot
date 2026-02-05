@@ -1255,6 +1255,24 @@ export interface Config {
     /** Offline outbound message queue settings */
     offlineQueue?: OfflineQueueConfig;
   };
+  /** Execution queue (Redis/BullMQ) for decoupling gateway from order execution */
+  queue?: {
+    /** Enable execution queue (default: false, uses direct execution) */
+    enabled?: boolean;
+    /** Redis connection */
+    redis?: {
+      /** Redis host (default: localhost) */
+      host?: string;
+      /** Redis port (default: 6379) */
+      port?: number;
+      /** Redis password (optional) */
+      password?: string;
+    };
+    /** Worker concurrency - max simultaneous jobs (default: 10) */
+    concurrency?: number;
+    /** Job timeout in ms (default: 30000) */
+    timeoutMs?: number;
+  };
 }
 
 export interface RateLimitConfig {

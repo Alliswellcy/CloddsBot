@@ -9,6 +9,7 @@ import { logger } from '../utils/logger';
 import type { Config } from '../types';
 import type { WebhookManager } from '../automation/webhooks';
 import { createWebhookMiddleware } from '../automation/webhooks';
+import { createX402Server, type X402Middleware } from '../payments/x402';
 import {
   runHealthCheck,
   getErrorStats,
@@ -158,7 +159,7 @@ export type TickRecorderStatsHandler = (
 } | { error: string; status?: number }>;
 
 export function createServer(
-  config: Config['gateway'],
+  config: Config['gateway'] & { x402?: Config['x402'] },
   webhooks?: WebhookManager,
   db?: { query: <T>(sql: string) => T[] }
 ): GatewayServer {
@@ -315,6 +316,27 @@ export function createServer(
     },
   }));
 
+  // x402 payment middleware for premium endpoints
+  let x402: X402Middleware | null = null;
+  if (config.x402?.server?.payToAddress) {
+    x402 = createX402Server(
+      {
+        payToAddress: config.x402.server.payToAddress,
+        network: config.x402.server.network || 'solana',
+        facilitatorUrl: config.x402.facilitatorUrl,
+      },
+      {
+        'POST /api/compute': { priceUsd: 0.01, description: 'Compute request' },
+        'POST /api/backtest': { priceUsd: 0.05, description: 'Strategy backtest' },
+        'GET /api/features': { priceUsd: 0.002, description: 'Feature snapshot' },
+      }
+    );
+    logger.info({ network: config.x402.server.network || 'solana' }, 'x402 payment middleware enabled');
+
+    // Apply x402 middleware to premium routes
+    app.use(['/api/compute', '/api/backtest', '/api/features'], x402.middleware);
+  }
+
   // Health check endpoint (enhanced for production)
   app.get('/health', async (req, res) => {
     const deep = req.query.deep === 'true';
@@ -363,6 +385,15 @@ export function createServer(
         rssMB: Math.round(memUsage.rss / 1024 / 1024),
       },
     });
+  });
+
+  // x402 payment stats endpoint
+  app.get('/api/x402/stats', requireAuth, (_req, res) => {
+    if (!x402) {
+      res.json({ enabled: false });
+      return;
+    }
+    res.json({ enabled: true, ...x402.getStats() });
   });
 
   // API info endpoint

@@ -14,6 +14,8 @@
  * - Private mempool submission
  */
 
+import { Wallet, id as keccak256Id } from 'ethers';
+import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { logger } from '../utils/logger';
 import type { EvmChain } from '../evm/uniswap';
 
@@ -66,6 +68,7 @@ export interface FlashbotsBundle {
 }
 
 export interface JitoBundle {
+  /** Base58-encoded signed transactions, tip already injected into last tx */
   transactions: string[];
   tipLamports: number;
   expirySlot?: number;
@@ -211,8 +214,12 @@ export async function submitFlashbotsBundle(
       ],
     });
 
-    // Create signature (simplified - real implementation needs proper ECDSA)
-    const signature = `${signingKey.slice(0, 10)}:signature`;
+    // Flashbots requires X-Flashbots-Signature: <address>:<EIP-191 signature of keccak256(body)>
+    // See: https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint
+    const authSigner = new Wallet(signingKey);
+    const bodyHash = keccak256Id(body);
+    const signedHash = await authSigner.signMessage(bodyHash);
+    const signature = `${authSigner.address}:${signedHash}`;
 
     const response = await fetch(FLASHBOTS_RELAY, {
       method: 'POST',
@@ -283,41 +290,35 @@ export async function getJitoTipAccounts(): Promise<string[]> {
     return result;
   } catch (error) {
     logger.error({ error }, 'Failed to get Jito tip accounts');
-    // Return known tip accounts as fallback
+    // Return all 8 known Jito mainnet tip accounts as fallback
     return [
       '96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5',
       'HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe',
       'Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY',
       'ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49',
       'DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh',
+      'ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt',
+      'DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL',
+      '3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT',
     ];
   }
 }
 
 /**
- * Create Jito tip instruction
+ * Create Jito tip instruction as a real Solana SystemProgram.transfer.
+ * Must be added to the LAST transaction in a bundle before signing.
+ * See: https://docs.jito.wtf/lowlatencytxnsend/
  */
 export function createJitoTipInstruction(
   tipAccount: string,
   payerPubkey: string,
   tipLamports: number
-): {
-  programId: string;
-  keys: Array<{ pubkey: string; isSigner: boolean; isWritable: boolean }>;
-  data: string;
-} {
-  // System program transfer instruction
-  return {
-    programId: '11111111111111111111111111111111', // System program
-    keys: [
-      { pubkey: payerPubkey, isSigner: true, isWritable: true },
-      { pubkey: tipAccount, isSigner: false, isWritable: true },
-    ],
-    data: Buffer.from([
-      2, 0, 0, 0, // Transfer instruction
-      ...new Uint8Array(new BigInt64Array([BigInt(tipLamports)]).buffer),
-    ]).toString('base64'),
-  };
+) {
+  return SystemProgram.transfer({
+    fromPubkey: new PublicKey(payerPubkey),
+    toPubkey: new PublicKey(tipAccount),
+    lamports: tipLamports,
+  });
 }
 
 // =============================================================================
@@ -374,9 +375,9 @@ export interface MevProtectionService {
     signedTx: string
   ): Promise<{ success: boolean; txHash?: string; error?: string }>;
 
-  /** Create Jito bundle for Solana */
+  /** Create Jito bundle for Solana — injects tip into last transaction */
   createSolanaBundle(
-    transactions: string[],
+    transactions: Transaction[],
     payerPubkey: string
   ): Promise<JitoBundle>;
 
@@ -450,23 +451,36 @@ export function createMevProtectionService(
     },
 
     async createSolanaBundle(
-      transactions: string[],
+      transactions: Transaction[],
       payerPubkey: string
     ): Promise<JitoBundle> {
-      // Get tip account
+      if (transactions.length === 0) {
+        return { transactions: [], tipLamports: cfg.jitoTipLamports };
+      }
+      if (transactions.length > 5) {
+        throw new Error('Jito bundles support a maximum of 5 transactions');
+      }
+
+      // Get tip account — pick one at random per Jito docs
       const tipAccounts = await getJitoTipAccounts();
       const tipAccount = tipAccounts[Math.floor(Math.random() * tipAccounts.length)];
 
-      // Create tip instruction (would be added to the bundle)
-      const _tipInstruction = createJitoTipInstruction(
-        tipAccount,
-        payerPubkey,
-        cfg.jitoTipLamports
+      // Inject tip into the LAST transaction. Jito requires the tip in the last
+      // tx to prevent theft on forks. Do NOT use ALTs for the tip account.
+      // See: https://docs.jito.wtf/lowlatencytxnsend/
+      const lastTx = transactions[transactions.length - 1];
+      lastTx.add(
+        createJitoTipInstruction(tipAccount, payerPubkey, cfg.jitoTipLamports)
       );
 
-      // In real implementation, would add tip instruction to last transaction
+      // Serialize all transactions (unsigned — caller signs after tip injection).
+      // Jito accepts base58-encoded signed transactions.
+      const serialized = transactions.map((tx) =>
+        tx.serialize({ verifySignatures: false }).toString('base64')
+      );
+
       return {
-        transactions,
+        transactions: serialized,
         tipLamports: cfg.jitoTipLamports,
       };
     },

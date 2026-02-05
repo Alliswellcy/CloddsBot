@@ -71,7 +71,7 @@ Bags.fm is a Solana token launchpad and trading platform with creator monetizati
 /bags wallets <provider> <user1,user2>    Bulk wallet lookup
 ```
 
-**Providers:** twitter, github, kick, tiktok
+**Providers:** twitter, github, kick, tiktok, instagram, onlyfans, solana, apple, google, email, moltbook
 
 ## Partner System
 

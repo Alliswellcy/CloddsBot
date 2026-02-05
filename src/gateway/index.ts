@@ -19,6 +19,7 @@ import { logger } from '../utils/logger';
 import { RateLimiter, type RateLimitConfig } from '../security';
 import type { Config, IncomingMessage, OutgoingMessage, ReactionMessage, PollMessage, Platform } from '../types';
 import { createServer as createHttpGatewayServer } from './server';
+import { createX402Client, type X402Client } from '../payments/x402';
 import { createDatabase } from '../db';
 import { createMigrationRunner } from '../db/migrations';
 import { initACP } from '../acp';
@@ -47,6 +48,7 @@ import { createOpportunityExecutor, type OpportunityExecutor } from '../opportun
 import { createTickRecorder, type TickRecorder } from '../services/tick-recorder';
 import { createTickStreamer, type TickStreamer } from '../services/tick-streamer';
 import { createFeatureEngineering, setFeatureEngine, type FeatureEngineering } from '../services/feature-engineering';
+import { createExecutionProducer, createQueuedExecutionService, type ExecutionProducer } from '../queue/jobs';
 import chokidar, { FSWatcher } from 'chokidar';
 import path from 'path';
 import { loadConfig, CONFIG_FILE } from '../utils/config';
@@ -435,7 +437,11 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   const commands = createCommandRegistry();
   commands.registerMany(createDefaultCommands());
 
-  const httpGateway = createHttpGatewayServer(config.gateway, webhookManager, db);
+  const httpGateway = createHttpGatewayServer(
+    { ...config.gateway, x402: config.x402 },
+    webhookManager,
+    db
+  );
 
   let channels: Awaited<ReturnType<typeof createChannelManager>> | null = null;
   const watchers: FSWatcher[] = [];
@@ -530,6 +536,49 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       }, 'Execution service initialized');
     } else {
       logger.warn('Trading enabled but no platform credentials configured');
+    }
+  }
+
+  // Execution queue setup — reads from config.queue or env vars.
+  // Decouples gateway from execution: orders go through BullMQ.
+  // Only agent tool handlers use the queued wrapper; other services
+  // (copy trading, arbitrage executor) keep using the direct service
+  // since they need the full ExecutionService interface.
+  let executionProducer: ExecutionProducer | null = null;
+  let queuedExecutionRef: import('../types').ExecutionServiceRef | null = null;
+  const queueRedisHost = config.queue?.redis?.host || process.env.REDIS_HOST;
+  const queueEnabled = config.queue?.enabled ?? !!queueRedisHost;
+  if (queueEnabled && queueRedisHost && executionService) {
+    try {
+      const queueRedisPort = config.queue?.redis?.port
+        ?? parseInt(process.env.REDIS_PORT || '6379', 10);
+      const queueRedisPassword = config.queue?.redis?.password
+        || process.env.REDIS_PASSWORD || undefined;
+      const queueTimeoutMs = config.queue?.timeoutMs
+        ?? parseInt(process.env.EXECUTION_QUEUE_TIMEOUT_MS || '30000', 10);
+
+      executionProducer = createExecutionProducer({
+        redis: {
+          host: queueRedisHost,
+          port: queueRedisPort,
+          password: queueRedisPassword,
+          maxRetriesPerRequest: null,
+        },
+        defaultTimeoutMs: queueTimeoutMs,
+      });
+
+      // Create queue-based wrapper for agent tool handlers only
+      queuedExecutionRef = createQueuedExecutionService(executionProducer);
+
+      logger.info(
+        { redisHost: queueRedisHost, redisPort: queueRedisPort },
+        'Execution queue enabled - agent orders will be processed via BullMQ worker'
+      );
+    } catch (error) {
+      logger.warn(
+        { error },
+        'Failed to create execution queue producer - falling back to direct execution'
+      );
     }
   }
 
@@ -823,6 +872,19 @@ export async function createGateway(config: Config): Promise<AppGateway> {
 
   logger.info('Feature engineering initialized for trading indicators');
 
+  // Initialize x402 client for outbound payments (agent-to-agent)
+  let x402Client: X402Client | null = null;
+  if (config.x402?.enabled && (config.x402.evmPrivateKey || config.x402.solanaPrivateKey)) {
+    x402Client = createX402Client({
+      network: config.x402.network,
+      evmPrivateKey: config.x402.evmPrivateKey,
+      solanaPrivateKey: config.x402.solanaPrivateKey,
+      autoApproveLimit: config.x402.autoApproveLimit,
+      dryRun: config.x402.dryRun,
+    });
+    logger.info('x402 client initialized for outbound payments');
+  }
+
   const startMonitoring = () => {
     monitoring?.stop();
     monitoring = createMonitoringService({
@@ -1024,6 +1086,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
 
   const getConfig = (): Config => currentConfig;
   let webhookTool: WebhookTool | undefined;
+  // Pass queued wrapper to agents when available; fall back to direct service
   let agents = await createAgentManager(
     currentConfig,
     feeds,
@@ -1037,7 +1100,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     memory,
     getConfig,
     () => webhookTool,
-    executionService
+    queuedExecutionRef ?? executionService
   );
 
   webhookTool = createWebhookTool({
@@ -1146,7 +1209,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         memory,
         getConfig,
         () => webhookTool,
-        executionService
+        queuedExecutionRef ?? executionService
       );
 
       channels = await createChannelManager(
@@ -1821,6 +1884,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       // Register shutdown cleanup
       onShutdown(async () => {
         logger.info('Shutting down gateway services');
+        if (executionProducer) await executionProducer.close();
         if (whaleTracker) whaleTracker.stop();
         if (copyTrading) copyTrading.stop();
         if (realtimeAlerts) realtimeAlerts.stop();
@@ -2001,6 +2065,12 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       if (whaleTracker) {
         whaleTracker.stop();
         whaleTracker = null;
+      }
+
+      // Close execution queue producer
+      if (executionProducer) {
+        await executionProducer.close();
+        executionProducer = null;
       }
 
       await channels?.stop();

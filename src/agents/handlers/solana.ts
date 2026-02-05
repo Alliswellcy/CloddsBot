@@ -1192,7 +1192,12 @@ async function bagsRequest<T>(endpoint: string, options: RequestInit = {}): Prom
     const error = await response.text();
     throw new Error(`Bags API error: ${response.status} - ${error}`);
   }
-  return response.json() as Promise<T>;
+  const json = await response.json() as { success?: boolean; response?: T; error?: string };
+  if (json.success === false) {
+    throw new Error(`Bags API error: ${json.error || 'Unknown error'}`);
+  }
+  // Unwrap { success, response } envelope
+  return (json.response !== undefined ? json.response : json) as T;
 }
 
 // Trading
@@ -1203,11 +1208,14 @@ async function bagsQuoteHandler(toolInput: ToolInput): Promise<HandlerResult> {
 
   return safeHandler(async () => {
     const quote = await bagsRequest<{
-      inputAmount: string;
-      outputAmount: string;
-      priceImpact: number;
-      slippage: number;
-    }>(`/trade/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}`);
+      requestId: string;
+      inAmount: string;
+      outAmount: string;
+      minOutAmount: string;
+      priceImpactPct: string;
+      slippageBps: number;
+      routePlan: Array<{ venue: string; inAmount: string; outAmount: string }>;
+    }>(`/trade/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageMode=auto`);
     return quote;
   });
 }
@@ -1216,7 +1224,6 @@ async function bagsSwapHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const inputMint = toolInput.input_mint as string;
   const outputMint = toolInput.output_mint as string;
   const amount = toolInput.amount as string;
-  const slippageBps = (toolInput.slippage_bps as number) || 50;
 
   return safeHandler(async () => {
     const { wallet } = await getSolanaModules();
@@ -1224,13 +1231,21 @@ async function bagsSwapHandler(toolInput: ToolInput): Promise<HandlerResult> {
     const walletAddress = keypair.publicKey.toBase58();
     const connection = wallet.getSolanaConnection();
 
-    const txResponse = await bagsRequest<{ transaction: string }>('/trade/swap', {
+    // Step 1: Get quote
+    const quote = await bagsRequest<Record<string, unknown>>(
+      `/trade/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageMode=auto`
+    );
+
+    // Step 2: Create swap from quote
+    const txResponse = await bagsRequest<{ swapTransaction: string; lastValidBlockHeight: number }>('/trade/swap', {
       method: 'POST',
-      body: JSON.stringify({ inputMint, outputMint, amount, wallet: walletAddress, slippageBps }),
+      body: JSON.stringify({ quoteResponse: quote, userPublicKey: walletAddress }),
     });
 
+    // Step 3: Sign and send (Base58 encoded)
     const { VersionedTransaction } = await import('@solana/web3.js');
-    const txBuffer = Buffer.from(txResponse.transaction, 'base64');
+    const { bs58 } = await import('@coral-xyz/anchor/dist/cjs/utils/bytes');
+    const txBuffer = bs58.decode(txResponse.swapTransaction);
     const tx = VersionedTransaction.deserialize(txBuffer);
     tx.sign([keypair]);
     const signature = await connection.sendRawTransaction(tx.serialize());
@@ -1242,21 +1257,15 @@ async function bagsSwapHandler(toolInput: ToolInput): Promise<HandlerResult> {
 
 // Discovery
 async function bagsPoolsHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const sort = (toolInput.sort as string) || '';
   const limit = (toolInput.limit as number) || 50;
 
   return safeHandler(async () => {
-    let endpoint = '/pools';
-    if (sort) endpoint += `?sort=${sort}&order=desc&limit=${limit}`;
     const pools = await bagsRequest<Array<{
-      mint: string;
-      name?: string;
-      symbol?: string;
-      liquidity?: number;
-      volume24h?: number;
-      price?: number;
-      marketCap?: number;
-    }>>(endpoint);
+      tokenMint: string;
+      dbcConfigKey: string;
+      dbcPoolKey: string;
+      dammV2PoolKey?: string | null;
+    }>>('/solana/bags/pools');
     return { pools: pools.slice(0, limit) };
   });
 }
@@ -1264,13 +1273,12 @@ async function bagsPoolsHandler(toolInput: ToolInput): Promise<HandlerResult> {
 async function bagsTrendingHandler(): Promise<HandlerResult> {
   return safeHandler(async () => {
     const pools = await bagsRequest<Array<{
-      mint: string;
-      symbol?: string;
-      name?: string;
-      volume24h?: number;
-      price?: number;
-    }>>('/pools?sort=volume24h&order=desc&limit=20');
-    return { trending: pools };
+      tokenMint: string;
+      dbcConfigKey: string;
+      dbcPoolKey: string;
+      dammV2PoolKey?: string | null;
+    }>>('/solana/bags/pools?onlyMigrated=true');
+    return { pools };
   });
 }
 
@@ -1278,13 +1286,11 @@ async function bagsTokenHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const mint = toolInput.mint as string;
 
   return safeHandler(async () => {
-    const [tokenInfo, creators, lifetimeFees, pools] = await Promise.all([
-      bagsRequest<{ name?: string; symbol?: string; decimals?: number; description?: string; twitter?: string; website?: string }>(`/token/${mint}`).catch(() => null),
-      bagsRequest<{ creators: Array<{ wallet: string; username?: string; bps: number }> }>(`/token-launch/creator?tokenMint=${mint}`).catch(() => null),
-      bagsRequest<{ totalFees: number; totalVolume?: number }>(`/fee-share/token/lifetime-fees?tokenMint=${mint}`).catch(() => null),
-      bagsRequest<Array<{ price?: number; liquidity?: number; volume24h?: number; marketCap?: number }>>(`/pools?mint=${mint}`).catch(() => null),
+    const [creators, lifetimeFees] = await Promise.all([
+      bagsRequest<Array<{ wallet: string; username: string; royaltyBps: number; isCreator: boolean; provider?: string | null; providerUsername?: string | null }>>(`/token-launch/creator/v3?tokenMint=${mint}`).catch(() => null),
+      bagsRequest<string>(`/token-launch/lifetime-fees?tokenMint=${mint}`).catch(() => null),
     ]);
-    return { tokenInfo, creators: creators?.creators, lifetimeFees, marketData: pools?.[0] };
+    return { creators, lifetimeFees: lifetimeFees ? { lamports: lifetimeFees, sol: Number(BigInt(lifetimeFees)) / 1e9 } : null };
   });
 }
 
@@ -1292,10 +1298,10 @@ async function bagsCreatorsHandler(toolInput: ToolInput): Promise<HandlerResult>
   const mint = toolInput.mint as string;
 
   return safeHandler(async () => {
-    const result = await bagsRequest<{ creators: Array<{ wallet: string; username?: string; provider?: string; bps: number }> }>(
-      `/token-launch/creator?tokenMint=${mint}`
+    const creators = await bagsRequest<Array<{ wallet: string; username: string; royaltyBps: number; isCreator: boolean; provider?: string | null; providerUsername?: string | null }>>(
+      `/token-launch/creator/v3?tokenMint=${mint}`
     );
-    return result;
+    return { creators };
   });
 }
 
@@ -1303,10 +1309,10 @@ async function bagsLifetimeFeesHandler(toolInput: ToolInput): Promise<HandlerRes
   const mint = toolInput.mint as string;
 
   return safeHandler(async () => {
-    const result = await bagsRequest<{ totalFees: number; totalVolume?: number; feeRate?: number; launchDate?: string }>(
-      `/fee-share/token/lifetime-fees?tokenMint=${mint}`
+    const lamports = await bagsRequest<string>(
+      `/token-launch/lifetime-fees?tokenMint=${mint}`
     );
-    return result;
+    return { lamports, sol: Number(BigInt(lamports)) / 1e9 };
   });
 }
 
@@ -1315,17 +1321,15 @@ async function bagsFeesHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const wallet = toolInput.wallet as string;
 
   return safeHandler(async () => {
-    const positions = await bagsRequest<{
-      positions: Array<{
-        baseMint: string;
-        tokenSymbol?: string;
-        virtualPoolClaimableAmount?: number;
-        dammPoolClaimableAmount?: number;
-        customFeeVaultBalance?: number;
-        totalClaimable: number;
-      }>;
-    }>(`/fee-share/claimable?wallet=${wallet}`);
-    return positions;
+    const positions = await bagsRequest<Array<{
+      baseMint: string;
+      virtualPoolClaimableAmount?: number | null;
+      dammPoolClaimableAmount?: number | null;
+      totalClaimableLamportsUserShare: number;
+      claimableDisplayAmount?: number | null;
+      userBps?: number | null;
+    }>>(`/token-launch/claimable-positions?wallet=${wallet}`);
+    return { positions };
   });
 }
 
@@ -1338,25 +1342,45 @@ async function bagsClaimHandler(toolInput: ToolInput): Promise<HandlerResult> {
     const walletAddress = walletArg || keypair.publicKey.toBase58();
     const connection = solWallet.getSolanaConnection();
 
-    const claimTxs = await bagsRequest<{ transactions: string[] }>('/fee-share/claim', {
-      method: 'POST',
-      body: JSON.stringify({ wallet: walletAddress }),
-    });
+    // Get claimable positions first
+    const positions = await bagsRequest<Array<{ baseMint: string; totalClaimableLamportsUserShare: number }>>(
+      `/token-launch/claimable-positions?wallet=${walletAddress}`
+    );
 
-    if (!claimTxs.transactions?.length) return { claimed: false, message: 'No fees to claim' };
+    if (!positions?.length) return { claimed: false, message: 'No fees to claim' };
 
-    const { VersionedTransaction } = await import('@solana/web3.js');
+    const { VersionedTransaction, Transaction } = await import('@solana/web3.js');
+    const { bs58 } = await import('@coral-xyz/anchor/dist/cjs/utils/bytes');
     const signatures: string[] = [];
 
-    for (const txBase64 of claimTxs.transactions) {
-      const tx = VersionedTransaction.deserialize(Buffer.from(txBase64, 'base64'));
-      tx.sign([keypair]);
-      const sig = await connection.sendRawTransaction(tx.serialize());
-      await connection.confirmTransaction(sig, 'confirmed');
-      signatures.push(sig);
+    // Claim per token using v3 endpoint
+    for (const pos of positions) {
+      if (pos.totalClaimableLamportsUserShare <= 0) continue;
+      try {
+        const claimResult = await bagsRequest<Array<{ tx: string; blockhash: { blockhash: string; lastValidBlockHeight: number } }>>(
+          `/token-launch/claim-txs/v3`,
+          { method: 'POST', body: JSON.stringify({ feeClaimer: walletAddress, tokenMint: pos.baseMint }) }
+        );
+        for (const claimTx of claimResult) {
+          const txBuffer = bs58.decode(claimTx.tx);
+          try {
+            const tx = VersionedTransaction.deserialize(txBuffer);
+            tx.sign([keypair]);
+            const sig = await connection.sendRawTransaction(tx.serialize());
+            await connection.confirmTransaction(sig, 'confirmed');
+            signatures.push(sig);
+          } catch {
+            const tx = Transaction.from(txBuffer);
+            tx.sign(keypair);
+            const sig = await connection.sendRawTransaction(tx.serialize());
+            await connection.confirmTransaction(sig, 'confirmed');
+            signatures.push(sig);
+          }
+        }
+      } catch { /* skip failed */ }
     }
 
-    return { claimed: true, signatures };
+    return { claimed: signatures.length > 0, signatures };
   }, 'Claim failed. Ensure BAGS_API_KEY and SOLANA_PRIVATE_KEY are set.');
 }
 
@@ -1372,7 +1396,7 @@ async function bagsClaimEventsHandler(toolInput: ToolInput): Promise<HandlerResu
       if (from) endpoint += `&from=${from}`;
       if (to) endpoint += `&to=${to}`;
     }
-    const result = await bagsRequest<{ events: Array<{ wallet: string; amount: number; timestamp: number; signature: string }> }>(endpoint);
+    const result = await bagsRequest<{ events: Array<{ wallet: string; isCreator: boolean; amount: string; timestamp: string; signature: string }> }>(endpoint);
     return result;
   });
 }
@@ -1381,8 +1405,8 @@ async function bagsClaimStatsHandler(toolInput: ToolInput): Promise<HandlerResul
   const mint = toolInput.mint as string;
 
   return safeHandler(async () => {
-    const stats = await bagsRequest<{ claimers: Array<{ wallet: string; claimed: number; unclaimed: number; totalEarned: number }> }>(
-      `/fee-share/token/claim-stats?tokenMint=${mint}`
+    const stats = await bagsRequest<Array<{ wallet: string; username: string; royaltyBps: number; isCreator: boolean; totalClaimed: string }>>(
+      `/token-launch/claim-stats?tokenMint=${mint}`
     );
     return stats;
   });
@@ -1405,38 +1429,71 @@ async function bagsLaunchHandler(toolInput: ToolInput): Promise<HandlerResult> {
     const walletAddress = keypair.publicKey.toBase58();
     const connection = wallet.getSolanaConnection();
 
-    // Step 1: Create token info
-    const tokenInfo = await bagsRequest<{ tokenMint: string; metadataUrl: string }>('/token-launch/create-token-info', {
+    // Step 1: Create token info (multipart/form-data)
+    const apiKey = process.env.BAGS_API_KEY;
+    if (!apiKey) throw new Error('BAGS_API_KEY not configured');
+    const formData = new FormData();
+    formData.append('name', name);
+    formData.append('symbol', symbol);
+    formData.append('description', description);
+    if (imageUrl) formData.append('imageUrl', imageUrl);
+    if (twitter) formData.append('twitter', twitter);
+    if (website) formData.append('website', website);
+    if (telegram) formData.append('telegram', telegram);
+
+    const tokenInfoRes = await fetch(`${BAGS_API_BASE}/token-launch/create-token-info`, {
       method: 'POST',
-      body: JSON.stringify({ name, symbol, description, imageUrl, twitter, website, telegram }),
+      headers: { 'x-api-key': apiKey },
+      body: formData,
     });
+    if (!tokenInfoRes.ok) throw new Error(`Token info failed: ${tokenInfoRes.status}`);
+    const tokenInfoJson = await tokenInfoRes.json() as { success: boolean; response: { tokenMint: string; tokenMetadata: string }; error?: string };
+    if (!tokenInfoJson.success) throw new Error(tokenInfoJson.error || 'Token info failed');
+    const tokenInfo = tokenInfoJson.response;
 
     // Step 2: Create fee share config
-    const feeConfig = await bagsRequest<{ configKey: string; transactions: string[] }>('/fee-share/create-config', {
+    const feeConfig = await bagsRequest<{ configKey: string; transactions: string[] }>('/token-launch/fee-share/create-config', {
       method: 'POST',
       body: JSON.stringify({ payer: walletAddress, baseMint: tokenInfo.tokenMint, feeClaimers: [{ user: walletAddress, userBps: 10000 }] }),
     });
 
-    const { VersionedTransaction } = await import('@solana/web3.js');
-    for (const txBase64 of feeConfig.transactions) {
-      const tx = VersionedTransaction.deserialize(Buffer.from(txBase64, 'base64'));
-      tx.sign([keypair]);
-      const sig = await connection.sendRawTransaction(tx.serialize());
-      await connection.confirmTransaction(sig, 'confirmed');
+    const { VersionedTransaction, Transaction } = await import('@solana/web3.js');
+    const { bs58 } = await import('@coral-xyz/anchor/dist/cjs/utils/bytes');
+    for (const txStr of feeConfig.transactions) {
+      const txBuffer = bs58.decode(txStr);
+      try {
+        const tx = VersionedTransaction.deserialize(txBuffer);
+        tx.sign([keypair]);
+        const sig = await connection.sendRawTransaction(tx.serialize());
+        await connection.confirmTransaction(sig, 'confirmed');
+      } catch {
+        const tx = Transaction.from(txBuffer);
+        tx.sign(keypair);
+        const sig = await connection.sendRawTransaction(tx.serialize());
+        await connection.confirmTransaction(sig, 'confirmed');
+      }
     }
 
-    // Step 3: Launch
-    const launchTx = await bagsRequest<{ transaction: string }>('/token-launch/create-launch-transaction', {
+    // Step 3: Launch (correct field names: ipfs, wallet)
+    const launchTxStr = await bagsRequest<string>('/token-launch/create-launch-transaction', {
       method: 'POST',
-      body: JSON.stringify({ metadataUrl: tokenInfo.metadataUrl, tokenMint: tokenInfo.tokenMint, launchWallet: walletAddress, initialBuyLamports, configKey: feeConfig.configKey }),
+      body: JSON.stringify({ ipfs: tokenInfo.tokenMetadata, tokenMint: tokenInfo.tokenMint, wallet: walletAddress, initialBuyLamports, configKey: feeConfig.configKey }),
     });
 
-    const tx = VersionedTransaction.deserialize(Buffer.from(launchTx.transaction, 'base64'));
-    tx.sign([keypair]);
-    const signature = await connection.sendRawTransaction(tx.serialize());
+    const launchTxBuffer = bs58.decode(launchTxStr);
+    let signature: string;
+    try {
+      const tx = VersionedTransaction.deserialize(launchTxBuffer);
+      tx.sign([keypair]);
+      signature = await connection.sendRawTransaction(tx.serialize());
+    } catch {
+      const tx = Transaction.from(launchTxBuffer);
+      tx.sign(keypair);
+      signature = await connection.sendRawTransaction(tx.serialize());
+    }
     await connection.confirmTransaction(signature, 'confirmed');
 
-    return { tokenMint: tokenInfo.tokenMint, metadataUrl: tokenInfo.metadataUrl, signature };
+    return { tokenMint: tokenInfo.tokenMint, metadataUrl: tokenInfo.tokenMetadata, signature };
   }, 'Launch failed. Ensure BAGS_API_KEY and SOLANA_PRIVATE_KEY are set.');
 }
 
@@ -1451,19 +1508,29 @@ async function bagsFeeConfigHandler(toolInput: ToolInput): Promise<HandlerResult
     const walletAddress = keypair.publicKey.toBase58();
     const connection = wallet.getSolanaConnection();
 
-    const result = await bagsRequest<{ configKey: string; transactions: string[] }>('/fee-share/create-config', {
+    const result = await bagsRequest<{ configKey: string; transactions: string[] }>('/token-launch/fee-share/create-config', {
       method: 'POST',
       body: JSON.stringify({ payer: walletAddress, baseMint: mint, feeClaimers }),
     });
 
-    const { VersionedTransaction } = await import('@solana/web3.js');
+    const { VersionedTransaction, Transaction } = await import('@solana/web3.js');
+    const { bs58 } = await import('@coral-xyz/anchor/dist/cjs/utils/bytes');
     const signatures: string[] = [];
-    for (const txBase64 of result.transactions) {
-      const tx = VersionedTransaction.deserialize(Buffer.from(txBase64, 'base64'));
-      tx.sign([keypair]);
-      const sig = await connection.sendRawTransaction(tx.serialize());
-      await connection.confirmTransaction(sig, 'confirmed');
-      signatures.push(sig);
+    for (const txStr of result.transactions) {
+      const txBuffer = bs58.decode(txStr);
+      try {
+        const tx = VersionedTransaction.deserialize(txBuffer);
+        tx.sign([keypair]);
+        const sig = await connection.sendRawTransaction(tx.serialize());
+        await connection.confirmTransaction(sig, 'confirmed');
+        signatures.push(sig);
+      } catch {
+        const tx = Transaction.from(txBuffer);
+        tx.sign(keypair);
+        const sig = await connection.sendRawTransaction(tx.serialize());
+        await connection.confirmTransaction(sig, 'confirmed');
+        signatures.push(sig);
+      }
     }
 
     return { configKey: result.configKey, signatures };
@@ -1476,8 +1543,8 @@ async function bagsWalletLookupHandler(toolInput: ToolInput): Promise<HandlerRes
   const username = toolInput.username as string;
 
   return safeHandler(async () => {
-    const result = await bagsRequest<{ wallet: string; username: string; provider: string }>(
-      `/fee-share/wallet/v2?provider=${provider}&username=${username}`
+    const result = await bagsRequest<{ wallet: string; provider: string; platformData: { username: string; display_name?: string } }>(
+      `/token-launch/fee-share/wallet/v2?provider=${provider}&username=${username}`
     );
     return result;
   });
@@ -1488,9 +1555,11 @@ async function bagsBulkWalletLookupHandler(toolInput: ToolInput): Promise<Handle
   const usernames = toolInput.usernames as string[];
 
   return safeHandler(async () => {
-    const result = await bagsRequest<{ wallets: Array<{ username: string; wallet: string }> }>('/fee-share/wallet/v2/bulk', {
+    // Bulk endpoint expects items array with per-item provider
+    const items = (usernames as string[]).map((username: string) => ({ username, provider }));
+    const result = await bagsRequest<Array<{ username: string; provider: string; wallet: string | null }>>('/token-launch/fee-share/wallet/v2/bulk', {
       method: 'POST',
-      body: JSON.stringify({ provider, usernames }),
+      body: JSON.stringify({ items }),
     });
     return result;
   });
@@ -1506,15 +1575,24 @@ async function bagsPartnerConfigHandler(toolInput: ToolInput): Promise<HandlerRe
     const walletAddress = keypair.publicKey.toBase58();
     const connection = wallet.getSolanaConnection();
 
-    const result = await bagsRequest<{ partnerKey: string; transaction: string }>('/fee-share/partner/create-config', {
+    const result = await bagsRequest<{ partnerKey: string; transaction: string }>('/token-launch/fee-share/partner/create-config', {
       method: 'POST',
       body: JSON.stringify({ payer: walletAddress, tokenMint: mint }),
     });
 
-    const { VersionedTransaction } = await import('@solana/web3.js');
-    const tx = VersionedTransaction.deserialize(Buffer.from(result.transaction, 'base64'));
-    tx.sign([keypair]);
-    const signature = await connection.sendRawTransaction(tx.serialize());
+    const { VersionedTransaction, Transaction } = await import('@solana/web3.js');
+    const { bs58 } = await import('@coral-xyz/anchor/dist/cjs/utils/bytes');
+    const txBuffer = bs58.decode(result.transaction);
+    let signature: string;
+    try {
+      const tx = VersionedTransaction.deserialize(txBuffer);
+      tx.sign([keypair]);
+      signature = await connection.sendRawTransaction(tx.serialize());
+    } catch {
+      const tx = Transaction.from(txBuffer);
+      tx.sign(keypair);
+      signature = await connection.sendRawTransaction(tx.serialize());
+    }
     await connection.confirmTransaction(signature, 'confirmed');
 
     return { partnerKey: result.partnerKey, signature };
@@ -1530,21 +1608,31 @@ async function bagsPartnerClaimHandler(toolInput: ToolInput): Promise<HandlerRes
     const walletAddress = walletArg || keypair.publicKey.toBase58();
     const connection = solWallet.getSolanaConnection();
 
-    const claimTxs = await bagsRequest<{ transactions: string[] }>('/fee-share/partner/claim', {
+    const claimTxs = await bagsRequest<{ transactions: string[] }>('/token-launch/fee-share/partner/claim', {
       method: 'POST',
       body: JSON.stringify({ wallet: walletAddress }),
     });
 
     if (!claimTxs.transactions?.length) return { claimed: false, message: 'No partner fees to claim' };
 
-    const { VersionedTransaction } = await import('@solana/web3.js');
+    const { VersionedTransaction, Transaction } = await import('@solana/web3.js');
+    const { bs58 } = await import('@coral-xyz/anchor/dist/cjs/utils/bytes');
     const signatures: string[] = [];
-    for (const txBase64 of claimTxs.transactions) {
-      const tx = VersionedTransaction.deserialize(Buffer.from(txBase64, 'base64'));
-      tx.sign([keypair]);
-      const sig = await connection.sendRawTransaction(tx.serialize());
-      await connection.confirmTransaction(sig, 'confirmed');
-      signatures.push(sig);
+    for (const txStr of claimTxs.transactions) {
+      const txBuffer = bs58.decode(txStr);
+      try {
+        const tx = VersionedTransaction.deserialize(txBuffer);
+        tx.sign([keypair]);
+        const sig = await connection.sendRawTransaction(tx.serialize());
+        await connection.confirmTransaction(sig, 'confirmed');
+        signatures.push(sig);
+      } catch {
+        const tx = Transaction.from(txBuffer);
+        tx.sign(keypair);
+        const sig = await connection.sendRawTransaction(tx.serialize());
+        await connection.confirmTransaction(sig, 'confirmed');
+        signatures.push(sig);
+      }
     }
 
     return { claimed: true, signatures };
@@ -1561,7 +1649,7 @@ async function bagsPartnerStatsHandler(toolInput: ToolInput): Promise<HandlerRes
       totalFeesEarned: number;
       claimableAmount: number;
       tokens: Array<{ mint: string; feesEarned: number }>;
-    }>(`/fee-share/partner/stats?partnerKey=${partnerKey}`);
+    }>(`/token-launch/fee-share/partner/stats?partnerKey=${partnerKey}`);
     return stats;
   });
 }
