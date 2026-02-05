@@ -369,27 +369,28 @@ const externalData: FeedDescriptor = {
 };
 
 // =============================================================================
-// PLACEHOLDER FEEDS — Not yet implemented, but declared for discovery
+// WEATHER, GEOPOLITICAL & ECONOMIC FEEDS
 // =============================================================================
 
 const weatherOpenMeteo: FeedDescriptor = {
   id: 'weather-openmeteo',
   name: 'Weather (Open-Meteo)',
   description: 'Free weather API — forecasts, historical, alerts for any location. No API key needed.',
-  status: 'planned',
+  status: 'available',
   category: 'weather',
   capabilities: [
     FeedCapability.WEATHER,
     FeedCapability.HISTORICAL,
   ],
-  dataTypes: ['temperature', 'precipitation', 'wind', 'forecasts', 'alerts', 'historical'],
+  dataTypes: ['temperature', 'precipitation', 'wind', 'forecasts', 'historical'],
   connectionType: 'polling',
   requiredEnv: [],
   optionalEnv: [],
   docsUrl: 'https://open-meteo.com/en/docs',
-  version: '0.0.0',
+  version: '1.0.0',
   create: async () => {
-    throw new Error('Weather feed not yet implemented. Create src/feeds/weather-openmeteo/index.ts');
+    const { createOpenMeteoFeed } = await import('./weather-openmeteo/index');
+    return createOpenMeteoFeed() as any;
   },
 };
 
@@ -397,19 +398,20 @@ const weatherNWS: FeedDescriptor = {
   id: 'weather-nws',
   name: 'Weather (NWS)',
   description: 'US National Weather Service — official forecasts, severe weather alerts, observations',
-  status: 'planned',
+  status: 'available',
   category: 'weather',
   capabilities: [
     FeedCapability.WEATHER,
   ],
-  dataTypes: ['forecasts', 'alerts', 'observations', 'radar'],
+  dataTypes: ['forecasts', 'alerts', 'observations'],
   connectionType: 'polling',
   requiredEnv: [],
   optionalEnv: [],
   docsUrl: 'https://www.weather.gov/documentation/services-web-api',
-  version: '0.0.0',
+  version: '1.0.0',
   create: async () => {
-    throw new Error('NWS feed not yet implemented. Create src/feeds/weather-nws/index.ts');
+    const { createNWSFeed } = await import('./weather-nws/index');
+    return createNWSFeed() as any;
   },
 };
 
@@ -417,7 +419,7 @@ const acledConflict: FeedDescriptor = {
   id: 'acled-conflict',
   name: 'ACLED Conflict Data',
   description: 'Armed conflict & protest events worldwide — real-time geopolitical event tracking',
-  status: 'planned',
+  status: 'available',
   category: 'geopolitical',
   capabilities: [
     FeedCapability.GEOPOLITICAL,
@@ -428,9 +430,10 @@ const acledConflict: FeedDescriptor = {
   requiredEnv: ['ACLED_API_KEY'],
   optionalEnv: ['ACLED_EMAIL'],
   docsUrl: 'https://apidocs.acleddata.com',
-  version: '0.0.0',
+  version: '1.0.0',
   create: async () => {
-    throw new Error('ACLED feed not yet implemented. Create src/feeds/acled/index.ts');
+    const { createACLEDFeed } = await import('./acled/index');
+    return createACLEDFeed() as any;
   },
 };
 
@@ -438,7 +441,7 @@ const fredEconomics: FeedDescriptor = {
   id: 'fred',
   name: 'FRED Economic Data',
   description: 'Federal Reserve economic data — GDP, CPI, unemployment, interest rates, 800k+ series',
-  status: 'planned',
+  status: 'available',
   category: 'economics',
   capabilities: [
     FeedCapability.ECONOMICS,
@@ -449,9 +452,10 @@ const fredEconomics: FeedDescriptor = {
   requiredEnv: ['FRED_API_KEY'],
   optionalEnv: [],
   docsUrl: 'https://fred.stlouisfed.org/docs/api/fred/',
-  version: '0.0.0',
+  version: '1.0.0',
   create: async () => {
-    throw new Error('FRED feed not yet implemented. Create src/feeds/fred/index.ts');
+    const { createFREDFeed } = await import('./fred/index');
+    return createFREDFeed() as any;
   },
 };
 
@@ -506,7 +510,7 @@ export function registerAllFeeds(): void {
   registry.register(news);
   registry.register(externalData);
 
-  // Placeholders (not yet implemented)
+  // Weather, geopolitical & economic data
   registry.register(weatherOpenMeteo);
   registry.register(weatherNWS);
   registry.register(acledConflict);
