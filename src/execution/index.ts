@@ -291,6 +291,53 @@ const POLY_CLOB_URL = process.env.POLY_CLOB_URL || 'https://clob.polymarket.com'
 const POLY_CTF_EXCHANGE = process.env.POLY_CTF_EXCHANGE || '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
 const POLY_NEG_RISK_CTF_EXCHANGE = process.env.POLY_NEG_RISK_CTF_EXCHANGE || '0xC5d563A36AE78145C45a50134d48A1215220f80a';
 
+/**
+ * Retry helper with exponential backoff for Polymarket REST API calls
+ * Retries on: network errors, 5xx server errors, 429 rate limit
+ * Does NOT retry on: 4xx client errors (bad request, unauthorized, etc.)
+ */
+async function polymarketRetryWithBackoff<T>(
+  operation: () => Promise<{ response: Response; data: T }>,
+  maxAttempts: number = 3,
+  baseDelayMs: number = 1000
+): Promise<{ response: Response; data: T }> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await operation();
+
+      // Retry on 5xx or 429
+      if (result.response.status >= 500 || result.response.status === 429) {
+        if (attempt < maxAttempts) {
+          const delay = baseDelayMs * Math.pow(2, attempt - 1);
+          logger.warn(
+            { status: result.response.status, attempt, delay },
+            'Polymarket API error, retrying...'
+          );
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+      }
+
+      return result;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      if (attempt < maxAttempts) {
+        const delay = baseDelayMs * Math.pow(2, attempt - 1);
+        logger.warn(
+          { error: lastError.message, attempt, delay },
+          'Polymarket API network error, retrying...'
+        );
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  throw lastError || new Error('Polymarket API request failed after retries');
+}
+
 interface NegRiskResponse {
   neg_risk?: boolean;
 }
@@ -1069,16 +1116,19 @@ async function placeSignedPolymarketOrder(
   postOrder.orderType = orderType as 'GTC' | 'GTD' | 'FOK';
   if (postOnly) postOrder.postOnly = true;
 
-  const headers = buildPolymarketHeadersForUrl(auth, 'POST', url, postOrder);
-
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify(postOrder),
+    const { response, data } = await polymarketRetryWithBackoff(async () => {
+      // Build headers fresh for each attempt (timestamp-based HMAC)
+      const headers = buildPolymarketHeadersForUrl(auth, 'POST', url, postOrder);
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(postOrder),
+      });
+      const json = (await resp.json()) as PolymarketOrderResponse;
+      return { response: resp, data: json };
     });
 
-    const data = (await response.json()) as PolymarketOrderResponse;
     if (!response.ok || data.errorMsg) {
       const { code, message } = parsePolymarketError(data.errorMsg, response.status);
       logger.error({ status: response.status, errorCode: code, error: message }, 'Polymarket signed order failed');
@@ -1089,22 +1139,25 @@ async function placeSignedPolymarketOrder(
     logger.info({ orderId, tokenId, side, price, size, feeRateBps }, 'Polymarket signed order placed');
     return { success: true, orderId, status: 'open', transactionHash: data.transactionsHashes?.[0] };
   } catch (error) {
-    logger.error({ error }, 'Error placing Polymarket signed order');
+    logger.error({ error }, 'Error placing Polymarket signed order after retries');
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
 
 async function cancelPolymarketOrder(auth: PolymarketApiKeyAuth, orderId: string): Promise<boolean> {
   const url = `${POLY_CLOB_URL}/order/${orderId}`;
-  const headers = buildPolymarketHeadersForUrl(auth, 'DELETE', url);
 
   try {
-    const response = await fetch(url, {
-      method: 'DELETE',
-      headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-      },
+    const { response } = await polymarketRetryWithBackoff(async () => {
+      const headers = buildPolymarketHeadersForUrl(auth, 'DELETE', url);
+      const resp = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+      });
+      return { response: resp, data: null };
     });
 
     if (!response.ok) {
@@ -1115,7 +1168,7 @@ async function cancelPolymarketOrder(auth: PolymarketApiKeyAuth, orderId: string
     logger.info({ orderId }, 'Polymarket order cancelled');
     return true;
   } catch (error) {
-    logger.error({ error, orderId }, 'Error cancelling Polymarket order');
+    logger.error({ error, orderId }, 'Error cancelling Polymarket order after retries');
     return false;
   }
 }
