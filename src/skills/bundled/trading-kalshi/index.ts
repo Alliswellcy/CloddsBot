@@ -8,7 +8,7 @@
  * Commands:
  * /kalshi search <query>                    - Search Kalshi markets
  * /kalshi market <ticker>                   - Market details
- * /kalshi book <ticker>                     - View orderbook
+ * /kalshi book <ticker>                     - View orderbook (REST snapshot)
  * /kalshi buy <ticker> <contracts> <price>  - Buy YES contracts
  * /kalshi sell <ticker> <contracts> <price> - Sell YES contracts
  * /kalshi positions                         - View open orders (positions)
@@ -17,9 +17,25 @@
  * /kalshi balance                           - Account balance
  * /kalshi events [query]                    - Browse events
  * /kalshi event <event-ticker>              - Event details + markets
+ *
+ * Real-Time Streaming (WebSocket):
+ * /kalshi stream <ticker> [channels]        - Start streaming (ticker,trade,orderbook)
+ * /kalshi stream-fills                      - Stream your order fills
+ * /kalshi streams                           - List active streams
+ * /kalshi unstream <ticker>                 - Stop streaming
+ * /kalshi unstream-fills                    - Stop fill notifications
+ * /kalshi realtime-book <ticker>            - Get real-time orderbook from WebSocket
  */
 
-import type { KalshiFeed, KalshiEventResult } from '../../../feeds/kalshi';
+import type {
+  KalshiFeed,
+  KalshiEventResult,
+  KalshiTradeEvent,
+  KalshiOrderbookDelta,
+  KalshiOrderbookSnapshot,
+  KalshiFillEvent,
+  KalshiChannel,
+} from '../../../feeds/kalshi';
 import type { ExecutionService, TwapOrder, BracketOrder } from '../../../execution';
 import { logger } from '../../../utils/logger';
 
@@ -27,6 +43,16 @@ import { logger } from '../../../utils/logger';
 const activeTwaps = new Map<string, TwapOrder>();
 const activeBrackets = new Map<string, BracketOrder>();
 let nextOrderId = 1;
+
+// Active stream subscriptions
+interface StreamSubscription {
+  ticker: string;
+  channels: KalshiChannel[];
+  startTime: number;
+  messageCount: number;
+}
+const activeStreams = new Map<string, StreamSubscription>();
+let fillsSubscribed = false;
 
 // =============================================================================
 // HELPERS
@@ -117,12 +143,21 @@ function helpText(): string {
     '**Cross-Platform:**',
     '  /kalshi route <ticker> <buy|sell> <size> - Compare prices across platforms',
     '',
+    '**Real-Time Streaming (WebSocket):**',
+    '  /kalshi stream <ticker> [channels]       - Start streaming (ticker,trade,orderbook)',
+    '  /kalshi stream-fills                     - Stream your order fills',
+    '  /kalshi streams                          - List active streams',
+    '  /kalshi unstream <ticker>                - Stop streaming a market',
+    '  /kalshi unstream-fills                   - Stop fill notifications',
+    '  /kalshi realtime-book <ticker>           - Get real-time orderbook from stream',
+    '',
     '**Env vars:** KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY (or KALSHI_PRIVATE_KEY_PATH)',
     '',
     '**Examples:**',
     '  /kalshi search bitcoin',
     '  /kalshi buy KXBTC-24JAN01 10 0.65',
     '  /kalshi sell KXBTC-24JAN01 5 0.70',
+    '  /kalshi stream KXBTC-24JAN01 ticker,trade',
   ].join('\n');
 }
 
@@ -319,6 +354,269 @@ async function handleEvent(eventTicker: string): Promise<string> {
     const message = error instanceof Error ? error.message : String(error);
     return `Error: ${message}`;
   }
+}
+
+// =============================================================================
+// STREAMING HANDLERS (WebSocket)
+// =============================================================================
+
+async function handleStream(ticker: string, channelsArg?: string): Promise<string> {
+  if (!ticker) {
+    return 'Usage: /kalshi stream <ticker> [channels]\nChannels: ticker, trade, orderbook (comma-separated)\nExample: /kalshi stream KXBTC-24JAN01 ticker,trade';
+  }
+
+  const feed = await getFeed();
+
+  // Parse channels (default to ticker only)
+  const validChannels: KalshiChannel[] = ['ticker', 'orderbook_delta', 'trade', 'fill'];
+  const requestedChannels: KalshiChannel[] = [];
+
+  if (channelsArg) {
+    const parts = channelsArg.toLowerCase().split(',').map(s => s.trim());
+    for (const p of parts) {
+      if (p === 'ticker' || p === 'price') requestedChannels.push('ticker');
+      else if (p === 'orderbook' || p === 'book' || p === 'orderbook_delta') requestedChannels.push('orderbook_delta');
+      else if (p === 'trade' || p === 'trades') requestedChannels.push('trade');
+    }
+  }
+
+  const channels: KalshiChannel[] = requestedChannels.length > 0 ? requestedChannels : ['ticker'];
+
+  // Check if already streaming
+  const existing = activeStreams.get(ticker);
+  if (existing) {
+    // Add new channels to existing subscription
+    const newChannels = channels.filter(c => !existing.channels.includes(c));
+    if (newChannels.length === 0) {
+      return `Already streaming ${ticker} with channels: ${existing.channels.join(', ')}`;
+    }
+    feed.subscribeToMarket(ticker, newChannels);
+    existing.channels.push(...newChannels);
+    return `Added channels [${newChannels.join(', ')}] to ${ticker} stream.\nActive channels: ${existing.channels.join(', ')}`;
+  }
+
+  // Subscribe with event handlers
+  feed.subscribeToMarket(ticker, channels);
+
+  // Track subscription
+  activeStreams.set(ticker, {
+    ticker,
+    channels,
+    startTime: Date.now(),
+    messageCount: 0,
+  });
+
+  // Set up event listeners (only once per feed)
+  setupStreamListeners(feed);
+
+  const channelList = channels.join(', ');
+  const notes: string[] = [];
+  if (channels.includes('orderbook_delta')) {
+    notes.push('orderbook_delta requires auth and will receive snapshot first');
+  }
+
+  return [
+    `**Streaming ${ticker}**`,
+    '',
+    `Channels: ${channelList}`,
+    `Started: ${new Date().toISOString()}`,
+    '',
+    'Events will be logged. Use `/kalshi streams` to check status.',
+    'Use `/kalshi unstream ${ticker}` to stop.',
+    notes.length > 0 ? `\nNote: ${notes.join(', ')}` : '',
+  ].join('\n');
+}
+
+async function handleStreamFills(): Promise<string> {
+  if (fillsSubscribed) {
+    return 'Already subscribed to fill notifications.';
+  }
+
+  const feed = await getFeed();
+  feed.subscribeToFills();
+  fillsSubscribed = true;
+
+  // Set up fill listener
+  setupStreamListeners(feed);
+
+  return [
+    '**Subscribed to Order Fills**',
+    '',
+    'You will receive notifications when your orders fill.',
+    'Use `/kalshi unstream-fills` to stop.',
+  ].join('\n');
+}
+
+async function handleStreams(): Promise<string> {
+  if (activeStreams.size === 0 && !fillsSubscribed) {
+    return 'No active streams. Use `/kalshi stream <ticker>` to start.';
+  }
+
+  const lines = ['**Active Kalshi Streams**', ''];
+
+  if (fillsSubscribed) {
+    lines.push('**Fills:** Subscribed (account-wide)');
+    lines.push('');
+  }
+
+  for (const [ticker, sub] of activeStreams) {
+    const elapsed = Math.floor((Date.now() - sub.startTime) / 1000);
+    lines.push(`**${ticker}**`);
+    lines.push(`  Channels: ${sub.channels.join(', ')}`);
+    lines.push(`  Running: ${elapsed}s`);
+    lines.push(`  Messages: ${sub.messageCount}`);
+  }
+
+  return lines.join('\n');
+}
+
+async function handleUnstream(ticker: string): Promise<string> {
+  if (!ticker) {
+    return 'Usage: /kalshi unstream <ticker>';
+  }
+
+  const sub = activeStreams.get(ticker);
+  if (!sub) {
+    return `Not streaming ${ticker}. Use \`/kalshi streams\` to see active streams.`;
+  }
+
+  const feed = await getFeed();
+  feed.unsubscribeFromMarket(ticker);
+  activeStreams.delete(ticker);
+
+  return `Stopped streaming ${ticker}. Received ${sub.messageCount} messages.`;
+}
+
+async function handleUnstreamFills(): Promise<string> {
+  if (!fillsSubscribed) {
+    return 'Not subscribed to fills.';
+  }
+
+  const feed = await getFeed();
+  feed.unsubscribeFromFills();
+  fillsSubscribed = false;
+
+  return 'Unsubscribed from order fills.';
+}
+
+async function handleRealtimeBook(ticker: string): Promise<string> {
+  if (!ticker) {
+    return 'Usage: /kalshi realtime-book <ticker>\nRequires active orderbook stream. Use `/kalshi stream <ticker> orderbook` first.';
+  }
+
+  const feed = await getFeed();
+  const ob = feed.getRealtimeOrderbook(ticker);
+
+  if (!ob) {
+    const sub = activeStreams.get(ticker);
+    if (!sub || !sub.channels.includes('orderbook_delta')) {
+      return `No real-time orderbook for ${ticker}. Start streaming with:\n/kalshi stream ${ticker} orderbook`;
+    }
+    return `Orderbook for ${ticker} is stale or not yet received. Wait for snapshot.`;
+  }
+
+  const lines = [
+    `**Real-Time Orderbook: ${ticker}**`,
+    '',
+    `Mid: ${(ob.midPrice * 100).toFixed(1)}c | Spread: ${(ob.spread * 100).toFixed(2)}c`,
+    '',
+    '**Bids (YES)**',
+  ];
+
+  for (const [price, size] of ob.bids.slice(0, 5)) {
+    lines.push(`  ${(price * 100).toFixed(0)}c: ${size}`);
+  }
+
+  lines.push('', '**Asks (YES)**');
+  for (const [price, size] of ob.asks.slice(0, 5)) {
+    lines.push(`  ${(price * 100).toFixed(0)}c: ${size}`);
+  }
+
+  lines.push('', `Updated: ${new Date(ob.timestamp).toISOString()}`);
+
+  return lines.join('\n');
+}
+
+// Set up event listeners for streaming (only once)
+let listenersSetup = false;
+function setupStreamListeners(feed: KalshiFeed): void {
+  if (listenersSetup) return;
+  listenersSetup = true;
+
+  feed.on('price', (update: { marketId: string; price: number; previousPrice?: number }) => {
+    const sub = activeStreams.get(update.marketId);
+    if (sub) {
+      sub.messageCount++;
+      logger.info({
+        type: 'price',
+        ticker: update.marketId,
+        price: (update.price * 100).toFixed(1) + 'c',
+        change: update.previousPrice ? ((update.price - update.previousPrice) * 100).toFixed(2) + 'c' : undefined,
+      }, 'Kalshi price update');
+    }
+  });
+
+  feed.on('trade', (trade: KalshiTradeEvent) => {
+    const sub = activeStreams.get(trade.marketId);
+    if (sub) {
+      sub.messageCount++;
+      logger.info({
+        type: 'trade',
+        ticker: trade.marketId,
+        side: trade.side,
+        price: (trade.price * 100).toFixed(1) + 'c',
+        count: trade.count,
+        taker: trade.takerSide,
+      }, 'Kalshi trade');
+    }
+  });
+
+  feed.on('orderbook_snapshot', (snap: KalshiOrderbookSnapshot) => {
+    const sub = activeStreams.get(snap.marketId);
+    if (sub) {
+      sub.messageCount++;
+      logger.info({
+        type: 'orderbook_snapshot',
+        ticker: snap.marketId,
+        yesLevels: snap.yes.length,
+        noLevels: snap.no.length,
+        seq: snap.seq,
+      }, 'Kalshi orderbook snapshot');
+    }
+  });
+
+  feed.on('orderbook_delta', (delta: KalshiOrderbookDelta) => {
+    const sub = activeStreams.get(delta.marketId);
+    if (sub) {
+      sub.messageCount++;
+      // Only log significant deltas to avoid spam
+      if (Math.abs(delta.delta) >= 10) {
+        logger.debug({
+          type: 'orderbook_delta',
+          ticker: delta.marketId,
+          side: delta.side,
+          price: (delta.price * 100).toFixed(0) + 'c',
+          delta: delta.delta,
+          seq: delta.seq,
+        }, 'Kalshi orderbook delta');
+      }
+    }
+  });
+
+  feed.on('fill', (fill: KalshiFillEvent) => {
+    if (fillsSubscribed) {
+      logger.info({
+        type: 'fill',
+        ticker: fill.marketId,
+        orderId: fill.orderId,
+        side: fill.side,
+        action: fill.action,
+        count: fill.count,
+        price: (fill.price * 100).toFixed(1) + 'c',
+        isTaker: fill.isTaker,
+      }, 'Kalshi order filled');
+    }
+  });
 }
 
 // =============================================================================
@@ -720,6 +1018,31 @@ async function execute(args: string): Promise<string> {
       case 'orderbook':
       case 'ob':
         return handleOrderbook(parts[1]);
+
+      // Streaming commands (WebSocket)
+      case 'stream':
+      case 'subscribe':
+        return handleStream(parts[1], parts[2]);
+
+      case 'stream-fills':
+      case 'fills':
+        return handleStreamFills();
+
+      case 'streams':
+      case 'subscriptions':
+        return handleStreams();
+
+      case 'unstream':
+      case 'unsubscribe':
+        return handleUnstream(parts[1]);
+
+      case 'unstream-fills':
+        return handleUnstreamFills();
+
+      case 'realtime-book':
+      case 'rtbook':
+      case 'live-book':
+        return handleRealtimeBook(parts[1]);
 
       case 'buy':
       case 'b':
