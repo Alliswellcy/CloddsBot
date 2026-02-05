@@ -245,6 +245,79 @@ async function handleLeverage(market: string, leverage: string): Promise<string>
   }
 }
 
+async function handleModify(orderId: string, newPrice?: string, newSize?: string): Promise<string> {
+  if (!isConfigured()) {
+    return 'Drift not configured. Set SOLANA_PRIVATE_KEY.';
+  }
+
+  if (!orderId) {
+    return 'Usage: /drift modify <orderId> [price] [size]';
+  }
+
+  try {
+    const { wallet, drift } = await getSolanaModules();
+    const keypair = wallet.loadSolanaKeypair();
+    const connection = wallet.getSolanaConnection();
+
+    const result = await drift.modifyDriftOrder(connection, keypair, {
+      orderId: parseInt(orderId, 10),
+      newPrice,
+      newBaseAmount: newSize,
+    });
+
+    return `**Order Modified**\n\n` +
+      `Order ID: ${result.orderId}\n` +
+      (newPrice ? `New Price: ${newPrice}\n` : '') +
+      (newSize ? `New Size: ${newSize}\n` : '') +
+      `TX: \`${result.txSig}\``;
+  } catch (error) {
+    return `Modify failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleHealth(): Promise<string> {
+  if (!isConfigured()) {
+    return 'Drift not configured. Set SOLANA_PRIVATE_KEY.';
+  }
+
+  try {
+    const { wallet, drift } = await getSolanaModules();
+    const keypair = wallet.loadSolanaKeypair();
+    const connection = wallet.getSolanaConnection();
+
+    const monitor = drift.createDriftLiquidationMonitor({
+      connection,
+      accountPubkey: keypair.publicKey.toBase58(),
+    });
+
+    const health = await monitor.getAccountHealth();
+    monitor.stop();
+
+    let output = `**Drift Account Health**\n\n`;
+    output += `Risk Level: **${health.riskLevel.toUpperCase()}**\n`;
+    output += `Health Factor: ${health.healthFactor.toFixed(2)}\n`;
+    output += `Distance to Liquidation: ${health.distanceToLiquidationPct.toFixed(1)}%\n\n`;
+    output += `Total Collateral: $${health.totalCollateral.toFixed(2)}\n`;
+    output += `Maintenance Margin: $${health.maintenanceMargin.toFixed(2)}\n`;
+    output += `Free Collateral: $${health.freeCollateral.toFixed(2)}\n`;
+
+    if (health.positions.length > 0) {
+      output += `\n**Positions** (${health.positions.length})\n`;
+      for (const pos of health.positions) {
+        const pnlSign = pos.unrealizedPnL >= 0 ? '+' : '';
+        output += `\n${pos.marketName}: ${pos.direction.toUpperCase()} ${Math.abs(pos.baseAssetAmount).toFixed(4)}\n`;
+        output += `  Entry: $${pos.entryPrice.toFixed(2)} | Current: $${pos.currentPrice.toFixed(2)}\n`;
+        output += `  Liq: $${pos.liquidationPrice.toFixed(2)} | PnL: ${pnlSign}$${pos.unrealizedPnL.toFixed(2)}\n`;
+        output += `  Leverage: ${pos.leverage.toFixed(1)}x\n`;
+      }
+    }
+
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 export async function execute(args: string): Promise<string> {
   const parts = args.trim().split(/\s+/);
   const command = parts[0]?.toLowerCase() || 'help';
@@ -276,32 +349,40 @@ export async function execute(args: string): Promise<string> {
     case 'cancel':
       return handleCancel(rest[0]);
 
+    case 'modify':
+      return handleModify(rest[0], rest[1], rest[2]);
+
     case 'leverage':
     case 'lev':
       return handleLeverage(rest[0], rest[1]);
 
+    case 'health':
+      return handleHealth();
+
     case 'help':
     default:
-      return `**Drift Protocol**
+      return `**Drift Protocol** (9 commands)
 
 **Trading:**
   /drift long <market> <size> [price]   Open long
   /drift short <market> <size> [price]  Open short
-  /drift cancel [orderId]               Cancel order
+  /drift cancel [orderId]               Cancel order(s)
+  /drift modify <orderId> [price] [size] Modify order
 
 **Account:**
   /drift positions                      View positions
   /drift orders                         View orders
   /drift balance                        Check balance
   /drift leverage <market> <amount>     Set leverage
+  /drift health                         Account health & liq risk
 
 **Markets:** SOL-PERP, BTC-PERP, ETH-PERP (or use index)
 
 **Examples:**
   /drift long SOL-PERP 0.5
   /drift short BTC-PERP 0.01 95000
-  /drift positions
-  /drift leverage SOL 5`;
+  /drift modify 123 96000
+  /drift health`;
   }
 }
 

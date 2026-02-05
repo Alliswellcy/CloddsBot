@@ -503,6 +503,153 @@ async function handleConfigs(): Promise<string> {
   }
 }
 
+async function handlePoolInfo(poolId: string): Promise<string> {
+  if (!poolId) {
+    return 'Usage: /ray pool-info <poolId>';
+  }
+
+  try {
+    const { wallet, raydium } = await getSolanaModules();
+    const connection = wallet.getSolanaConnection();
+
+    const pool = await raydium.getRaydiumPoolInfoSdk(connection, poolId);
+
+    if (!pool) {
+      return `Pool not found: ${poolId}`;
+    }
+
+    let output = `**Pool Info**\n\n`;
+    output += `ID: \`${pool.id}\`\n`;
+    output += `Type: ${pool.type}\n`;
+    output += `Pair: ${pool.symbolA || pool.mintA.slice(0, 8)}... / ${pool.symbolB || pool.mintB.slice(0, 8)}...\n`;
+    if (pool.price) output += `Price: ${formatPrice(pool.price)}\n`;
+    if (pool.tvl) output += `TVL: $${pool.tvl.toLocaleString()}\n`;
+    if (pool.volume24h) output += `24h Volume: $${pool.volume24h.toLocaleString()}\n`;
+    if (pool.feeRate) output += `Fee: ${(pool.feeRate * 100).toFixed(2)}%\n`;
+
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleSdkPools(args: string[]): Promise<string> {
+  // /ray sdk-pools [type] [token]
+  const poolType = args[0]?.toUpperCase() as 'CLMM' | 'AMM' | 'CPMM' | 'all' | undefined;
+  const token = args[1];
+
+  try {
+    const { wallet, raydium, tokenlist } = await getSolanaModules();
+    const connection = wallet.getSolanaConnection();
+
+    let tokenMint: string | undefined;
+    if (token) {
+      const [mint] = await tokenlist.resolveTokenMints([token]);
+      tokenMint = mint || undefined;
+    }
+
+    const pools = await raydium.listRaydiumPoolsSdk(connection, {
+      type: poolType || 'all',
+      tokenMint,
+      limit: 20,
+    });
+
+    if (!pools || pools.length === 0) {
+      return 'No pools found.';
+    }
+
+    let output = `**Raydium Pools** (${pools.length})\n\n`;
+    for (const pool of pools.slice(0, 15)) {
+      output += `**${pool.type}** \`${pool.id.slice(0, 16)}...\`\n`;
+      output += `  ${pool.symbolA || '?'}/${pool.symbolB || '?'}\n`;
+      if (pool.tvl) output += `  TVL: $${pool.tvl.toLocaleString()}\n`;
+      if (pool.volume24h) output += `  Vol: $${pool.volume24h.toLocaleString()}\n`;
+      output += '\n';
+    }
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleClmmSwap(args: string[]): Promise<string> {
+  // /ray clmm-swap <poolId> <amount> <inputMint>
+  if (!isConfigured()) {
+    return 'Raydium not configured. Set SOLANA_PRIVATE_KEY.';
+  }
+
+  if (args.length < 3) {
+    return 'Usage: /ray clmm-swap <poolId> <amount> <inputMint>';
+  }
+
+  const [poolId, amount, inputMint] = args;
+
+  try {
+    const { wallet, raydium } = await getSolanaModules();
+    const keypair = wallet.loadSolanaKeypair();
+    const connection = wallet.getSolanaConnection();
+
+    const result = await raydium.swapClmm(connection, keypair, {
+      poolId,
+      amountIn: amount,
+      inputMint,
+      slippage: 0.01,
+    });
+
+    return `**CLMM Swap Complete**\n\n` +
+      `Input: ${result.inputAmount}\n` +
+      `Output: ${result.outputAmount}\n` +
+      `TX: \`${result.signature}\``;
+  } catch (error) {
+    return `CLMM swap failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleCreatePool(args: string[]): Promise<string> {
+  // /ray create-pool <mintA> <mintB> <initialPrice> [configIndex]
+  if (!isConfigured()) {
+    return 'Raydium not configured. Set SOLANA_PRIVATE_KEY.';
+  }
+
+  if (args.length < 3) {
+    return 'Usage: /ray create-pool <tokenA> <tokenB> <initialPrice> [configIndex]';
+  }
+
+  const [tokenA, tokenB, priceStr, configIndexStr] = args;
+  const initialPrice = parseFloat(priceStr);
+  const configIndex = configIndexStr ? parseInt(configIndexStr, 10) : 0;
+
+  if (isNaN(initialPrice)) {
+    return 'Initial price must be a number.';
+  }
+
+  try {
+    const { wallet, raydium, tokenlist } = await getSolanaModules();
+    const keypair = wallet.loadSolanaKeypair();
+    const connection = wallet.getSolanaConnection();
+
+    const [mintA, mintB] = await tokenlist.resolveTokenMints([tokenA, tokenB]);
+    if (!mintA || !mintB) {
+      return `Could not resolve tokens: ${tokenA}, ${tokenB}`;
+    }
+
+    const result = await raydium.createClmmPool(connection, keypair, {
+      mintA,
+      mintB,
+      initialPrice,
+      configIndex,
+    });
+
+    return `**CLMM Pool Created**\n\n` +
+      `Pool ID: \`${result.poolId}\`\n` +
+      `Pair: ${tokenA}/${tokenB}\n` +
+      `Initial Price: ${initialPrice}\n` +
+      `TX: \`${result.signature}\``;
+  } catch (error) {
+    return `Create pool failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 // ============================================================================
 // Main Execute
 // ============================================================================
@@ -543,23 +690,41 @@ export async function execute(args: string): Promise<string> {
     case 'amm-remove':
       return handleAmmRemove(rest);
 
+    // Pool Discovery (SDK)
+    case 'pool-info':
+      return handlePoolInfo(rest.join(' '));
+    case 'sdk-pools':
+      return handleSdkPools(rest);
+
+    // Direct CLMM Operations
+    case 'clmm-swap':
+      return handleClmmSwap(rest);
+    case 'create-pool':
+      return handleCreatePool(rest);
+
     case 'help':
     default:
-      return `**Raydium DEX - Complete CLI (12 Commands)**
+      return `**Raydium DEX** (16 Commands)
 
 **Swaps:**
-  /ray swap <amount> <from> to <to>    Execute swap
+  /ray swap <amount> <from> to <to>    Execute swap via REST API
   /ray quote <amount> <from> to <to>   Get quote
-  /ray pools <token>                   List pools
+  /ray clmm-swap <pool> <amt> <mint>   Direct CLMM swap
+
+**Pool Discovery:**
+  /ray pools <token>                   List pools (legacy API)
+  /ray sdk-pools [type] [token]        List pools (SDK, type=CLMM/AMM/CPMM)
+  /ray pool-info <poolId>              Get pool details
+  /ray configs                         List CLMM fee configs
 
 **CLMM (Concentrated Liquidity):**
   /ray positions [poolId]              List your positions
   /ray open <pool> <lower> <upper> <amount>  Open position
   /ray add <pool> <nft> <amount>       Add liquidity
-  /ray remove <pool> <nft> [%]         Remove liquidity (default 100%)
-  /ray close <pool> <nft>              Close empty position
+  /ray remove <pool> <nft> [%]         Remove liquidity
+  /ray close <pool> <nft>              Close position
   /ray harvest [poolId]                Harvest all rewards
-  /ray configs                         List fee tier configs
+  /ray create-pool <A> <B> <price> [cfg]  Create CLMM pool
 
 **AMM Liquidity:**
   /ray amm-add <pool> <amount>         Add AMM liquidity
@@ -567,8 +732,8 @@ export async function execute(args: string): Promise<string> {
 
 **Examples:**
   /ray swap 1 SOL to USDC
-  /ray positions
-  /ray harvest`;
+  /ray sdk-pools CLMM SOL
+  /ray positions`;
   }
 }
 
