@@ -321,8 +321,18 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
       }
       case 'tick_size_change':
       case 'new_market':
-      case 'market_resolved':
         return;
+      case 'market_resolved': {
+        const marketId = (msg.market as string | undefined) || (msg.condition_id as string | undefined);
+        if (marketId) {
+          emitter.emit('market_resolved', {
+            marketId,
+            conditionId: msg.condition_id as string | undefined,
+            timestamp: toTimestamp(msg.timestamp),
+          });
+        }
+        return;
+      }
       default:
         return;
     }
