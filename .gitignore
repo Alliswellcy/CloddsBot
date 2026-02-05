@@ -47,9 +47,6 @@ apps/
 # Frontend website (separate repo: cloddsbot-docs)
 apps/
 
-# Python trading scripts (reference only, root level)
-/trading/
-
 # Placeholder folders
 ui/
 vendor/

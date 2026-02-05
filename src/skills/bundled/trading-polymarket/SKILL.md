@@ -648,23 +648,7 @@ Common errors:
 
 ---
 
-## CLI Wrapper
-
-For quick CLI access, use the bundled script:
-
-```bash
-python trading/polymarket.py search "bitcoin"
-python trading/polymarket.py orderbook <token_id>
-python trading/polymarket.py buy <token_id> <price> <size>
-python trading/polymarket.py sell <token_id> <size>
-python trading/polymarket.py positions
-python trading/polymarket.py balance
-python trading/polymarket.py cancel_all
-```
-
----
-
-## Clodds CLI Commands (`/poly`)
+## CLI Commands (`/poly`)
 
 Access Polymarket trading directly from Claude Code:
 

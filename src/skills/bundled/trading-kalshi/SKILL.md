@@ -627,19 +627,3 @@ while True:
 6. **Rate limits exist** - Implement exponential backoff on 429 errors
 7. **Max position limits** - Varies by market, check market details
 
----
-
-## CLI Wrapper
-
-For quick CLI access:
-
-```bash
-python trading/kalshi.py search "fed rate"
-python trading/kalshi.py market <ticker>
-python trading/kalshi.py buy <ticker> <side> <count> <price>
-python trading/kalshi.py sell <ticker> <side> <count> <price>
-python trading/kalshi.py positions
-python trading/kalshi.py balance
-python trading/kalshi.py orders
-python trading/kalshi.py cancel <order_id>
-```
