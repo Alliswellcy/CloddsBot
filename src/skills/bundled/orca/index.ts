@@ -683,7 +683,7 @@ export async function execute(args: string): Promise<string> {
 
     case 'help':
     default:
-      return `**Orca Whirlpools** (17 commands)
+      return `**Orca Whirlpools** (15 commands)
 
 **Swap & Quote**
   /orca swap <amount> <from> to <to>     Execute swap
