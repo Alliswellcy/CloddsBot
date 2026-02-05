@@ -23,6 +23,8 @@ const polymarket: FeedDescriptor = {
   id: 'polymarket',
   name: 'Polymarket',
   description: 'Binary prediction markets on Polygon — largest on-chain prediction market',
+  status: 'available',
+  skillCommand: '/poly',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -46,6 +48,8 @@ const kalshi: FeedDescriptor = {
   id: 'kalshi',
   name: 'Kalshi',
   description: 'CFTC-regulated US prediction exchange — event contracts on politics, economics, weather',
+  status: 'available',
+  skillCommand: '/kalshi',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -69,6 +73,7 @@ const manifold: FeedDescriptor = {
   id: 'manifold',
   name: 'Manifold Markets',
   description: 'Play-money prediction markets — open API, broad topic coverage',
+  status: 'available',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -90,6 +95,7 @@ const metaculus: FeedDescriptor = {
   id: 'metaculus',
   name: 'Metaculus',
   description: 'Long-range forecasting platform — calibrated predictions on science, tech, geopolitics',
+  status: 'available',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -111,6 +117,7 @@ const predictit: FeedDescriptor = {
   id: 'predictit',
   name: 'PredictIt',
   description: 'Political betting market — US politics focused, read-only data',
+  status: 'available',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -130,6 +137,8 @@ const drift: FeedDescriptor = {
   id: 'drift',
   name: 'Drift BET',
   description: 'Solana-based prediction markets via Drift Protocol',
+  status: 'available',
+  skillCommand: '/drift',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -150,6 +159,8 @@ const betfair: FeedDescriptor = {
   id: 'betfair',
   name: 'Betfair',
   description: 'World\'s largest betting exchange — sports, politics, specials with deep liquidity',
+  status: 'available',
+  skillCommand: '/bf',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -174,6 +185,8 @@ const smarkets: FeedDescriptor = {
   id: 'smarkets',
   name: 'Smarkets',
   description: 'Low-commission betting exchange — politics, sports, entertainment',
+  status: 'available',
+  skillCommand: '/sm',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -198,6 +211,8 @@ const opinion: FeedDescriptor = {
   id: 'opinion',
   name: 'Opinion.trade',
   description: 'BNB Chain prediction market — DeFi-native with on-chain orderbook',
+  status: 'available',
+  skillCommand: '/op',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -219,6 +234,8 @@ const predictfunDesc: FeedDescriptor = {
   id: 'predictfun',
   name: 'Predict.fun',
   description: 'BNB Chain prediction market — CTF exchange with neg-risk support',
+  status: 'available',
+  skillCommand: '/pf',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -230,9 +247,9 @@ const predictfunDesc: FeedDescriptor = {
   requiredEnv: [],
   optionalEnv: ['PREDICTFUN_PRIVATE_KEY', 'PREDICTFUN_API_KEY'],
   configKey: 'predictfun',
-  create: async () => {
-    // Predict.fun uses direct exchange module, no FeedAdapter
-    return { searchMarkets: async () => [], getMarket: async () => null } as any;
+  create: async (config) => {
+    const { createPredictFunFeed } = await import('./predictfun/index');
+    return createPredictFunFeed(config as any) as any;
   },
 };
 
@@ -240,6 +257,7 @@ const hedgehog: FeedDescriptor = {
   id: 'hedgehog',
   name: 'Hedgehog Markets',
   description: 'Solana prediction market — binary outcomes with AMM + orderbook',
+  status: 'available',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -260,6 +278,7 @@ const virtuals: FeedDescriptor = {
   id: 'virtuals',
   name: 'Virtuals Protocol',
   description: 'Base chain AI agent marketplace — agent tokens, bonding curves, sentiment',
+  status: 'available',
   category: 'crypto',
   capabilities: [
     FeedCapability.MARKET_DATA,
@@ -284,6 +303,7 @@ const crypto: FeedDescriptor = {
   id: 'crypto',
   name: 'Crypto Prices',
   description: 'Real-time crypto prices — BTC, ETH, SOL, XRP + 7 more via Binance/Coinbase',
+  status: 'available',
   category: 'crypto',
   capabilities: [
     FeedCapability.CRYPTO_PRICES,
@@ -304,6 +324,7 @@ const news: FeedDescriptor = {
   id: 'news',
   name: 'News & Social',
   description: 'RSS feeds (Reuters, NPR, Politico, 538) + Twitter/X monitoring for market-moving news',
+  status: 'available',
   category: 'news',
   capabilities: [
     FeedCapability.NEWS,
@@ -323,6 +344,7 @@ const externalData: FeedDescriptor = {
   id: 'external',
   name: 'External Data (Edge)',
   description: 'CME FedWatch, polls, model predictions — fair value estimation for edge detection',
+  status: 'available',
   category: 'economics',
   capabilities: [
     FeedCapability.EDGE_DETECTION,
@@ -354,6 +376,7 @@ const weatherOpenMeteo: FeedDescriptor = {
   id: 'weather-openmeteo',
   name: 'Weather (Open-Meteo)',
   description: 'Free weather API — forecasts, historical, alerts for any location. No API key needed.',
+  status: 'planned',
   category: 'weather',
   capabilities: [
     FeedCapability.WEATHER,
@@ -374,6 +397,7 @@ const weatherNWS: FeedDescriptor = {
   id: 'weather-nws',
   name: 'Weather (NWS)',
   description: 'US National Weather Service — official forecasts, severe weather alerts, observations',
+  status: 'planned',
   category: 'weather',
   capabilities: [
     FeedCapability.WEATHER,
@@ -393,6 +417,7 @@ const acledConflict: FeedDescriptor = {
   id: 'acled-conflict',
   name: 'ACLED Conflict Data',
   description: 'Armed conflict & protest events worldwide — real-time geopolitical event tracking',
+  status: 'planned',
   category: 'geopolitical',
   capabilities: [
     FeedCapability.GEOPOLITICAL,
@@ -413,6 +438,7 @@ const fredEconomics: FeedDescriptor = {
   id: 'fred',
   name: 'FRED Economic Data',
   description: 'Federal Reserve economic data — GDP, CPI, unemployment, interest rates, 800k+ series',
+  status: 'planned',
   category: 'economics',
   capabilities: [
     FeedCapability.ECONOMICS,
@@ -433,6 +459,7 @@ const polymarketRtds: FeedDescriptor = {
   id: 'polymarket-rtds',
   name: 'Polymarket RTDS',
   description: 'Real-time data stream — Polymarket WebSocket for low-latency price and trade updates',
+  status: 'available',
   category: 'prediction_market',
   capabilities: [
     FeedCapability.REALTIME_PRICES,
@@ -452,7 +479,11 @@ const polymarketRtds: FeedDescriptor = {
 // REGISTER ALL FEEDS
 // =============================================================================
 
+let _registered = false;
+
 export function registerAllFeeds(): void {
+  if (_registered) return;
+  _registered = true;
   const registry = getGlobalFeedRegistry();
 
   // Prediction markets

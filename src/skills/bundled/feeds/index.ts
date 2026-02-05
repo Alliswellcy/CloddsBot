@@ -68,13 +68,18 @@ const categoryLabels: Record<FeedCategory, string> = {
 };
 
 function statusIcon(s: FeedSummary): string {
+  if (s.status === 'planned') return '[~~]';
+  if (s.status === 'deprecated') return '[XX]';
   if (s.active) return '[ON]';
   if (s.ready) return '[--]';
   return '[!!]';
 }
 
 function feedLine(s: FeedSummary): string {
-  return `  ${statusIcon(s)} **${s.name}** (\`${s.id}\`) — ${s.description}`;
+  let line = `  ${statusIcon(s)} **${s.name}** (\`${s.id}\`)`;
+  if (s.skillCommand) line += ` \`${s.skillCommand}\``;
+  line += ` — ${s.description}`;
+  return line;
 }
 
 async function execute(args: string): Promise<string> {
@@ -96,7 +101,7 @@ async function execute(args: string): Promise<string> {
       const stats = registry.stats();
 
       let output = `**Feed Registry** — ${stats.total} feeds (${stats.active} active, ${stats.ready} ready)\n`;
-      output += `Legend: [ON] active  [--] ready  [!!] missing env vars\n\n`;
+      output += `Legend: [ON] active  [--] ready  [!!] missing env  [~~] planned\n\n`;
 
       const cats = Object.keys(groups).sort() as FeedCategory[];
       for (const cat of cats) {
@@ -126,11 +131,17 @@ async function execute(args: string): Promise<string> {
       const { ready, missing } = registry.canActivate(desc.id);
       const active = registry.isActive(desc.id);
 
-      let output = `**${desc.name}** (\`${desc.id}\`)\n\n`;
+      const isPlanned = desc.status === 'planned';
+      let output = `**${desc.name}** (\`${desc.id}\`)${isPlanned ? ' — PLANNED' : ''}\n\n`;
       output += `${desc.description}\n\n`;
       output += `Category: ${categoryLabels[desc.category] || desc.category}\n`;
       output += `Connection: ${desc.connectionType}\n`;
-      output += `Status: ${active ? 'Active' : ready ? 'Ready' : 'Missing env vars'}\n`;
+      if (isPlanned) {
+        output += `Status: Planned (not yet implemented)\n`;
+      } else {
+        output += `Status: ${active ? 'Active' : ready ? 'Ready' : 'Missing env vars'}\n`;
+      }
+      if (desc.skillCommand) output += `CLI: \`${desc.skillCommand} help\`\n`;
       if (desc.version) output += `Version: ${desc.version}\n`;
       if (desc.docsUrl) output += `Docs: ${desc.docsUrl}\n`;
       output += '\n';
@@ -390,24 +401,24 @@ async function execute(args: string): Promise<string> {
       return `**Feed Registry Commands**
 
 **Discovery:**
-  /feeds list [category]                 - Browse all feeds (filter by category)
-  /feeds info <id>                       - Detailed feed info + env vars
-  /feeds search <query>                  - Search by name/description/capability
-  /feeds capabilities                    - Group feeds by what they can do
-  /feeds categories                      - Group feeds by category
-  /feeds ready                           - Feeds ready to activate
-  /feeds active                          - Currently running feeds
-  /feeds env <id>                        - Show env vars for a feed
+  /feeds list [category]        - Browse all feeds (or filter: weather, crypto, ...)
+  /feeds info <id>              - Detailed info, env vars, CLI command
+  /feeds search <query>         - Search by name, description, or capability
+  /feeds caps                   - Group feeds by capability
+  /feeds cats                   - Group feeds by category
+  /feeds ready                  - Feeds ready to activate now
+  /feeds active                 - Currently running feeds
+  /feeds env <id>               - Required/optional env vars for a feed
 
 **Market Data:**
-  /feeds status                          - Feed status + cache stats
-  /feeds search-markets <query> [plat]   - Search markets across platforms
-  /feeds price <platform> <id>           - Get current price
-  /feeds subscribe <platform> <id>       - Subscribe to price updates
-  /feeds unsubscribe <platform> <id>     - Unsubscribe
+  /feeds status                 - Registry stats + cache
+  /feeds search-markets <query> - Search markets across platforms
+  /feeds price <platform> <id>  - Get current price
+  /feeds sub <platform> <id>    - Subscribe to price updates
+  /feeds unsub <platform> <id>  - Unsubscribe
 
 **Categories:** prediction_market, crypto, news, weather, economics, geopolitical
-**Legend:** [ON] active  [--] ready  [!!] missing env vars`;
+**Legend:** [ON] active  [--] ready  [!!] missing env  [~~] planned`;
   }
 }
 

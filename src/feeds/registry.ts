@@ -104,11 +104,17 @@ export interface FeedDescriptor {
   /** Config key in Config['feeds'] (for existing feeds) */
   configKey?: string;
 
+  /** Implementation status */
+  status?: 'available' | 'planned' | 'deprecated';
+
   /** Version string */
   version?: string;
 
   /** URL for docs or source */
   docsUrl?: string;
+
+  /** Associated CLI skill command (e.g. '/poly', '/kalshi') */
+  skillCommand?: string;
 
   /**
    * Lazy factory — called only when the feed is actually needed.
@@ -141,9 +147,11 @@ export interface FeedSummary {
   category: FeedCategory;
   capabilities: FeedCapability[];
   connectionType: ConnectionType;
+  status: 'available' | 'planned' | 'deprecated';
   ready: boolean;
   missingEnv: string[];
   active: boolean;
+  skillCommand?: string;
 }
 
 // =============================================================================
@@ -252,6 +260,7 @@ export class FeedRegistry extends EventEmitter {
   listAll(): FeedSummary[] {
     return this.getAll().map(d => {
       const { ready, missing } = this.canActivate(d.id);
+      const isPlanned = d.status === 'planned';
       return {
         id: d.id,
         name: d.name,
@@ -259,9 +268,11 @@ export class FeedRegistry extends EventEmitter {
         category: d.category,
         capabilities: d.capabilities,
         connectionType: d.connectionType,
-        ready,
+        status: d.status || 'available',
+        ready: isPlanned ? false : ready,
         missingEnv: missing,
         active: this.activeFeeds.has(d.id),
+        skillCommand: d.skillCommand,
       };
     });
   }
