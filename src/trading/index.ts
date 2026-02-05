@@ -384,6 +384,14 @@ function wrapExecutionWithLogging(
     estimateSlippage: execution.estimateSlippage.bind(execution),
     placeOrdersBatch: execution.placeOrdersBatch.bind(execution),
     cancelOrdersBatch: execution.cancelOrdersBatch.bind(execution),
+    // Fill WebSocket methods (pass through directly)
+    connectFillsWebSocket: execution.connectFillsWebSocket.bind(execution),
+    disconnectFillsWebSocket: execution.disconnectFillsWebSocket.bind(execution),
+    isFillsWebSocketConnected: execution.isFillsWebSocketConnected.bind(execution),
+    onFill: execution.onFill.bind(execution),
+    getTrackedFills: execution.getTrackedFills.bind(execution),
+    getTrackedFill: execution.getTrackedFill.bind(execution),
+    clearOldFills: execution.clearOldFills.bind(execution),
   };
 }
 

@@ -33,6 +33,11 @@ import {
 } from '../utils/opinion-auth';
 import * as opinion from '../exchanges/opinion';
 import * as predictfun from '../exchanges/predictfun';
+import {
+  createUserWebSocket,
+  type UserWebSocket,
+  type FillEvent,
+} from '../feeds/polymarket/user-ws';
 
 // =============================================================================
 // TYPES
@@ -99,6 +104,24 @@ export interface OpenOrder {
   status: OrderStatus;
   createdAt: Date;
   expiration?: Date;
+  /** Transaction hash for on-chain confirmation (Polymarket) */
+  transactionHash?: string;
+  /** Fill status from WebSocket: MATCHED → MINED → CONFIRMED */
+  fillStatus?: 'MATCHED' | 'MINED' | 'CONFIRMED' | 'FAILED';
+}
+
+/** Real-time fill tracking for WebSocket updates */
+export interface TrackedFill {
+  orderId: string;
+  marketId: string;
+  tokenId: string;
+  side: OrderSide;
+  size: number;
+  price: number;
+  status: 'MATCHED' | 'MINED' | 'CONFIRMED' | 'FAILED';
+  transactionHash?: string;
+  timestamp: number;
+  receivedAt: number;
 }
 
 export interface ExecutionConfig {
@@ -167,6 +190,22 @@ export interface ExecutionService {
 
   // Utilities
   estimateFill(request: OrderRequest): Promise<{ avgPrice: number; filledSize: number }>;
+
+  // Real-time fill tracking (Polymarket WebSocket)
+  /** Connect WebSocket for real-time fill notifications */
+  connectFillsWebSocket(): Promise<void>;
+  /** Disconnect fill notifications WebSocket */
+  disconnectFillsWebSocket(): void;
+  /** Check if fills WebSocket is connected */
+  isFillsWebSocketConnected(): boolean;
+  /** Subscribe to fill events */
+  onFill(callback: (fill: TrackedFill) => void): () => void;
+  /** Get all tracked fills (received via WebSocket) */
+  getTrackedFills(): TrackedFill[];
+  /** Get tracked fill for a specific order */
+  getTrackedFill(orderId: string): TrackedFill | undefined;
+  /** Clear old tracked fills (older than specified ms, default 1 hour) */
+  clearOldFills(maxAgeMs?: number): number;
 }
 
 // =============================================================================
@@ -1559,6 +1598,91 @@ async function fetchOpinionOrderbook(tokenId: string): Promise<OrderbookData | n
 export function createExecutionService(config: ExecutionConfig): ExecutionService {
   const maxOrderSize = config.maxOrderSize || 1000; // Default $1000 max
 
+  // ==========================================================================
+  // REAL-TIME FILL TRACKING (Polymarket WebSocket)
+  // ==========================================================================
+  let userWs: UserWebSocket | null = null;
+  const trackedFills = new Map<string, TrackedFill>();
+  const fillCallbacks = new Set<(fill: TrackedFill) => void>();
+
+  function handleFillEvent(event: FillEvent): void {
+    const fill: TrackedFill = {
+      orderId: event.orderId,
+      marketId: event.marketId,
+      tokenId: event.tokenId,
+      side: event.side.toLowerCase() as OrderSide,
+      size: event.size,
+      price: event.price,
+      status: event.status,
+      transactionHash: event.transactionHash,
+      timestamp: event.timestamp,
+      receivedAt: Date.now(),
+    };
+
+    // Update or insert
+    const existing = trackedFills.get(event.orderId);
+    if (!existing || getStatusPriority(fill.status) > getStatusPriority(existing.status)) {
+      trackedFills.set(event.orderId, fill);
+      logger.info({ fill }, 'Fill tracked via WebSocket');
+
+      // Notify subscribers
+      for (const callback of fillCallbacks) {
+        try {
+          callback(fill);
+        } catch (err) {
+          logger.error({ err }, 'Fill callback error');
+        }
+      }
+    }
+  }
+
+  function getStatusPriority(status: TrackedFill['status']): number {
+    switch (status) {
+      case 'MATCHED': return 1;
+      case 'MINED': return 2;
+      case 'CONFIRMED': return 3;
+      case 'FAILED': return 0;
+      default: return -1;
+    }
+  }
+
+  async function connectFillsWebSocket(): Promise<void> {
+    if (!config.polymarket) {
+      throw new Error('Polymarket not configured');
+    }
+
+    if (userWs?.isConnected()) {
+      return;
+    }
+
+    const userId = config.polymarket.funderAddress || config.polymarket.apiKey;
+    userWs = createUserWebSocket(userId, {
+      privateKey: config.polymarket.privateKey || '',
+      apiKey: config.polymarket.apiKey,
+      apiSecret: config.polymarket.apiSecret,
+      apiPassphrase: config.polymarket.apiPassphrase,
+      funderAddress: config.polymarket.funderAddress || '',
+    });
+
+    userWs.on('fill', handleFillEvent);
+    userWs.on('error', (err) => {
+      logger.error({ err }, 'Fills WebSocket error');
+    });
+
+    await userWs.connect();
+    logger.info('Fills WebSocket connected - real-time order confirmations enabled');
+  }
+
+  function disconnectFillsWebSocket(): void {
+    if (userWs) {
+      userWs.disconnect();
+      userWs = null;
+      logger.info('Fills WebSocket disconnected');
+    }
+  }
+
+  // ==========================================================================
+
   function validateOrder(request: OrderRequest): string | null {
     const notional = request.price * request.size;
 
@@ -2168,6 +2292,49 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
         }
       }
       return results;
+    },
+
+    // =========================================================================
+    // REAL-TIME FILL TRACKING (Polymarket WebSocket)
+    // =========================================================================
+
+    async connectFillsWebSocket() {
+      return connectFillsWebSocket();
+    },
+
+    disconnectFillsWebSocket() {
+      disconnectFillsWebSocket();
+    },
+
+    isFillsWebSocketConnected() {
+      return userWs?.isConnected() ?? false;
+    },
+
+    onFill(callback: (fill: TrackedFill) => void) {
+      fillCallbacks.add(callback);
+      return () => {
+        fillCallbacks.delete(callback);
+      };
+    },
+
+    getTrackedFills() {
+      return Array.from(trackedFills.values());
+    },
+
+    getTrackedFill(orderId: string) {
+      return trackedFills.get(orderId);
+    },
+
+    clearOldFills(maxAgeMs = 3600000) { // Default 1 hour
+      const now = Date.now();
+      let cleared = 0;
+      for (const [orderId, fill] of trackedFills) {
+        if (now - fill.receivedAt > maxAgeMs) {
+          trackedFills.delete(orderId);
+          cleared++;
+        }
+      }
+      return cleared;
     },
   };
 
