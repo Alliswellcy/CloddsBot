@@ -27,7 +27,7 @@
  * /pump price <mint> - Current price and OHLCV
  * /pump holders <mint> - Top holders
  * /pump trades <mint> [--limit N] - Recent trades
- * /pump chart <mint> [--interval 1m|5m|1h] - Price chart data
+ * /pump chart <mint> [--interval 1m|5m|15m|1h|4h|1d] - Price chart data
  *
  * CREATION:
  * /pump create <name> <symbol> <description> [--image <url>] [--twitter <url>]
@@ -40,6 +40,7 @@
 
 const PUMPPORTAL_API = 'https://pumpportal.fun/api';
 const PUMPFUN_FRONTEND_API = 'https://frontend-api-v3.pump.fun';
+const PUMPFUN_ADVANCED_API = 'https://advanced-api-v2.pump.fun';
 
 // ============================================================================
 // Types
@@ -110,7 +111,8 @@ function isConfigured(): boolean {
 
 async function pumpPortalRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const apiKey = process.env.PUMPPORTAL_API_KEY;
-  const url = apiKey ? `${PUMPPORTAL_API}${endpoint}?api-key=${apiKey}` : `${PUMPPORTAL_API}${endpoint}`;
+  const separator = endpoint.includes('?') ? '&' : '?';
+  const url = apiKey ? `${PUMPPORTAL_API}${endpoint}${separator}api-key=${apiKey}` : `${PUMPPORTAL_API}${endpoint}`;
 
   const response = await fetch(url, {
     ...options,
@@ -128,16 +130,39 @@ async function pumpPortalRequest<T>(endpoint: string, options: RequestInit = {})
   return response.json() as Promise<T>;
 }
 
-async function pumpFrontendRequest<T>(endpoint: string): Promise<T> {
-  const response = await fetch(`${PUMPFUN_FRONTEND_API}${endpoint}`, {
-    headers: { 'Accept': 'application/json' },
-  });
+async function pumpFrontendRequest<T>(endpoint: string, baseUrl: string = PUMPFUN_FRONTEND_API): Promise<T> {
+  const jwt = process.env.PUMPFUN_JWT;
+  const headers: Record<string, string> = {
+    'Accept': 'application/json',
+    'Origin': 'https://pump.fun',
+  };
+  if (jwt) {
+    headers['Authorization'] = `Bearer ${jwt}`;
+  }
+
+  const response = await fetch(`${baseUrl}${endpoint}`, { headers });
 
   if (!response.ok) {
     throw new Error(`Pump.fun API error: ${response.status}`);
   }
 
   return response.json() as Promise<T>;
+}
+
+async function pumpAdvancedRequest<T>(endpoint: string): Promise<T> {
+  return pumpFrontendRequest<T>(endpoint, PUMPFUN_ADVANCED_API);
+}
+
+function intervalToTimeframe(interval: string): number {
+  switch (interval) {
+    case '1m': return 60;
+    case '5m': return 300;
+    case '15m': return 900;
+    case '1h': return 3600;
+    case '4h': return 14400;
+    case '1d': return 86400;
+    default: return 3600;
+  }
 }
 
 function formatPrice(price: number): string {
@@ -166,7 +191,7 @@ async function handleBuy(args: string[]): Promise<string> {
     return `Usage: /pump buy <mint> <amount> [options]
 
 Options:
-  --pool <pool>       Pool: pump, raydium, pump-amm, auto (default: pump)
+  --pool <pool>       Pool: pump, raydium, pump-amm, launchlab, raydium-cpmm, bonk, auto (default: pump)
   --slippage <bps>    Slippage in bps (default: 500 = 5%)
   --priority <lamps>  Priority fee in lamports
 
@@ -229,7 +254,7 @@ Amount can be:
   - Percentage: 50% or 100%
 
 Options:
-  --pool <pool>       Pool: pump, raydium, auto (default: pump)
+  --pool <pool>       Pool: pump, raydium, pump-amm, launchlab, raydium-cpmm, bonk, auto (default: pump)
   --slippage <bps>    Slippage in bps (default: 1000 = 10%)
 
 Examples:
@@ -279,25 +304,107 @@ async function handleQuote(args: string[]): Promise<string> {
     return 'Usage: /pump quote <mint> <amount> <buy|sell>';
   }
 
-  const [mint, amount, action] = args;
+  const [mint, amountStr, action] = args;
+  const amount = parseFloat(amountStr);
+
+  if (isNaN(amount) || amount <= 0) {
+    return 'Invalid amount. Must be a positive number.';
+  }
+
+  const actionUpper = action.toUpperCase();
 
   try {
-    // Use bloXroute or PumpPortal quote endpoint
-    const quote = await pumpPortalRequest<{
-      inputAmount: number;
-      outputAmount: number;
-      priceImpact: number;
-      fee: number;
-    }>(`/quote?mint=${mint}&amount=${amount}&action=${action}`);
+    const { wallet, pumpapi } = await getSolanaModules();
+    const connection = wallet.getSolanaConnection();
 
-    return `**Pump.fun Quote**
+    // Try on-chain quote first (more accurate)
+    const state = await pumpapi.getBondingCurveState(connection, mint);
+
+    if (state && !state.complete) {
+      // Use on-chain bonding curve calculation
+      const BN = (await import('bn.js')).default;
+      const currentPrice = pumpapi.calculatePrice(state);
+
+      if (actionUpper === 'BUY') {
+        const solLamports = new BN(Math.floor(amount * 1e9));
+        const quote = pumpapi.calculateBuyQuote(state, solLamports, 100);
+        const tokensOut = quote.tokensOut.toNumber() / 1e6;
+        const feeSOL = quote.fee.toNumber() / 1e9;
+
+        return `**Pump.fun Quote (On-Chain)**
 
 Token: \`${mint.slice(0, 20)}...\`
-Action: ${action.toUpperCase()}
-Input: ${quote.inputAmount}
-Output: ${quote.outputAmount}
-Price Impact: ${(quote.priceImpact * 100).toFixed(2)}%
-Fee: ${quote.fee}`;
+Action: BUY
+
+**Input:** ${amount} SOL
+**Output:** ${tokensOut.toLocaleString(undefined, { maximumFractionDigits: 2 })} tokens
+**Fee (1%):** ${feeSOL.toFixed(6)} SOL
+**Price Impact:** ${quote.priceImpact.toFixed(2)}%
+**Price After:** ${formatPrice(quote.newPrice)} SOL
+
+Current Price: ${formatPrice(currentPrice)} SOL`;
+      } else {
+        const tokenLamports = new BN(Math.floor(amount * 1e6));
+        const quote = pumpapi.calculateSellQuote(state, tokenLamports, 100);
+        const solOut = quote.solOut.toNumber() / 1e9;
+        const feeSOL = quote.fee.toNumber() / 1e9;
+
+        return `**Pump.fun Quote (On-Chain)**
+
+Token: \`${mint.slice(0, 20)}...\`
+Action: SELL
+
+**Input:** ${amount.toLocaleString()} tokens
+**Output:** ${solOut.toFixed(6)} SOL
+**Fee (1%):** ${feeSOL.toFixed(6)} SOL
+**Price Impact:** ${quote.priceImpact.toFixed(2)}%
+**Price After:** ${formatPrice(quote.newPrice)} SOL
+
+Current Price: ${formatPrice(currentPrice)} SOL`;
+      }
+    }
+
+    // Fallback to API estimate for graduated tokens
+    const token = await pumpFrontendRequest<PumpToken>(`/coins/${mint}?sync=true`);
+
+    if (!token?.price) {
+      return `Could not get price data for token \`${mint.slice(0, 20)}...\``;
+    }
+
+    const pricePerToken = token.price;
+    const feeRate = 0.005;
+
+    let inputDesc: string;
+    let outputDesc: string;
+    let outputAmount: number;
+    let fee: number;
+
+    if (actionUpper === 'BUY') {
+      fee = amount * feeRate;
+      const netSol = amount - fee;
+      outputAmount = pricePerToken > 0 ? netSol / pricePerToken : 0;
+      inputDesc = `${amount} SOL`;
+      outputDesc = `~${outputAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${token.symbol || 'tokens'}`;
+    } else {
+      const grossSol = amount * pricePerToken;
+      fee = grossSol * feeRate;
+      outputAmount = grossSol - fee;
+      inputDesc = `${amount.toLocaleString()} ${token.symbol || 'tokens'}`;
+      outputDesc = `~${outputAmount.toFixed(6)} SOL`;
+    }
+
+    return `**Pump.fun Quote (Raydium - Graduated)**
+
+Token: **${token.symbol || '?'}** \`${mint.slice(0, 20)}...\`
+Action: ${actionUpper}
+Price: ${formatPrice(pricePerToken)} SOL${token.priceUsd ? ` ($${formatPrice(token.priceUsd)})` : ''}
+MCap: ${formatMarketCap(token.marketCap || 0)}
+
+Input: ${inputDesc}
+Output: ${outputDesc}
+Fee (0.5%): ${fee.toFixed(6)} SOL
+
+*Token has graduated to Raydium. Use Jupiter for best execution.*`;
   } catch (error) {
     return `Quote failed: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -329,8 +436,7 @@ async function handleTrending(): Promise<string> {
 
 async function handleNew(): Promise<string> {
   try {
-    // WebSocket subscription for new tokens, or poll API
-    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/currently-live?limit=20&sort=created_timestamp&order=desc');
+    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/currently-live?limit=20&offset=0&includeNsfw=false&order=DESC');
 
     if (!tokens?.length) return 'No new tokens found.';
 
@@ -351,7 +457,7 @@ async function handleNew(): Promise<string> {
 
 async function handleLive(): Promise<string> {
   try {
-    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/currently-live?limit=20');
+    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/currently-live?limit=20&offset=0&includeNsfw=false');
 
     if (!tokens?.length) return 'No live tokens found.';
 
@@ -370,7 +476,7 @@ async function handleLive(): Promise<string> {
 
 async function handleGraduated(): Promise<string> {
   try {
-    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/graduated?limit=20');
+    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/graduated?limit=20&offset=0&includeNsfw=false');
 
     if (!tokens?.length) return 'No graduated tokens found.';
 
@@ -393,7 +499,7 @@ async function handleSearch(query: string): Promise<string> {
   }
 
   try {
-    const tokens = await pumpFrontendRequest<PumpToken[]>(`/coins/search?query=${encodeURIComponent(query)}&limit=15`);
+    const tokens = await pumpFrontendRequest<PumpToken[]>(`/coins/search?query=${encodeURIComponent(query)}&limit=15&offset=0&includeNsfw=false`);
 
     if (!tokens?.length) return `No tokens found for "${query}".`;
 
@@ -412,7 +518,16 @@ async function handleSearch(query: string): Promise<string> {
 
 async function handleVolatile(): Promise<string> {
   try {
-    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/volatile?limit=15');
+    // Volatile endpoint may be on frontend API or advanced API — try both
+    let tokens: PumpToken[] | null = null;
+    try {
+      tokens = await pumpFrontendRequest<PumpToken[]>('/coins/volatile?limit=15');
+    } catch {
+      // Fall back to advanced API
+      try {
+        tokens = await pumpAdvancedRequest<PumpToken[]>('/coins/volatile?limit=15');
+      } catch { /* ignore */ }
+    }
 
     if (!tokens?.length) return 'No volatile tokens found.';
 
@@ -430,12 +545,13 @@ async function handleVolatile(): Promise<string> {
 
 async function handleKOTH(): Promise<string> {
   try {
-    // King of the Hill: 30-35K market cap range
-    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/list?minMarketCap=30000&maxMarketCap=35000&limit=15');
+    const token = await pumpFrontendRequest<PumpToken | PumpToken[]>('/coins/king-of-the-hill?includeNsfw=false');
 
-    if (!tokens?.length) return 'No KOTH tokens found.';
+    // Endpoint may return a single token or an array
+    const tokens = Array.isArray(token) ? token : [token];
+    if (!tokens?.length || !tokens[0]?.mint) return 'No KOTH tokens found.';
 
-    let output = '**King of the Hill (30-35K MCap)**\n\n';
+    let output = '**King of the Hill**\n\n';
     for (const t of tokens) {
       output += `**${t.symbol}** - ${t.name}\n`;
       output += `  MCap: ${formatMarketCap(t.marketCap || 0)}`;
@@ -460,7 +576,7 @@ async function handleToken(mint: string): Promise<string> {
   }
 
   try {
-    const token = await pumpFrontendRequest<PumpToken>(`/coins/${mint}`);
+    const token = await pumpFrontendRequest<PumpToken>(`/coins/${mint}?sync=true`);
 
     let output = `**${token.symbol}** - ${token.name}\n\n`;
     output += `Mint: \`${token.mint}\`\n`;
@@ -503,8 +619,8 @@ async function handlePrice(mint: string): Promise<string> {
 
   try {
     const [token, ohlcv] = await Promise.all([
-      pumpFrontendRequest<PumpToken>(`/coins/${mint}`),
-      pumpFrontendRequest<PumpOHLCV[]>(`/coins/${mint}/ohlcv?interval=1h&limit=24`).catch(() => null),
+      pumpFrontendRequest<PumpToken>(`/coins/${mint}?sync=true`),
+      pumpFrontendRequest<PumpOHLCV[]>(`/candlesticks/${mint}?offset=0&limit=24&timeframe=${intervalToTimeframe('1h')}`).catch(() => null),
     ]);
 
     let output = `**${token.symbol} Price**\n\n`;
@@ -539,7 +655,7 @@ async function handleHolders(mint: string): Promise<string> {
   }
 
   try {
-    const holders = await pumpFrontendRequest<PumpHolder[]>(`/coins/${mint}/holders?limit=20`);
+    const holders = await pumpAdvancedRequest<PumpHolder[]>(`/coins/top-holders-and-sol-balance/${mint}`);
 
     if (!holders?.length) return 'No holder data available.';
 
@@ -574,7 +690,7 @@ async function handleTrades(args: string[]): Promise<string> {
   }
 
   try {
-    const trades = await pumpFrontendRequest<PumpTrade[]>(`/coins/${mint}/trades?limit=${limit}`);
+    const trades = await pumpFrontendRequest<PumpTrade[]>(`/trades/all/${mint}?limit=${limit}&offset=0&minimumSize=0`);
 
     if (!trades?.length) return 'No trades found.';
 
@@ -595,7 +711,7 @@ async function handleTrades(args: string[]): Promise<string> {
 
 async function handleChart(args: string[]): Promise<string> {
   if (!args[0]) {
-    return 'Usage: /pump chart <mint> [--interval 1m|5m|1h|1d]';
+    return 'Usage: /pump chart <mint> [--interval 1m|5m|15m|1h|4h|1d]';
   }
 
   const mint = args[0];
@@ -606,7 +722,7 @@ async function handleChart(args: string[]): Promise<string> {
   }
 
   try {
-    const ohlcv = await pumpFrontendRequest<PumpOHLCV[]>(`/coins/${mint}/ohlcv?interval=${interval}&limit=24`);
+    const ohlcv = await pumpFrontendRequest<PumpOHLCV[]>(`/candlesticks/${mint}?offset=0&limit=24&timeframe=${intervalToTimeframe(interval)}`);
 
     if (!ohlcv?.length) return 'No chart data available.';
 
@@ -628,12 +744,193 @@ async function handleChart(args: string[]): Promise<string> {
 }
 
 // ============================================================================
+// On-Chain Data Handlers
+// ============================================================================
+
+async function handleBalance(args: string[]): Promise<string> {
+  if (!args[0]) {
+    return 'Usage: /pump balance <mint> [wallet]';
+  }
+
+  const mint = args[0];
+  const owner = args[1]; // Optional, defaults to user's wallet
+
+  try {
+    const { wallet, pumpapi } = await getSolanaModules();
+    const connection = wallet.getSolanaConnection();
+    const ownerAddress = owner || (isConfigured() ? wallet.loadSolanaKeypair().publicKey.toBase58() : null);
+
+    if (!ownerAddress) {
+      return 'Wallet address required. Set SOLANA_PRIVATE_KEY or provide wallet address.';
+    }
+
+    const balance = await pumpapi.getTokenBalance(connection, ownerAddress, mint);
+
+    if (!balance || balance.balance === 0) {
+      return `**Token Balance**
+
+Mint: \`${mint.slice(0, 20)}...\`
+Wallet: \`${ownerAddress.slice(0, 12)}...\`
+Balance: 0 tokens`;
+    }
+
+    // Get token info for symbol
+    const token = await pumpFrontendRequest<PumpToken>(`/coins/${mint}?sync=true`).catch(() => null);
+    const priceInfo = await pumpapi.getTokenPriceInfo(connection, mint).catch(() => null);
+
+    let output = `**Token Balance**
+
+Token: ${token?.symbol || '?'} \`${mint.slice(0, 20)}...\`
+Wallet: \`${ownerAddress.slice(0, 12)}...\`
+Balance: **${balance.balance.toLocaleString()}** tokens`;
+
+    if (priceInfo) {
+      const valueSOL = balance.balance * priceInfo.priceInSol;
+      output += `\nValue: ~${valueSOL.toFixed(4)} SOL`;
+    }
+
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleHoldings(args: string[]): Promise<string> {
+  const owner = args[0]; // Optional
+
+  try {
+    const { wallet, pumpapi } = await getSolanaModules();
+    const connection = wallet.getSolanaConnection();
+    const ownerAddress = owner || (isConfigured() ? wallet.loadSolanaKeypair().publicKey.toBase58() : null);
+
+    if (!ownerAddress) {
+      return 'Wallet address required. Set SOLANA_PRIVATE_KEY or provide wallet address.';
+    }
+
+    const holdings = await pumpapi.getUserPumpTokens(connection, ownerAddress);
+
+    if (!holdings.length) {
+      return `**Pump.fun Holdings**
+
+Wallet: \`${ownerAddress.slice(0, 12)}...\`
+No Pump.fun tokens found.`;
+    }
+
+    let output = `**Pump.fun Holdings**
+
+Wallet: \`${ownerAddress.slice(0, 12)}...\`
+Tokens: ${holdings.length}
+
+`;
+
+    for (const h of holdings.slice(0, 15)) {
+      const token = await pumpFrontendRequest<PumpToken>(`/coins/${h.mint}?sync=true`).catch(() => null);
+      const symbol = token?.symbol || '???';
+      output += `**${symbol}** - ${h.balance.toLocaleString()} tokens\n`;
+      output += `  \`${h.mint.slice(0, 20)}...\`\n`;
+    }
+
+    if (holdings.length > 15) {
+      output += `\n... and ${holdings.length - 15} more`;
+    }
+
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleBonding(mint: string): Promise<string> {
+  if (!mint) {
+    return 'Usage: /pump bonding <mint>';
+  }
+
+  try {
+    const { wallet, pumpapi } = await getSolanaModules();
+    const connection = wallet.getSolanaConnection();
+
+    const state = await pumpapi.getBondingCurveState(connection, mint);
+
+    if (!state) {
+      return `Bonding curve not found for \`${mint.slice(0, 20)}...\`
+
+Token may not exist or has already graduated to Raydium.`;
+    }
+
+    const price = pumpapi.calculatePrice(state);
+    const progress = pumpapi.calculateBondingProgress(state);
+    const liquiditySOL = state.realSolReserves.toNumber() / 1e9;
+    const tokensRemaining = state.realTokenReserves.toNumber() / 1e6;
+
+    // Get token info for context
+    const token = await pumpFrontendRequest<PumpToken>(`/coins/${mint}?sync=true`).catch(() => null);
+
+    let output = `**Bonding Curve State** ${state.complete ? '✅ GRADUATED' : '📈 ACTIVE'}
+
+Token: ${token?.symbol || '?'} \`${mint.slice(0, 20)}...\`
+${state.isMayhemMode ? '⚡ Mayhem Mode (Token2022)\n' : ''}
+**Reserves:**
+  Virtual SOL: ${(state.virtualSolReserves.toNumber() / 1e9).toFixed(4)}
+  Virtual Tokens: ${(state.virtualTokenReserves.toNumber() / 1e6).toLocaleString()}
+  Real SOL: ${liquiditySOL.toFixed(4)} SOL
+  Real Tokens: ${tokensRemaining.toLocaleString()}
+
+**Metrics:**
+  Price: ${formatPrice(price)} SOL
+  Progress: ${(progress * 100).toFixed(1)}%
+  Liquidity: ${liquiditySOL.toFixed(2)} SOL`;
+
+    if (state.complete) {
+      output += '\n\n*Token has graduated to Raydium. Use Jupiter for trading.*';
+    }
+
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleBestPool(mint: string): Promise<string> {
+  if (!mint) {
+    return 'Usage: /pump best-pool <mint>';
+  }
+
+  try {
+    const { wallet, pumpapi } = await getSolanaModules();
+    const connection = wallet.getSolanaConnection();
+
+    const result = await pumpapi.getBestPool(connection, mint);
+
+    if (result.pool === 'raydium') {
+      return `**Best Execution Venue**
+
+Token: \`${mint.slice(0, 20)}...\`
+Status: ✅ Graduated
+Venue: **Raydium**
+${result.raydiumPool ? `Pool: \`${result.raydiumPool}\`` : ''}
+
+Use Jupiter aggregator for best execution on graduated tokens.`;
+    }
+
+    return `**Best Execution Venue**
+
+Token: \`${mint.slice(0, 20)}...\`
+Status: 📈 Active Bonding
+Venue: **Pump.fun**
+
+Trade directly on pump.fun bonding curve for best execution.`;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+// ============================================================================
 // Additional Discovery Handlers
 // ============================================================================
 
 async function handleForYou(): Promise<string> {
   try {
-    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/for-you?limit=20');
+    const tokens = await pumpFrontendRequest<PumpToken[]>('/coins/for-you?limit=20&offset=0&includeNsfw=false');
     if (!tokens?.length) return 'No personalized recommendations available.';
 
     let output = '**For You - Personalized Recommendations**\n\n';
@@ -787,7 +1084,7 @@ async function handleLatestTrades(args: string[]): Promise<string> {
   }
 
   try {
-    const trades = await pumpFrontendRequest<Array<PumpTrade & { name?: string; symbol?: string }>>(`/trades/latest?limit=${limit}`);
+    const trades = await pumpFrontendRequest<Array<PumpTrade & { name?: string; symbol?: string }>>(`/trades/latest?limit=${limit}&offset=0`);
     if (!trades?.length) return 'No recent trades.';
 
     let output = '**Latest Trades (Platform-wide)**\n\n';
@@ -831,10 +1128,12 @@ Options:
   --twitter <url>    Twitter link
   --telegram <url>   Telegram link
   --website <url>    Website link
-  --initial <SOL>    Initial buy amount
+  --initial <SOL>    Initial buy amount (default: 0)
+  --slippage <pct>   Slippage percent (default: 10)
+  --priority <SOL>   Priority fee in SOL (default: 0.0005)
 
 Example:
-  /pump create "Moon Dog" MDOG "The moon-bound dog" --twitter https://x.com/mdog --initial 0.5`;
+  /pump create "Moon Dog" MDOG "The moon-bound dog" --image https://i.imgur.com/abc.png --initial 0.5`;
   }
 
   const name = args[0];
@@ -845,7 +1144,9 @@ Example:
   let twitter: string | undefined;
   let telegram: string | undefined;
   let website: string | undefined;
-  let initialBuy: number | undefined;
+  let initialBuy = 0;
+  let slippage = 10;
+  let priorityFee = 0.0005;
 
   for (let i = 3; i < args.length; i++) {
     if (args[i] === '--image' && args[i + 1]) { imageUrl = args[++i]; }
@@ -853,34 +1154,87 @@ Example:
     else if (args[i] === '--telegram' && args[i + 1]) { telegram = args[++i]; }
     else if (args[i] === '--website' && args[i + 1]) { website = args[++i]; }
     else if (args[i] === '--initial' && args[i + 1]) { initialBuy = parseFloat(args[++i]); }
+    else if (args[i] === '--slippage' && args[i + 1]) { slippage = parseInt(args[++i]); }
+    else if (args[i] === '--priority' && args[i + 1]) { priorityFee = parseFloat(args[++i]); }
   }
 
   try {
     const { wallet } = await getSolanaModules();
-    const keypair = wallet.loadSolanaKeypair();
+    const walletKeypair = wallet.loadSolanaKeypair();
     const connection = wallet.getSolanaConnection();
+    const { Keypair, VersionedTransaction } = await import('@solana/web3.js');
 
-    // Use PumpPortal creation endpoint
-    const createResult = await pumpPortalRequest<{ mint: string; transaction: string }>('/create', {
+    // Step 1: Upload metadata to IPFS
+    const formData = new FormData();
+    formData.append('name', name);
+    formData.append('symbol', symbol);
+    formData.append('description', description);
+    if (twitter) formData.append('twitter', twitter);
+    if (telegram) formData.append('telegram', telegram);
+    if (website) formData.append('website', website);
+    formData.append('showName', 'true');
+
+    if (imageUrl) {
+      const imgResponse = await fetch(imageUrl);
+      if (imgResponse.ok) {
+        const blob = await imgResponse.blob();
+        formData.append('file', blob, 'image.png');
+      } else {
+        return `Failed to download image from ${imageUrl}`;
+      }
+    }
+
+    const ipfsResponse = await fetch('https://pump.fun/api/ipfs', {
       method: 'POST',
-      body: JSON.stringify({
-        publicKey: keypair.publicKey.toBase58(),
-        name,
-        symbol,
-        description,
-        imageUrl,
-        twitter,
-        telegram,
-        website,
-        initialBuyLamports: initialBuy ? Math.floor(initialBuy * 1e9) : undefined,
-      }),
+      body: formData,
     });
 
-    // Sign and send
-    const { VersionedTransaction } = await import('@solana/web3.js');
-    const txBuffer = Buffer.from(createResult.transaction, 'base64');
-    const tx = VersionedTransaction.deserialize(txBuffer);
-    tx.sign([keypair]);
+    if (!ipfsResponse.ok) {
+      throw new Error(`IPFS upload failed: ${ipfsResponse.status} - ${await ipfsResponse.text()}`);
+    }
+
+    const ipfsResult = await ipfsResponse.json() as { metadataUri: string };
+    if (!ipfsResult.metadataUri) {
+      throw new Error('IPFS upload returned no metadataUri');
+    }
+
+    // Step 2: Generate a new mint keypair
+    const mintKeypair = Keypair.generate();
+
+    // Step 3: Create token via PumpPortal trade-local endpoint
+    const endpoint = process.env.PUMPFUN_LOCAL_TX_URL || 'https://pumpportal.fun/api/trade-local';
+
+    const createBody = {
+      publicKey: walletKeypair.publicKey.toBase58(),
+      action: 'create',
+      tokenMetadata: {
+        name,
+        symbol,
+        uri: ipfsResult.metadataUri,
+      },
+      mint: mintKeypair.publicKey.toBase58(),
+      denominatedInSol: 'true',
+      amount: initialBuy,
+      slippage,
+      priorityFee,
+      pool: 'pump',
+    };
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(createBody),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`PumpPortal create error: ${response.status} - ${errorText}`);
+    }
+
+    // Step 4: Deserialize, sign with BOTH keypairs, and send
+    const txBytes = new Uint8Array(await response.arrayBuffer());
+    const tx = VersionedTransaction.deserialize(txBytes);
+    tx.sign([mintKeypair, walletKeypair]);
     const signature = await connection.sendRawTransaction(tx.serialize());
     await connection.confirmTransaction(signature, 'confirmed');
 
@@ -888,11 +1242,12 @@ Example:
 
 Name: ${name}
 Symbol: ${symbol}
-Mint: \`${createResult.mint}\`
+Mint: \`${mintKeypair.publicKey.toBase58()}\`
+Metadata: \`${ipfsResult.metadataUri}\`
 TX: \`${signature}\`
 
 Your token is now live on pump.fun!
-${initialBuy ? `Initial buy: ${initialBuy} SOL` : ''}`;
+${initialBuy > 0 ? `Initial buy: ${initialBuy} SOL` : 'No initial buy.'}`;
   } catch (error) {
     return `Creation failed: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -912,21 +1267,37 @@ async function handleClaim(mint: string): Promise<string> {
     const keypair = wallet.loadSolanaKeypair();
     const connection = wallet.getSolanaConnection();
 
-    const claimResult = await pumpPortalRequest<{ transaction: string; amount: number }>('/claim-fees', {
+    // Try PumpPortal claim-fees endpoint (undocumented — may not exist)
+    const endpoint = process.env.PUMPFUN_LOCAL_TX_URL || 'https://pumpportal.fun/api/trade-local';
+
+    const response = await fetch(endpoint, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         publicKey: keypair.publicKey.toBase58(),
+        action: 'claim',
         mint,
       }),
     });
 
-    if (!claimResult.transaction) {
-      return `No fees to claim for token ${mint.slice(0, 12)}...`;
+    if (!response.ok) {
+      const errorText = await response.text();
+      // If endpoint doesn't support claim action, provide guidance
+      if (response.status === 400 || response.status === 404) {
+        return `**Claim Fees**
+
+Creator fee claiming may not be supported via API.
+Visit https://pump.fun to claim fees for token:
+\`${mint}\`
+
+Alternatively, use the Pump.fun program directly via Solana CLI.`;
+      }
+      throw new Error(`Claim error: ${response.status} - ${errorText}`);
     }
 
+    const txBytes = new Uint8Array(await response.arrayBuffer());
     const { VersionedTransaction } = await import('@solana/web3.js');
-    const txBuffer = Buffer.from(claimResult.transaction, 'base64');
-    const tx = VersionedTransaction.deserialize(txBuffer);
+    const tx = VersionedTransaction.deserialize(txBytes);
     tx.sign([keypair]);
     const signature = await connection.sendRawTransaction(tx.serialize());
     await connection.confirmTransaction(signature, 'confirmed');
@@ -934,7 +1305,6 @@ async function handleClaim(mint: string): Promise<string> {
     return `**Fees Claimed**
 
 Token: \`${mint.slice(0, 20)}...\`
-Amount: ${claimResult.amount} SOL
 TX: \`${signature}\``;
   } catch (error) {
     return `Claim failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -1029,6 +1399,16 @@ export async function execute(args: string): Promise<string> {
     case 'chart':
       return handleChart(rest);
 
+    // On-Chain Data
+    case 'balance':
+      return handleBalance(rest);
+    case 'holdings':
+      return handleHoldings(rest);
+    case 'bonding':
+      return handleBonding(rest[0]);
+    case 'best-pool':
+      return handleBestPool(rest[0]);
+
     // Creation
     case 'create':
       return handleCreate(rest);
@@ -1063,12 +1443,12 @@ export async function execute(args: string): Promise<string> {
 
     case 'help':
     default:
-      return `**Pump.fun - Complete API (22 Commands)**
+      return `**Pump.fun - Complete API (26 Commands)**
 
 **Trading:**
   /pump buy <mint> <SOL> [--pool X] [--slippage X]
   /pump sell <mint> <amount|%> [--pool X]
-  /pump quote <mint> <amount> <buy|sell>
+  /pump quote <mint> <amount> <buy|sell>  (on-chain accurate)
 
 **Discovery:**
   /pump trending                    Top performing tokens
@@ -1086,8 +1466,14 @@ export async function execute(args: string): Promise<string> {
   /pump price <mint>                Price + 24h stats
   /pump holders <mint>              Top holders
   /pump trades <mint> [--limit N]   Recent trades
-  /pump chart <mint> [--interval X] OHLCV chart
+  /pump chart <mint> [--interval]   OHLCV chart
   /pump similar <mint>              Find similar tokens
+
+**On-Chain Data:**
+  /pump balance <mint> [wallet]     Token balance
+  /pump holdings [wallet]           All pump.fun tokens held
+  /pump bonding <mint>              Bonding curve state
+  /pump best-pool <mint>            Best execution venue
 
 **Creator Tools:**
   /pump user-coins <address>        Tokens created by wallet
@@ -1100,14 +1486,15 @@ export async function execute(args: string): Promise<string> {
   /pump sol-price                   Current SOL price
 
 **Monitoring:**
-  /pump watch <mint>                Watch for trades
-  /pump snipe <symbol>              Wait for token launch
+  /pump watch <mint>                Watch for trades (WS info)
+  /pump snipe <symbol>              Wait for token launch (WS info)
 
 **Pools:** pump, raydium, pump-amm, launchlab, raydium-cpmm, bonk, auto
 
 **Setup:**
   export SOLANA_PRIVATE_KEY="your-key"
-  export PUMPPORTAL_API_KEY="your-key"  # Optional`;
+  export PUMPPORTAL_API_KEY="your-key"  # Optional
+  export PUMPFUN_JWT="your-jwt"         # Optional`;
   }
 }
 

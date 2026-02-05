@@ -535,3 +535,131 @@ export function calculateMarketCap(priceInSol: number, solPriceUsd?: number): {
     marketCapUsd: solPriceUsd ? marketCapSol * solPriceUsd : undefined,
   };
 }
+
+// ============================================================================
+// Token Balance
+// ============================================================================
+
+export interface TokenBalance {
+  mint: string;
+  balance: number;
+  balanceRaw: string;
+  decimals: number;
+}
+
+/**
+ * Get token balance for a wallet
+ */
+export async function getTokenBalance(
+  connection: Connection,
+  owner: PublicKey | string,
+  mint: PublicKey | string
+): Promise<TokenBalance | null> {
+  const ownerPubkey = typeof owner === 'string' ? new PublicKey(owner) : owner;
+  const mintPubkey = typeof mint === 'string' ? new PublicKey(mint) : mint;
+
+  try {
+    const { TOKEN_PROGRAM_ID } = await import('@solana/spl-token');
+
+    // Find ATA
+    const [ata] = PublicKey.findProgramAddressSync(
+      [
+        ownerPubkey.toBuffer(),
+        TOKEN_PROGRAM_ID.toBuffer(),
+        mintPubkey.toBuffer(),
+      ],
+      new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL')
+    );
+
+    const accountInfo = await connection.getAccountInfo(ata);
+    if (!accountInfo) {
+      return null;
+    }
+
+    // Parse token account data (SPL Token layout)
+    const data = accountInfo.data;
+    const amount = new BN(data.subarray(64, 72), 'le');
+
+    return {
+      mint: mintPubkey.toBase58(),
+      balance: amount.toNumber() / (10 ** TOKEN_DECIMALS),
+      balanceRaw: amount.toString(),
+      decimals: TOKEN_DECIMALS,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get all Pump.fun token holdings for a wallet
+ * Returns tokens with non-zero balances
+ */
+export async function getUserPumpTokens(
+  connection: Connection,
+  owner: PublicKey | string
+): Promise<TokenBalance[]> {
+  const ownerPubkey = typeof owner === 'string' ? new PublicKey(owner) : owner;
+
+  try {
+    const { TOKEN_PROGRAM_ID } = await import('@solana/spl-token');
+
+    // Get all token accounts for the wallet
+    const tokenAccounts = await connection.getTokenAccountsByOwner(ownerPubkey, {
+      programId: TOKEN_PROGRAM_ID,
+    });
+
+    const balances: TokenBalance[] = [];
+
+    for (const { account } of tokenAccounts.value) {
+      const data = account.data;
+      const mint = new PublicKey(data.subarray(0, 32));
+      const amount = new BN(data.subarray(64, 72), 'le');
+
+      if (amount.isZero()) continue;
+
+      // Check if this is a pump.fun token by verifying bonding curve exists
+      const bondingCurve = getBondingCurveAddress(mint, PUMP_PROGRAM_ID);
+      const bondingAccount = await connection.getAccountInfo(bondingCurve);
+
+      // Also check Mayhem program
+      if (!bondingAccount) {
+        const mayhemBondingCurve = getBondingCurveAddress(mint, PUMP_MAYHEM_PROGRAM_ID);
+        const mayhemAccount = await connection.getAccountInfo(mayhemBondingCurve);
+        if (!mayhemAccount) continue; // Not a pump.fun token
+      }
+
+      balances.push({
+        mint: mint.toBase58(),
+        balance: amount.toNumber() / (10 ** TOKEN_DECIMALS),
+        balanceRaw: amount.toString(),
+        decimals: TOKEN_DECIMALS,
+      });
+    }
+
+    return balances;
+  } catch {
+    return [];
+  }
+}
+
+// ============================================================================
+// Smart Routing
+// ============================================================================
+
+/**
+ * Determine best execution venue for a token
+ * Returns 'pump' for active bonding curve, 'raydium' for graduated tokens
+ */
+export async function getBestPool(
+  connection: Connection,
+  mint: PublicKey | string
+): Promise<{ pool: 'pump' | 'raydium'; raydiumPool?: string }> {
+  const graduation = await isGraduated(connection, mint);
+
+  if (graduation.graduated) {
+    return { pool: 'raydium', raydiumPool: graduation.raydiumPool };
+  }
+
+  return { pool: 'pump' };
+}

@@ -61,6 +61,9 @@ import {
   isGraduated,
   getTokenInfo,
   getPumpPortalQuote,
+  getTokenBalance,
+  getUserPumpTokens,
+  getBestPool,
 } from '../solana/pumpapi';
 import {
   executeJupiterSwap,
@@ -5202,6 +5205,39 @@ function buildTools(): ToolDefinition[] {
           pool: { type: 'string', description: 'Pool to use: pump, raydium, or auto' },
         },
         required: ['mint', 'action', 'amount'],
+      },
+    },
+    {
+      name: 'pumpfun_balance',
+      description: 'Get token balance for a wallet on a Pump.fun token.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          mint: { type: 'string', description: 'Token mint address' },
+          owner: { type: 'string', description: 'Wallet address (defaults to your wallet)' },
+        },
+        required: ['mint'],
+      },
+    },
+    {
+      name: 'pumpfun_holdings',
+      description: 'Get all Pump.fun tokens held by a wallet.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', description: 'Wallet address (defaults to your wallet)' },
+        },
+      },
+    },
+    {
+      name: 'pumpfun_best_pool',
+      description: 'Determine best execution venue for a token (pump bonding curve or raydium after graduation).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          mint: { type: 'string', description: 'Token mint address' },
+        },
+        required: ['mint'],
       },
     },
     // Pump.fun Swarm Trading
@@ -13750,6 +13786,43 @@ async function executeTool(
             return JSON.stringify({ error: 'Quote not available' });
           }
           return JSON.stringify(quote);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'pumpfun_balance': {
+        try {
+          const connection = getSolanaConnection();
+          const keypair = loadSolanaKeypair();
+          const owner = (toolInput.owner as string) || keypair.publicKey.toBase58();
+          const balance = await getTokenBalance(connection, owner, toolInput.mint as string);
+          if (!balance) {
+            return JSON.stringify({ balance: 0, balanceRaw: '0', decimals: 6 });
+          }
+          return JSON.stringify(balance);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'pumpfun_holdings': {
+        try {
+          const connection = getSolanaConnection();
+          const keypair = loadSolanaKeypair();
+          const owner = (toolInput.owner as string) || keypair.publicKey.toBase58();
+          const holdings = await getUserPumpTokens(connection, owner);
+          return JSON.stringify({ count: holdings.length, tokens: holdings });
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'pumpfun_best_pool': {
+        try {
+          const connection = getSolanaConnection();
+          const result = await getBestPool(connection, toolInput.mint as string);
+          return JSON.stringify(result);
         } catch (err: unknown) {
           return JSON.stringify({ error: (err as Error).message });
         }
