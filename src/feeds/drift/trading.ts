@@ -12,8 +12,10 @@
  */
 
 import { EventEmitter } from 'events';
+import { Connection, Keypair } from '@solana/web3.js';
 import { logger } from '../../utils/logger';
 import { generateId as generateSecureId } from '../../utils/id';
+import { loadSolanaKeypair, getSolanaConnection } from '../../solana/wallet';
 
 // =============================================================================
 // TYPES
@@ -108,7 +110,13 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
   let initialized = false;
   let walletAddress: string | null = null;
 
-  // Simulated state for positions/orders (would be replaced with actual SDK calls)
+  // SDK state (populated during initialize() if wallet is configured)
+  let connection: Connection | null = null;
+  let keypair: Keypair | null = null;
+  let driftClient: any = null;
+  let driftSdk: any = null;
+
+  // Local state for dry-run tracking
   const openOrders = new Map<string, DriftOrder>();
   const positions = new Map<number, DriftPosition>();
 
@@ -179,80 +187,94 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
       return order;
     }
 
-    // Real order execution would go here
-    // This requires the Drift SDK which needs Solana wallet setup
-
-    /*
-    try {
-      // Example with Drift SDK (pseudocode):
-      const driftClient = await DriftClient.from(connection, wallet);
-
-      const marketAccount = await driftClient.getPerpMarketAccount(marketIndex);
-
-      if (orderType === 'market') {
-        const tx = await driftClient.placePerpOrder({
-          marketIndex,
-          direction: direction === 'long' ? PositionDirection.LONG : PositionDirection.SHORT,
-          baseAssetAmount: new BN(amount * 1e9),
-          orderType: OrderType.MARKET,
-        });
-
-        await connection.confirmTransaction(tx);
-      } else {
-        const tx = await driftClient.placePerpOrder({
-          marketIndex,
-          direction: direction === 'long' ? PositionDirection.LONG : PositionDirection.SHORT,
-          baseAssetAmount: new BN(amount * 1e9),
-          price: new BN(price * 1e6),
-          orderType: OrderType.LIMIT,
-        });
-
-        await connection.confirmTransaction(tx);
-      }
-
-      return order;
-    } catch (err) {
-      logger.error({ err }, 'Drift order failed');
+    if (!driftClient || !driftSdk) {
+      logger.error('Drift SDK not initialized — cannot place real orders');
       return null;
     }
-    */
 
-    logger.warn('Drift trading: Real order execution not yet implemented (SDK required)');
+    try {
+      const sdkDirection = direction === 'long'
+        ? driftSdk.PositionDirection.LONG
+        : driftSdk.PositionDirection.SHORT;
+      const sdkOrderType = orderType === 'market'
+        ? driftSdk.OrderType.MARKET
+        : driftSdk.OrderType.LIMIT;
 
-    // For now, simulate successful order
-    const order: DriftOrder = {
-      orderId,
-      marketIndex,
-      direction,
-      baseAssetAmount: amount,
-      price: price || 0.5,
-      status: orderType === 'market' ? 'filled' : 'open',
-      createdAt: new Date(),
-    };
+      const orderParams: any = {
+        marketIndex,
+        direction: sdkDirection,
+        baseAssetAmount: new driftSdk.BN(Math.round(amount * 1e9)),
+        orderType: sdkOrderType,
+      };
 
-    if (orderType === 'limit') {
-      openOrders.set(orderId, order);
+      if (orderType === 'limit' && price != null) {
+        orderParams.price = new driftSdk.BN(Math.round(price * 1e6));
+      }
+
+      const txSig = await driftClient.placePerpOrder(orderParams);
+
+      logger.info(
+        { marketIndex, direction, amount, price, orderType, txSig },
+        'Drift order placed'
+      );
+
+      const order: DriftOrder = {
+        orderId: txSig || orderId,
+        marketIndex,
+        direction,
+        baseAssetAmount: amount,
+        price: price || 0.5,
+        status: orderType === 'market' ? 'filled' : 'open',
+        createdAt: new Date(),
+      };
+
+      if (orderType === 'limit') {
+        openOrders.set(order.orderId, order);
+      }
+
+      emitter.emit('order', order);
+      return order;
+    } catch (err) {
+      logger.error({ err, marketIndex, direction, amount, price, orderType }, 'Drift order failed');
+      return null;
     }
-
-    emitter.emit('order', order);
-    return order;
   }
 
   // Attach methods
   const trading: DriftTrading = Object.assign(emitter, {
     async initialize() {
-      // Load wallet from config
-      if (config.privateKey) {
-        // Parse private key and create wallet
-        walletAddress = 'simulated_wallet'; // Would be actual public key
-        logger.info({ walletAddress }, 'Drift trading initialized (simulated)');
-      } else if (config.keypairPath) {
-        // Load from file
-        walletAddress = 'simulated_wallet';
-        logger.info({ keypairPath: config.keypairPath }, 'Drift trading initialized from keypair');
-      } else if (process.env.SOLANA_PRIVATE_KEY) {
-        walletAddress = 'simulated_wallet';
-        logger.info('Drift trading initialized from env');
+      // Try to load wallet + SDK for real trading
+      const hasWallet = config.privateKey || config.keypairPath || process.env.SOLANA_PRIVATE_KEY;
+
+      if (hasWallet) {
+        try {
+          keypair = loadSolanaKeypair({
+            privateKey: config.privateKey,
+            keypairPath: config.keypairPath,
+          });
+          connection = getSolanaConnection({ rpcUrl });
+          walletAddress = keypair.publicKey.toBase58();
+
+          // Dynamic import SDK (same pattern as src/solana/drift.ts)
+          driftSdk = await import('@drift-labs/sdk') as any;
+          const anchor = await import('@coral-xyz/anchor');
+
+          const wallet = new anchor.Wallet(keypair);
+          const provider = new anchor.AnchorProvider(connection, wallet, { commitment: 'confirmed' });
+          driftClient = new driftSdk.DriftClient({
+            connection,
+            wallet: provider.wallet,
+            env: 'mainnet-beta',
+          });
+
+          await driftClient.subscribe();
+          logger.info({ walletAddress }, 'Drift BET trading initialized with SDK');
+        } catch (err) {
+          logger.warn({ err }, 'Drift SDK init failed — falling back to read-only mode');
+          driftClient = null;
+          driftSdk = null;
+          walletAddress = null;
+        }
       } else {
         logger.warn('Drift trading: No wallet configured, running in read-only mode');
       }
@@ -314,7 +336,18 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
         return true;
       }
 
-      // Real cancellation would use Drift SDK
+      if (driftClient) {
+        try {
+          const numericId = parseInt(orderId, 10);
+          if (!isNaN(numericId)) {
+            await driftClient.cancelOrder(numericId);
+          }
+        } catch (err) {
+          logger.error({ err, orderId }, 'Drift SDK cancelOrder failed');
+          return false;
+        }
+      }
+
       order.status = 'cancelled';
       openOrders.delete(orderId);
       emitter.emit('orderCancelled', order);
@@ -322,8 +355,21 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
     },
 
     async cancelAllOrders(marketIndex?: number) {
-      let cancelled = 0;
+      // SDK bulk cancel
+      if (driftClient && driftSdk) {
+        try {
+          if (marketIndex !== undefined) {
+            await driftClient.cancelOrders(marketIndex, driftSdk.MarketType.PERP);
+          } else {
+            await driftClient.cancelAllOrders();
+          }
+        } catch (err) {
+          logger.error({ err, marketIndex }, 'Drift SDK cancelAllOrders failed');
+        }
+      }
 
+      // Clear local tracking
+      let cancelled = 0;
       for (const [orderId, order] of openOrders) {
         if (marketIndex === undefined || order.marketIndex === marketIndex) {
           order.status = 'cancelled';
@@ -337,6 +383,38 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
     },
 
     async getOpenOrders(marketIndex?: number) {
+      // Use SDK if available
+      if (driftClient && driftSdk) {
+        try {
+          const user = driftClient.getUser();
+          const sdkOrders = user.getOpenOrders();
+          const result: DriftOrder[] = [];
+
+          for (const o of sdkOrders) {
+            if (o.marketType !== driftSdk.MarketType.PERP) continue;
+            if (marketIndex !== undefined && o.marketIndex !== marketIndex) continue;
+
+            const direction: 'long' | 'short' =
+              o.direction === driftSdk.PositionDirection.LONG ? 'long' : 'short';
+
+            result.push({
+              orderId: String(o.orderId),
+              marketIndex: o.marketIndex,
+              direction,
+              baseAssetAmount: o.baseAssetAmount.toNumber() / 1e9,
+              price: o.price.toNumber() / 1e6,
+              status: 'open',
+              createdAt: new Date(),
+            });
+          }
+
+          return result;
+        } catch (err) {
+          logger.warn({ err }, 'Drift SDK getOpenOrders failed, falling back to local');
+        }
+      }
+
+      // Fallback: local tracking
       const orders = Array.from(openOrders.values());
 
       if (marketIndex !== undefined) {
@@ -348,7 +426,54 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
 
     // Portfolio
     async getPositions() {
-      // Fetch from API
+      // Use SDK if available
+      if (driftClient) {
+        try {
+          const user = driftClient.getUser();
+          const perpPositions = user.getPerpPositions();
+          const result: DriftPosition[] = [];
+
+          for (const pos of perpPositions) {
+            if (pos.baseAssetAmount.isZero()) continue;
+
+            const baseAmount = pos.baseAssetAmount.toNumber() / 1e9;
+            const quoteAmount = pos.quoteAssetAmount.toNumber() / 1e6;
+            const entryPrice = baseAmount !== 0 ? Math.abs(quoteAmount / baseAmount) : 0;
+
+            // Get current price from oracle
+            let currentPrice = 0.5;
+            try {
+              const oracleData = driftClient.getOracleDataForPerpMarket(pos.marketIndex);
+              if (oracleData?.price) {
+                currentPrice = oracleData.price.toNumber() / 1e6;
+              }
+            } catch { /* fall back to default */ }
+
+            const unrealizedPnL = baseAmount > 0
+              ? (currentPrice - entryPrice) * Math.abs(baseAmount)
+              : (entryPrice - currentPrice) * Math.abs(baseAmount);
+
+            const position: DriftPosition = {
+              marketIndex: pos.marketIndex,
+              marketName: `Market ${pos.marketIndex}`,
+              baseAssetAmount: baseAmount,
+              entryPrice,
+              currentPrice,
+              unrealizedPnL,
+              realizedPnL: 0,
+            };
+
+            positions.set(pos.marketIndex, position);
+            result.push(position);
+          }
+
+          return result;
+        } catch (err) {
+          logger.warn({ err }, 'Drift SDK getPositions failed, falling back to API');
+        }
+      }
+
+      // Fallback: fetch from API
       const data = await fetchApi<{
         positions: Array<{
           marketIndex: number;
@@ -362,14 +487,12 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
         return Array.from(positions.values());
       }
 
-      // Convert to our format
       const result: DriftPosition[] = [];
 
       for (const p of data.positions) {
         const baseAmount = parseFloat(p.baseAssetAmount) / 1e9;
         if (Math.abs(baseAmount) < 0.0001) continue;
 
-        // Get current price
         const prices = await trading.getMarketPrice(p.marketIndex);
         const currentPrice = baseAmount > 0 ? prices?.yes || 0.5 : prices?.no || 0.5;
         const entryPrice = Math.abs(parseFloat(p.quoteEntryAmount) / 1e6 / baseAmount);
@@ -397,6 +520,25 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
     },
 
     async getBalance() {
+      // Use SDK if available
+      if (driftClient) {
+        try {
+          const user = driftClient.getUser();
+          const totalCollateral = user.getTotalCollateral().toNumber() / 1e6;
+          const freeCollateral = user.getFreeCollateral().toNumber() / 1e6;
+          const unrealizedPnL = user.getUnrealizedPNL(true).toNumber() / 1e6;
+
+          return {
+            spotBalance: freeCollateral,
+            perpEquity: unrealizedPnL,
+            totalEquity: totalCollateral,
+          };
+        } catch (err) {
+          logger.warn({ err }, 'Drift SDK getBalance failed, falling back to API');
+        }
+      }
+
+      // Fallback: fetch from API
       const data = await fetchApi<{
         spotBalance: number;
         perpEquity: number;
