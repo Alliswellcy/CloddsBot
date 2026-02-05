@@ -428,18 +428,24 @@ export function createWhaleTracker(config: WhaleConfig = {}): WhaleTracker {
         }));
       }
 
-      // Start heartbeat ping
+      // Start JSON heartbeat ping (Polymarket requires JSON ping every 10s)
       if (pingInterval) clearInterval(pingInterval);
       pingInterval = setInterval(() => {
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.ping();
+          ws.send(JSON.stringify({ type: 'ping' }));
         }
-      }, 30000); // Ping every 30 seconds
+      }, 10000); // Ping every 10 seconds per Polymarket docs
     });
 
     ws.on('message', (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
+
+        // Handle pong response (JSON pong, not WebSocket pong)
+        if (message.type === 'pong') {
+          logger.debug('WebSocket JSON pong received');
+          return;
+        }
 
         if (message.type === 'trade' || message.event_type === 'trade') {
           handleTradeMessage(message);
@@ -447,11 +453,6 @@ export function createWhaleTracker(config: WhaleConfig = {}): WhaleTracker {
       } catch (error) {
         logger.error({ error, data: data.toString().slice(0, 200) }, 'Failed to parse WS message');
       }
-    });
-
-    ws.on('pong', () => {
-      // Connection is alive
-      logger.debug('WebSocket pong received');
     });
 
     ws.on('close', (code, reason) => {

@@ -20,6 +20,8 @@ import { buildPolymarketHeadersForUrl } from '../../utils/polymarket-auth.js';
 const USER_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/user';
 const PING_INTERVAL_MS = 10000; // 10 seconds per Polymarket docs
 const RECONNECT_DELAY_MS = 5000;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const RECONNECT_BACKOFF_MULTIPLIER = 1.5;
 
 export interface FillEvent {
   orderId: string;
@@ -74,6 +76,8 @@ export function createUserWebSocket(
   let reconnectTimeout: NodeJS.Timeout | null = null;
   let connected = false;
   let subscribed = false;
+  let reconnectAttempts = 0;
+  let currentReconnectDelay = RECONNECT_DELAY_MS;
 
   const sendSubscription = (): void => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -146,10 +150,12 @@ export function createUserWebSocket(
               return;
             }
 
-            // Handle subscription confirmation
-            if (message.type === 'subscribed' || message.channel === 'user') {
+            // Handle subscription confirmation (must be type=subscribed AND channel=user)
+            if (message.type === 'subscribed' && message.channel === 'user') {
               if (!subscribed) {
                 subscribed = true;
+                reconnectAttempts = 0; // Reset on successful subscription
+                currentReconnectDelay = RECONNECT_DELAY_MS;
                 logger.info({ userId }, 'User channel subscription confirmed');
               }
             }
@@ -206,14 +212,26 @@ export function createUserWebSocket(
           logger.info({ userId, code, reason: reason.toString() }, 'User WebSocket disconnected');
           emitter.emit('disconnected');
 
-          // Auto-reconnect after delay (unless intentionally closed)
+          // Auto-reconnect after delay (unless intentionally closed or max attempts reached)
           if (code !== 1000) {
+            if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+              logger.error({ userId, attempts: reconnectAttempts }, 'Max reconnect attempts reached, giving up');
+              emitter.emit('error', new Error(`Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached`));
+              return;
+            }
+
+            reconnectAttempts++;
+            logger.info({ userId, attempt: reconnectAttempts, delay: currentReconnectDelay }, 'Scheduling WebSocket reconnection');
+
             reconnectTimeout = setTimeout(() => {
-              logger.info({ userId }, 'Attempting WebSocket reconnection');
+              logger.info({ userId, attempt: reconnectAttempts }, 'Attempting WebSocket reconnection');
               connect().catch(err => {
                 logger.error({ userId, err }, 'Reconnection failed');
               });
-            }, RECONNECT_DELAY_MS);
+            }, currentReconnectDelay);
+
+            // Exponential backoff
+            currentReconnectDelay = Math.min(currentReconnectDelay * RECONNECT_BACKOFF_MULTIPLIER, 60000);
           }
         });
 

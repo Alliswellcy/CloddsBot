@@ -58,8 +58,38 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
   let reconnectTimer: NodeJS.Timeout | null = null;
   let initialSubscriptionSent = false;
   const subscriptions = new Map<string, Set<(update: PriceUpdate) => void>>();
-  const marketCache = new Map<string, Market>();
   const lastPrices = new Map<string, number>();
+
+  // Market cache with TTL and size limit to prevent memory leaks
+  const MARKET_CACHE_MAX_SIZE = 1000;
+  const MARKET_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+  const marketCache = new Map<string, { market: Market; cachedAt: number }>();
+
+  function getFromMarketCache(marketId: string): Market | undefined {
+    const entry = marketCache.get(marketId);
+    if (!entry) return undefined;
+    // Check TTL
+    if (Date.now() - entry.cachedAt > MARKET_CACHE_TTL_MS) {
+      marketCache.delete(marketId);
+      return undefined;
+    }
+    return entry.market;
+  }
+
+  function setInMarketCache(marketId: string, market: Market): void {
+    // Enforce size limit (LRU-style: delete oldest entries)
+    if (marketCache.size >= MARKET_CACHE_MAX_SIZE) {
+      // Delete first 10% of entries (oldest by insertion order)
+      const toDelete = Math.floor(MARKET_CACHE_MAX_SIZE * 0.1);
+      let deleted = 0;
+      for (const key of marketCache.keys()) {
+        if (deleted >= toDelete) break;
+        marketCache.delete(key);
+        deleted++;
+      }
+    }
+    marketCache.set(marketId, { market, cachedAt: Date.now() });
+  }
 
   // Freshness tracking for WebSocket health monitoring
   const freshnessTracker: FreshnessTracker = getGlobalFreshnessTracker();
@@ -459,14 +489,14 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
   };
 
   emitter.getMarket = async (_platform: string, marketId: string) => {
-    // Check cache first
-    const cached = marketCache.get(marketId);
+    // Check cache first (with TTL)
+    const cached = getFromMarketCache(marketId);
     if (cached) return cached;
 
     // Fetch from API
     const market = await fetchMarket(marketId);
     if (market) {
-      marketCache.set(marketId, market);
+      setInMarketCache(marketId, market);
     }
     return market;
   };
@@ -517,6 +547,7 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
         callbacks.delete(callback);
         if (callbacks.size === 0) {
           subscriptions.delete(marketId);
+          lastPrices.delete(marketId); // Clean up lastPrices to prevent memory leak
           freshnessTracker.untrack('polymarket', marketId);
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(
