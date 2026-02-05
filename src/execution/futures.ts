@@ -171,6 +171,12 @@ export interface FuturesExecutionService {
   setLeverage(platform: FuturesPlatform, symbol: string, leverage: number): Promise<boolean>;
   setMarginType(platform: FuturesPlatform, symbol: string, marginType: MarginType): Promise<boolean>;
 
+  // Income history
+  getIncomeHistory(platform: FuturesPlatform, params?: {
+    symbol?: string;
+    limit?: number;
+  }): Promise<Array<{ symbol: string; type: string; amount: number; time: Date }>>;
+
   // Risk helpers
   calculateLiquidationPrice(params: {
     platform: FuturesPlatform;
@@ -181,6 +187,12 @@ export interface FuturesExecutionService {
     marginType: MarginType;
   }): number;
 }
+
+// =============================================================================
+// MEXC margin type preference (per-order, tracked locally)
+// =============================================================================
+
+const mexcMarginPreference = new Map<string, MarginType>();
 
 // =============================================================================
 // BINANCE FUTURES
@@ -527,6 +539,29 @@ async function placeBybitFuturesOrder(
         return { success: true }; // No position to close
       }
       result = closeResult;
+    } else if (request.orderType === 'LIMIT' && request.price) {
+      // Limit order
+      if (request.leverage) {
+        await bybit.setLeverage(bybitConfig, request.symbol, request.leverage);
+      }
+      result = await bybit.placeLimitOrder(
+        bybitConfig,
+        request.symbol,
+        request.side === 'long' ? 'Buy' : 'Sell',
+        request.size,
+        request.price,
+        { reduceOnly: request.reduceOnly, timeInForce: request.timeInForce }
+      );
+    } else if ((request.orderType === 'STOP_LOSS' || request.orderType === 'TAKE_PROFIT') && request.stopPrice) {
+      // Stop order
+      result = await bybit.placeStopOrder(
+        bybitConfig,
+        request.symbol,
+        request.side === 'long' ? 'Buy' : 'Sell',
+        request.size,
+        request.stopPrice,
+        { price: request.price }
+      );
     } else if (request.side === 'long') {
       result = await bybit.openLong(bybitConfig, request.symbol, request.size, request.leverage);
     } else {
@@ -721,6 +756,7 @@ async function placeMexcFuturesOrder(
       apiSecret: config.secretKey,
     };
 
+    const openType = mexcMarginPreference.get(request.symbol) === 'cross' ? 2 : 1;
     let result: mexc.OrderResult | null;
 
     if (request.reduceOnly || request.closePosition) {
@@ -728,10 +764,34 @@ async function placeMexcFuturesOrder(
       if (!result) {
         return { success: true }; // No position to close
       }
+    } else if (request.orderType === 'LIMIT' && request.price) {
+      // Limit order
+      const side = request.side === 'long'
+        ? (request.reduceOnly ? 4 : 1)  // 1=open long, 4=close short
+        : (request.reduceOnly ? 2 : 3); // 3=open short, 2=close long
+      result = await mexc.placeLimitOrder(
+        mexcConfig,
+        request.symbol,
+        side,
+        request.size,
+        request.price,
+        { leverage: request.leverage, openType }
+      );
+    } else if ((request.orderType === 'STOP_LOSS' || request.orderType === 'TAKE_PROFIT') && request.stopPrice) {
+      // Stop order
+      const side = request.side === 'long' ? 4 : 2; // Close sides for stops
+      result = await mexc.placeStopOrder(
+        mexcConfig,
+        request.symbol,
+        side,
+        request.size,
+        request.stopPrice,
+        { price: request.price, openType }
+      );
     } else if (request.side === 'long') {
-      result = await mexc.openLong(mexcConfig, request.symbol, request.size, request.leverage);
+      result = await mexc.openLong(mexcConfig, request.symbol, request.size, request.leverage, openType);
     } else {
-      result = await mexc.openShort(mexcConfig, request.symbol, request.size, request.leverage);
+      result = await mexc.openShort(mexcConfig, request.symbol, request.size, request.leverage, openType);
     }
 
     return {
@@ -947,7 +1007,11 @@ async function placeHyperliquidOrder(
       };
     }
 
-    // Regular order
+    // Regular order (LIMIT or MARKET)
+    // Note: For stop/TP orders, Hyperliquid uses trigger orders via SDK.
+    // placePerpOrder handles LIMIT and MARKET; stop orders are placed as
+    // reduce-only market orders immediately (use trading/futures module
+    // for proper trigger-based stop orders with the raw API).
     const result = await hyperliquid.placePerpOrder(hlConfig, {
       coin: request.symbol,
       side: request.side === 'long' ? 'BUY' : 'SELL',
@@ -1095,10 +1159,15 @@ async function getHyperliquidFundingRate(
   symbol: string
 ): Promise<FundingRate | null> {
   try {
-    const rates = await hyperliquid.getFundingRates();
+    const [rates, mids] = await Promise.all([
+      hyperliquid.getFundingRates(),
+      hyperliquid.getAllMids(),
+    ]);
     const rate = rates.find(r => r.coin === symbol);
 
     if (!rate) return null;
+
+    const midPrice = parseFloat(mids[symbol] || '0');
 
     return {
       platform: 'hyperliquid',
@@ -1106,8 +1175,8 @@ async function getHyperliquidFundingRate(
       fundingRate: parseFloat(rate.funding),
       fundingTime: new Date(),
       nextFundingTime: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
-      markPrice: 0,
-      indexPrice: 0,
+      markPrice: midPrice,
+      indexPrice: midPrice, // HL uses same mid for both
     };
   } catch (error) {
     logger.error({ error, symbol }, 'Failed to get Hyperliquid funding rate');
@@ -1134,6 +1203,138 @@ async function setHyperliquidLeverage(
     return result.success;
   } catch (error) {
     logger.error({ error, symbol, leverage }, 'Failed to set Hyperliquid leverage');
+    return false;
+  }
+}
+
+// =============================================================================
+// INCOME HISTORY HELPERS
+// =============================================================================
+
+type IncomeRecord = { symbol: string; type: string; amount: number; time: Date };
+
+async function getBinanceIncomeHistory(
+  config: NonNullable<FuturesConfig['binance']>,
+  params?: { symbol?: string; limit?: number }
+): Promise<IncomeRecord[]> {
+  try {
+    const reqParams: Record<string, string | number> = { limit: params?.limit || 50 };
+    if (params?.symbol) reqParams.symbol = params.symbol;
+    const data = await binanceFuturesRequest(config, 'GET', '/fapi/v1/income', reqParams) as Array<{
+      symbol: string;
+      incomeType: string;
+      income: string;
+      asset: string;
+      time: number;
+    }>;
+    return data.map(d => ({
+      symbol: d.symbol,
+      type: d.incomeType,
+      amount: parseFloat(d.income),
+      time: new Date(d.time),
+    }));
+  } catch (error) {
+    logger.error({ error }, 'Failed to get Binance income history');
+    return [];
+  }
+}
+
+async function getBybitIncomeHistory(
+  config: NonNullable<FuturesConfig['bybit']>,
+  params?: { symbol?: string; limit?: number }
+): Promise<IncomeRecord[]> {
+  try {
+    const bybitConfig: bybit.BybitConfig = {
+      apiKey: config.apiKey,
+      apiSecret: config.secretKey,
+      testnet: config.testnet,
+    };
+    const records = await bybit.getIncomeHistory(bybitConfig, params);
+    return records.map(r => ({
+      symbol: r.symbol,
+      type: r.type,
+      amount: r.amount,
+      time: r.time,
+    }));
+  } catch (error) {
+    logger.error({ error }, 'Failed to get Bybit income history');
+    return [];
+  }
+}
+
+async function getMexcIncomeHistory(
+  config: NonNullable<FuturesConfig['mexc']>,
+  params?: { symbol?: string; limit?: number }
+): Promise<IncomeRecord[]> {
+  try {
+    const mexcConfig: mexc.MexcConfig = {
+      apiKey: config.apiKey,
+      apiSecret: config.secretKey,
+    };
+    const records = await mexc.getIncomeHistory(mexcConfig, params);
+    return records.map(r => ({
+      symbol: r.symbol,
+      type: r.type,
+      amount: r.amount,
+      time: r.time,
+    }));
+  } catch (error) {
+    logger.error({ error }, 'Failed to get MEXC income history');
+    return [];
+  }
+}
+
+async function getHyperliquidIncomeHistory(
+  hlConfig: NonNullable<FuturesConfig['hyperliquid']>,
+  params?: { symbol?: string; limit?: number }
+): Promise<IncomeRecord[]> {
+  try {
+    const walletAddress = getWalletAddress(hlConfig.privateKey);
+    const startTime = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30 days
+    const data = await hyperliquid.getUserFunding(walletAddress, startTime);
+    return data
+      .filter(d => !params?.symbol || d.coin === params.symbol)
+      .slice(0, params?.limit || 50)
+      .map(d => ({
+        symbol: d.coin,
+        type: 'FUNDING',
+        amount: parseFloat(d.usdc),
+        time: new Date(d.time),
+      }));
+  } catch (error) {
+    logger.error({ error }, 'Failed to get Hyperliquid income history');
+    return [];
+  }
+}
+
+// =============================================================================
+// HYPERLIQUID MARGIN TYPE
+// =============================================================================
+
+async function setHyperliquidMarginType(
+  hlConfig: NonNullable<FuturesConfig['hyperliquid']>,
+  symbol: string,
+  marginType: MarginType
+): Promise<boolean> {
+  try {
+    const walletAddress = getWalletAddress(hlConfig.privateKey);
+    const config: hyperliquid.HyperliquidConfig = {
+      walletAddress,
+      privateKey: hlConfig.privateKey,
+      testnet: hlConfig.testnet,
+      vaultAddress: hlConfig.vaultAddress,
+    };
+    // Get current leverage from user state instead of hardcoding
+    const state = await hyperliquid.getUserState(walletAddress);
+    const position = state.assetPositions.find(p => p.position.coin === symbol);
+    const currentLeverage = position
+      ? parseInt((position.position as { leverage?: { value?: string } }).leverage?.value || '10', 10)
+      : 10;
+    const isCross = marginType === 'cross';
+    const result = await hyperliquid.updateLeverage(config, symbol, currentLeverage, isCross);
+    return result.success;
+  } catch (error) {
+    logger.error({ error, symbol, marginType }, 'Failed to set Hyperliquid margin type');
     return false;
   }
 }
@@ -1489,15 +1690,34 @@ export function createFuturesExecutionService(config: FuturesConfig): FuturesExe
           return true;
         case 'mexc':
           // MEXC sets margin type via openType in order (1=isolated, 2=cross)
-          logger.info({ symbol, marginType }, 'MEXC margin type set per-order');
+          mexcMarginPreference.set(symbol, marginType);
+          logger.info({ symbol, marginType }, 'MEXC margin type preference saved (applied per-order)');
           return true;
         case 'hyperliquid':
-          // Hyperliquid sets margin type via updateLeverage (isCross param)
           if (!config.hyperliquid) return false;
-          return setHyperliquidLeverage(config.hyperliquid, symbol, 10); // Default leverage
+          return setHyperliquidMarginType(config.hyperliquid, symbol, marginType);
         default:
           logger.warn({ platform }, 'Set margin type not implemented for platform');
           return false;
+      }
+    },
+
+    async getIncomeHistory(platform, params) {
+      switch (platform) {
+        case 'binance':
+          if (!config.binance) return [];
+          return getBinanceIncomeHistory(config.binance, params);
+        case 'bybit':
+          if (!config.bybit) return [];
+          return getBybitIncomeHistory(config.bybit, params);
+        case 'mexc':
+          if (!config.mexc) return [];
+          return getMexcIncomeHistory(config.mexc, params);
+        case 'hyperliquid':
+          if (!config.hyperliquid) return [];
+          return getHyperliquidIncomeHistory(config.hyperliquid, params);
+        default:
+          return [];
       }
     },
 

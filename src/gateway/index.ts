@@ -42,7 +42,7 @@ import { createOpportunityFinder, type OpportunityFinder } from '../opportunity'
 import { createWhaleTracker, type WhaleTracker } from '../feeds/polymarket/whale-tracker';
 import { createCopyTradingService, type CopyTradingService } from '../trading/copy-trading';
 import { createSmartRouter, type SmartRouter } from '../execution/smart-router';
-import { createExecutionService, type ExecutionService, createFuturesExecutionService, type FuturesExecutionService } from '../execution';
+import { createExecutionService, type ExecutionService } from '../execution';
 import { createRealtimeAlertsService, connectWhaleTracker, connectOpportunityFinder, type RealtimeAlertsService } from '../alerts';
 import { createOpportunityExecutor, type OpportunityExecutor } from '../opportunity/executor';
 import { createTickRecorder, type TickRecorder } from '../services/tick-recorder';
@@ -579,56 +579,6 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         { error },
         'Failed to create execution queue producer - falling back to direct execution'
       );
-    }
-  }
-
-  // Create futures execution service (for perps trading)
-  let futuresService: FuturesExecutionService | null = null;
-  if (config.futures?.enabled) {
-    const binanceCfg = config.futures.binance;
-    const bybitCfg = config.futures.bybit;
-    const mexcCfg = config.futures.mexc;
-    const hyperliquidCfg = config.futures.hyperliquid;
-
-    const hasBinance = !!binanceCfg?.apiKey && !!binanceCfg?.secretKey;
-    const hasBybit = !!bybitCfg?.apiKey && !!bybitCfg?.secretKey;
-    const hasMexc = !!mexcCfg?.apiKey && !!mexcCfg?.secretKey;
-    const hasHyperliquid = !!hyperliquidCfg?.privateKey;
-
-    if (hasBinance || hasBybit || hasMexc || hasHyperliquid) {
-      futuresService = createFuturesExecutionService({
-        binance: hasBinance ? {
-          apiKey: binanceCfg!.apiKey,
-          secretKey: binanceCfg!.secretKey,
-          testnet: binanceCfg!.testnet,
-        } : undefined,
-        bybit: hasBybit ? {
-          apiKey: bybitCfg!.apiKey,
-          secretKey: bybitCfg!.secretKey,
-          testnet: bybitCfg!.testnet,
-        } : undefined,
-        mexc: hasMexc ? {
-          apiKey: mexcCfg!.apiKey,
-          secretKey: mexcCfg!.secretKey,
-        } : undefined,
-        hyperliquid: hasHyperliquid ? {
-          privateKey: hyperliquidCfg!.privateKey,
-          vaultAddress: hyperliquidCfg!.vaultAddress,
-          testnet: hyperliquidCfg!.testnet,
-        } : undefined,
-        defaultLeverage: config.futures.defaultLeverage ?? 10,
-        maxPositionSize: config.futures.maxPositionSize ?? 10000,
-        dryRun: config.futures.dryRun ?? false,
-      });
-      logger.info({
-        dryRun: config.futures.dryRun ?? false,
-        binance: hasBinance,
-        bybit: hasBybit,
-        mexc: hasMexc,
-        hyperliquid: hasHyperliquid,
-      }, 'Futures execution service initialized');
-    } else {
-      logger.warn('Futures trading enabled but no exchange credentials configured');
     }
   }
 

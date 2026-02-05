@@ -381,3 +381,126 @@ export async function cancelAllOrders(
   await c.cancelAllOrders({ category: 'linear', symbol });
   return 1;
 }
+
+export async function placeLimitOrder(
+  config: BybitConfig,
+  symbol: string,
+  side: 'Buy' | 'Sell',
+  qty: number,
+  price: number,
+  params?: { reduceOnly?: boolean; timeInForce?: string }
+): Promise<OrderResult> {
+  if (config.dryRun) {
+    logger.info({ symbol, side, qty, price }, '[DRY RUN] Place limit order');
+    return {
+      orderId: Date.now().toString(),
+      symbol,
+      side,
+      orderType: 'Limit',
+      price,
+      qty,
+      cumExecQty: 0,
+      avgPrice: 0,
+      orderStatus: 'DRY_RUN',
+    };
+  }
+
+  const c = getClient(config);
+  const result = await c.submitOrder({
+    category: 'linear',
+    symbol,
+    side,
+    orderType: 'Limit',
+    qty: String(qty),
+    price: String(price),
+    timeInForce: (params?.timeInForce || 'GTC') as 'GTC' | 'IOC' | 'FOK',
+    ...(params?.reduceOnly ? { reduceOnly: true } : {}),
+  });
+
+  return {
+    orderId: result.result.orderId,
+    symbol,
+    side,
+    orderType: 'Limit',
+    price,
+    qty,
+    cumExecQty: 0,
+    avgPrice: 0,
+    orderStatus: 'New',
+  };
+}
+
+export async function placeStopOrder(
+  config: BybitConfig,
+  symbol: string,
+  side: 'Buy' | 'Sell',
+  qty: number,
+  triggerPrice: number,
+  params?: { price?: number }
+): Promise<OrderResult> {
+  if (config.dryRun) {
+    logger.info({ symbol, side, qty, triggerPrice }, '[DRY RUN] Place stop order');
+    return {
+      orderId: Date.now().toString(),
+      symbol,
+      side,
+      orderType: 'Stop',
+      price: triggerPrice,
+      qty,
+      cumExecQty: 0,
+      avgPrice: 0,
+      orderStatus: 'DRY_RUN',
+    };
+  }
+
+  const c = getClient(config);
+  const result = await c.submitOrder({
+    category: 'linear',
+    symbol,
+    side,
+    orderType: params?.price ? 'Limit' : 'Market',
+    qty: String(qty),
+    triggerPrice: String(triggerPrice),
+    triggerBy: 'MarkPrice',
+    reduceOnly: true,
+    ...(params?.price ? { price: String(params.price), timeInForce: 'GTC' as const } : {}),
+  });
+
+  return {
+    orderId: result.result.orderId,
+    symbol,
+    side,
+    orderType: 'Stop',
+    price: triggerPrice,
+    qty,
+    cumExecQty: 0,
+    avgPrice: 0,
+    orderStatus: 'New',
+  };
+}
+
+export interface IncomeRecord {
+  symbol: string;
+  type: string;
+  amount: number;
+  time: Date;
+}
+
+export async function getIncomeHistory(
+  config: BybitConfig,
+  params?: { symbol?: string; limit?: number }
+): Promise<IncomeRecord[]> {
+  const c = getClient(config);
+  const result = await c.getClosedPnL({
+    category: 'linear',
+    ...(params?.symbol ? { symbol: params.symbol } : {}),
+    limit: params?.limit || 50,
+  });
+
+  return result.result.list.map((r: { symbol: string; closedPnl: string; createdTime: string }) => ({
+    symbol: r.symbol,
+    type: 'REALIZED_PNL',
+    amount: parseFloat(r.closedPnl),
+    time: new Date(parseInt(r.createdTime, 10)),
+  }));
+}

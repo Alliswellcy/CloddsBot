@@ -247,7 +247,8 @@ export async function openLong(
   config: MexcConfig,
   symbol: string,
   vol: number,
-  leverage?: number
+  leverage?: number,
+  openType?: number // 1=Isolated, 2=Cross
 ): Promise<OrderResult> {
   if (leverage) {
     await setLeverage(config, symbol, leverage);
@@ -274,7 +275,7 @@ export async function openLong(
     type: 5, // 5=Market
     vol,
     leverage: leverage || 10,
-    openType: 1, // 1=Isolated, 2=Cross
+    openType: openType || 1, // 1=Isolated, 2=Cross
   }) as { orderId: string };
 
   return {
@@ -294,7 +295,8 @@ export async function openShort(
   config: MexcConfig,
   symbol: string,
   vol: number,
-  leverage?: number
+  leverage?: number,
+  openType?: number // 1=Isolated, 2=Cross
 ): Promise<OrderResult> {
   if (leverage) {
     await setLeverage(config, symbol, leverage);
@@ -321,7 +323,7 @@ export async function openShort(
     type: 5, // 5=Market
     vol,
     leverage: leverage || 10,
-    openType: 1,
+    openType: openType || 1,
   }) as { orderId: string };
 
   return {
@@ -429,4 +431,133 @@ export async function cancelAllOrders(
 
   await request(config, 'POST', '/api/v1/private/order/cancel_all', { symbol });
   return 1;
+}
+
+export async function placeLimitOrder(
+  config: MexcConfig,
+  symbol: string,
+  side: number, // 1=open long, 2=close short, 3=open short, 4=close long
+  vol: number,
+  price: number,
+  params?: { leverage?: number; openType?: number }
+): Promise<OrderResult> {
+  if (config.dryRun) {
+    logger.info({ symbol, side, vol, price }, '[DRY RUN] Place limit order');
+    return {
+      orderId: Date.now().toString(),
+      symbol,
+      side,
+      orderType: 1,
+      price,
+      vol,
+      dealVol: 0,
+      dealAvgPrice: 0,
+      state: 0,
+    };
+  }
+
+  const data = await request(config, 'POST', '/api/v1/private/order/submit', {
+    symbol,
+    side,
+    type: 1, // 1=Limit
+    vol,
+    price,
+    leverage: params?.leverage || 10,
+    openType: params?.openType || 1,
+  }) as { orderId: string };
+
+  return {
+    orderId: data.orderId,
+    symbol,
+    side,
+    orderType: 1,
+    price,
+    vol,
+    dealVol: 0,
+    dealAvgPrice: 0,
+    state: 2,
+  };
+}
+
+export async function placeStopOrder(
+  config: MexcConfig,
+  symbol: string,
+  side: number, // 2=close long, 4=close short
+  vol: number,
+  triggerPrice: number,
+  params?: { price?: number; openType?: number }
+): Promise<OrderResult> {
+  if (config.dryRun) {
+    logger.info({ symbol, side, vol, triggerPrice }, '[DRY RUN] Place stop order');
+    return {
+      orderId: Date.now().toString(),
+      symbol,
+      side,
+      orderType: params?.price ? 1 : 5,
+      price: params?.price || triggerPrice,
+      vol,
+      dealVol: 0,
+      dealAvgPrice: 0,
+      state: 0,
+    };
+  }
+
+  const orderParams: Record<string, string | number> = {
+    symbol,
+    side,
+    type: params?.price ? 1 : 5, // 1=limit, 5=market
+    vol,
+    triggerPrice,
+    triggerType: 1, // 1=trigger by mark price
+    openType: params?.openType || 1,
+  };
+
+  if (params?.price) {
+    orderParams.price = params.price;
+  }
+
+  const data = await request(config, 'POST', '/api/v1/private/order/submit', orderParams) as { orderId: string };
+
+  return {
+    orderId: data.orderId,
+    symbol,
+    side,
+    orderType: params?.price ? 1 : 5,
+    price: params?.price || triggerPrice,
+    vol,
+    dealVol: 0,
+    dealAvgPrice: 0,
+    state: 2,
+  };
+}
+
+export interface IncomeRecord {
+  symbol: string;
+  type: string;
+  amount: number;
+  time: Date;
+}
+
+export async function getIncomeHistory(
+  config: MexcConfig,
+  params?: { symbol?: string; limit?: number }
+): Promise<IncomeRecord[]> {
+  const reqParams: Record<string, string | number> = {
+    page_num: 1,
+    page_size: params?.limit || 50,
+  };
+  if (params?.symbol) reqParams.symbol = params.symbol;
+
+  const data = await request(config, 'GET', '/api/v1/private/position/list/history_positions', reqParams) as Array<{
+    symbol: string;
+    realisedPnl: number;
+    closeTime: number;
+  }>;
+
+  return data.map((d) => ({
+    symbol: d.symbol,
+    type: 'REALIZED_PNL',
+    amount: d.realisedPnl || 0,
+    time: new Date(d.closeTime || Date.now()),
+  }));
 }

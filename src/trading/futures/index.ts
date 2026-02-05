@@ -14,11 +14,54 @@
  */
 
 import { EventEmitter } from 'events';
-import { createHmac, createHash, randomBytes } from 'crypto';
+import { createHmac, randomBytes } from 'crypto';
 import * as secp from '@noble/secp256k1';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { logger } from '../../utils/logger';
-import { Pool, PoolClient } from 'pg';
+import { Pool } from 'pg';
+
+// =============================================================================
+// HELPERS
+// =============================================================================
+
+/** Safe parseFloat that returns fallback instead of NaN */
+function safeFloat(value: unknown, fallback = 0): number {
+  const n = parseFloat(String(value));
+  return isNaN(n) || !isFinite(n) ? fallback : n;
+}
+
+/** Fetch with retry for transient errors (429, 502, 503, 504) */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  maxRetries = 3,
+): Promise<Response> {
+  const retryableStatuses = new Set([429, 502, 503, 504]);
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      if (retryableStatuses.has(response.status) && attempt < maxRetries) {
+        const delay = Math.min(1000 * 2 ** attempt, 10_000);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      return response;
+    } catch (err) {
+      lastError = err as Error;
+      // Retry on network errors, not on abort (timeout)
+      if ((err as Error).name === 'AbortError') throw err;
+      if (attempt < maxRetries) {
+        const delay = Math.min(1000 * 2 ** attempt, 10_000);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+    }
+  }
+
+  throw lastError || new Error('Fetch failed after retries');
+}
 
 // =============================================================================
 // TYPES
@@ -294,16 +337,6 @@ function keccak256(data: Uint8Array | Buffer): Buffer {
   return Buffer.from(keccak_256(data));
 }
 
-function privateKeyToAddress(privateKey: string): string {
-  const privKeyBytes = Buffer.from(privateKey.replace('0x', ''), 'hex');
-  // Get uncompressed public key (65 bytes, starting with 0x04)
-  const pubKey = secp.getPublicKey(privKeyBytes, false);
-  // Remove the 0x04 prefix and hash
-  const pubKeyHash = keccak256(pubKey.slice(1));
-  // Take last 20 bytes
-  return '0x' + pubKeyHash.slice(-20).toString('hex');
-}
-
 function signMessage(message: Buffer, privateKey: string): { r: string; s: string; v: number } {
   const privKeyBytes = Buffer.from(privateKey.replace('0x', ''), 'hex');
   const msgHash = keccak256(message);
@@ -360,13 +393,14 @@ class BinanceFuturesClient {
       Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)));
     }
 
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithRetry(url.toString(), {
       method,
       headers: {
         'X-MBX-APIKEY': this.apiKey,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: method !== 'GET' ? new URLSearchParams(params as Record<string, string>).toString() : undefined,
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!response.ok) {
@@ -388,10 +422,10 @@ class BinanceFuturesClient {
     return {
       exchange: 'binance',
       asset: 'USDT',
-      available: parseFloat(usdt.availableBalance),
-      total: parseFloat(usdt.balance),
-      unrealizedPnl: parseFloat(usdt.crossUnPnl),
-      marginBalance: parseFloat(usdt.balance) + parseFloat(usdt.crossUnPnl),
+      available: safeFloat(usdt.availableBalance),
+      total: safeFloat(usdt.balance),
+      unrealizedPnl: safeFloat(usdt.crossUnPnl),
+      marginBalance: safeFloat(usdt.balance) + safeFloat(usdt.crossUnPnl),
     };
   }
 
@@ -409,27 +443,28 @@ class BinanceFuturesClient {
     }>;
 
     return data
-      .filter(p => parseFloat(p.positionAmt) !== 0)
+      .filter(p => safeFloat(p.positionAmt) !== 0)
       .map(p => {
-        const size = parseFloat(p.positionAmt);
-        const entryPrice = parseFloat(p.entryPrice);
-        const markPrice = parseFloat(p.markPrice);
-        const pnl = parseFloat(p.unRealizedProfit);
+        const size = safeFloat(p.positionAmt);
+        const entryPrice = safeFloat(p.entryPrice);
+        const markPrice = safeFloat(p.markPrice);
+        const pnl = safeFloat(p.unRealizedProfit);
+        const leverage = parseInt(p.leverage, 10) || 1;
         const positionValue = Math.abs(size) * entryPrice;
 
         return {
           exchange: 'binance' as FuturesExchange,
           symbol: p.symbol,
-          side: size > 0 ? 'LONG' : 'SHORT' as PositionSide,
+          side: (size > 0 ? 'LONG' : 'SHORT') as PositionSide,
           size: Math.abs(size),
           entryPrice,
           markPrice,
-          liquidationPrice: parseFloat(p.liquidationPrice),
-          leverage: parseInt(p.leverage),
+          liquidationPrice: safeFloat(p.liquidationPrice),
+          leverage,
           marginType: p.marginType.toUpperCase() as MarginType,
           unrealizedPnl: pnl,
           unrealizedPnlPct: positionValue > 0 ? (pnl / positionValue) * 100 : 0,
-          margin: parseFloat(p.isolatedMargin) || positionValue / parseInt(p.leverage),
+          margin: safeFloat(p.isolatedMargin) || (leverage > 0 ? positionValue / leverage : 0),
           timestamp: Date.now(),
         };
       });
@@ -490,28 +525,7 @@ class BinanceFuturesClient {
       updateTime: number;
     };
 
-    // Place TP/SL orders if specified
-    if (order.takeProfit) {
-      await this.request('POST', '/fapi/v1/order', {
-        symbol: order.symbol,
-        side: order.side === 'BUY' ? 'SELL' : 'BUY',
-        type: 'TAKE_PROFIT_MARKET',
-        stopPrice: order.takeProfit,
-        closePosition: 'true',
-      }, true);
-    }
-
-    if (order.stopLoss) {
-      await this.request('POST', '/fapi/v1/order', {
-        symbol: order.symbol,
-        side: order.side === 'BUY' ? 'SELL' : 'BUY',
-        type: 'STOP_MARKET',
-        stopPrice: order.stopLoss,
-        closePosition: 'true',
-      }, true);
-    }
-
-    return {
+    const mainOrder: FuturesOrder = {
       id: String(result.orderId),
       exchange: 'binance',
       symbol: result.symbol,
@@ -525,9 +539,41 @@ class BinanceFuturesClient {
       avgFillPrice: parseFloat(result.avgPrice),
       timestamp: result.updateTime,
     };
+
+    // Place TP/SL orders if specified — don't let failures lose the main order
+    try {
+      if (order.takeProfit) {
+        await this.request('POST', '/fapi/v1/order', {
+          symbol: order.symbol,
+          side: order.side === 'BUY' ? 'SELL' : 'BUY',
+          type: 'TAKE_PROFIT_MARKET',
+          stopPrice: order.takeProfit,
+          closePosition: 'true',
+        }, true);
+      }
+    } catch (err) {
+      logger.error({ err, symbol: order.symbol, takeProfit: order.takeProfit }, 'Failed to place take-profit order (main order succeeded)');
+    }
+
+    try {
+      if (order.stopLoss) {
+        await this.request('POST', '/fapi/v1/order', {
+          symbol: order.symbol,
+          side: order.side === 'BUY' ? 'SELL' : 'BUY',
+          type: 'STOP_MARKET',
+          stopPrice: order.stopLoss,
+          closePosition: 'true',
+        }, true);
+      }
+    } catch (err) {
+      logger.error({ err, symbol: order.symbol, stopLoss: order.stopLoss }, 'Failed to place stop-loss order (main order succeeded)');
+    }
+
+    return mainOrder;
   }
 
   private createDryRunOrder(order: FuturesOrderRequest): FuturesOrder {
+    const isMarket = order.type === 'MARKET';
     return {
       id: `dry-${Date.now()}-${randomBytes(4).toString('hex')}`,
       exchange: 'binance',
@@ -538,9 +584,9 @@ class BinanceFuturesClient {
       price: order.price,
       leverage: order.leverage || 1,
       reduceOnly: order.reduceOnly || false,
-      status: 'FILLED',
-      filledSize: order.size,
-      avgFillPrice: order.price || 0,
+      status: isMarket ? 'FILLED' : 'NEW',
+      filledSize: isMarket ? order.size : 0,
+      avgFillPrice: isMarket ? (order.price || 0) : 0,
       timestamp: Date.now(),
     };
   }
@@ -688,38 +734,38 @@ class BinanceFuturesClient {
     };
 
     const positions = data.positions
-      .filter(p => parseFloat(p.positionAmt) !== 0)
+      .filter(p => safeFloat(p.positionAmt) !== 0)
       .map(p => {
-        const size = parseFloat(p.positionAmt);
-        const entryPrice = parseFloat(p.entryPrice);
-        const markPrice = parseFloat(p.markPrice);
-        const pnl = parseFloat(p.unRealizedProfit);
+        const size = safeFloat(p.positionAmt);
+        const entryPrice = safeFloat(p.entryPrice);
+        const markPrice = safeFloat(p.markPrice);
+        const pnl = safeFloat(p.unRealizedProfit);
         return {
           exchange: 'binance' as FuturesExchange,
           symbol: p.symbol,
-          side: size > 0 ? 'LONG' : 'SHORT' as PositionSide,
+          side: (size > 0 ? 'LONG' : 'SHORT') as PositionSide,
           size: Math.abs(size),
           entryPrice,
           markPrice,
-          liquidationPrice: parseFloat(p.liquidationPrice),
-          leverage: parseInt(p.leverage),
+          liquidationPrice: safeFloat(p.liquidationPrice),
+          leverage: parseInt(p.leverage, 10) || 1,
           marginType: p.marginType.toUpperCase() as MarginType,
           unrealizedPnl: pnl,
           unrealizedPnlPct: Math.abs(size) * entryPrice > 0 ? (pnl / (Math.abs(size) * entryPrice)) * 100 : 0,
-          margin: parseFloat(p.isolatedMargin) || 0,
+          margin: safeFloat(p.isolatedMargin),
           timestamp: Date.now(),
         };
       });
 
     return {
       exchange: 'binance',
-      totalWalletBalance: parseFloat(data.totalWalletBalance),
-      totalUnrealizedProfit: parseFloat(data.totalUnrealizedProfit),
-      totalMarginBalance: parseFloat(data.totalMarginBalance),
-      totalPositionInitialMargin: parseFloat(data.totalPositionInitialMargin),
-      totalOpenOrderInitialMargin: parseFloat(data.totalOpenOrderInitialMargin),
-      availableBalance: parseFloat(data.availableBalance),
-      maxWithdrawAmount: parseFloat(data.maxWithdrawAmount),
+      totalWalletBalance: safeFloat(data.totalWalletBalance),
+      totalUnrealizedProfit: safeFloat(data.totalUnrealizedProfit),
+      totalMarginBalance: safeFloat(data.totalMarginBalance),
+      totalPositionInitialMargin: safeFloat(data.totalPositionInitialMargin),
+      totalOpenOrderInitialMargin: safeFloat(data.totalOpenOrderInitialMargin),
+      availableBalance: safeFloat(data.availableBalance),
+      maxWithdrawAmount: safeFloat(data.maxWithdrawAmount),
       canTrade: data.canTrade,
       canDeposit: data.canDeposit,
       canWithdraw: data.canWithdraw,
@@ -1613,7 +1659,7 @@ class BybitFuturesClient {
       url.search = queryString;
     }
 
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithRetry(url.toString(), {
       method,
       headers: {
         'X-BAPI-API-KEY': this.apiKey,
@@ -1623,6 +1669,7 @@ class BybitFuturesClient {
         'Content-Type': 'application/json',
       },
       body: method === 'POST' ? body : undefined,
+      signal: AbortSignal.timeout(30_000),
     });
 
     const data = await response.json() as { retCode: number; retMsg: string; result: unknown };
@@ -1648,10 +1695,10 @@ class BybitFuturesClient {
     return {
       exchange: 'bybit',
       asset: 'USDT',
-      available: parseFloat(usdt.availableToWithdraw),
-      total: parseFloat(usdt.walletBalance),
-      unrealizedPnl: parseFloat(usdt.unrealisedPnl),
-      marginBalance: parseFloat(usdt.walletBalance),
+      available: safeFloat(usdt.availableToWithdraw),
+      total: safeFloat(usdt.walletBalance),
+      unrealizedPnl: safeFloat(usdt.unrealisedPnl),
+      marginBalance: safeFloat(usdt.walletBalance),
     };
   }
 
@@ -1673,27 +1720,27 @@ class BybitFuturesClient {
     }> };
 
     return data.list
-      .filter(p => parseFloat(p.size) > 0)
+      .filter(p => safeFloat(p.size) > 0)
       .map(p => {
-        const size = parseFloat(p.size);
-        const entryPrice = parseFloat(p.avgPrice);
-        const markPrice = parseFloat(p.markPrice);
-        const pnl = parseFloat(p.unrealisedPnl);
+        const size = safeFloat(p.size);
+        const entryPrice = safeFloat(p.avgPrice);
+        const markPrice = safeFloat(p.markPrice);
+        const pnl = safeFloat(p.unrealisedPnl);
         const positionValue = size * entryPrice;
 
         return {
           exchange: 'bybit' as FuturesExchange,
           symbol: p.symbol,
-          side: p.side === 'Buy' ? 'LONG' : 'SHORT' as PositionSide,
+          side: (p.side === 'Buy' ? 'LONG' : 'SHORT') as PositionSide,
           size,
           entryPrice,
           markPrice,
-          liquidationPrice: parseFloat(p.liqPrice),
-          leverage: parseInt(p.leverage),
-          marginType: p.tradeMode === 0 ? 'CROSS' : 'ISOLATED' as MarginType,
+          liquidationPrice: safeFloat(p.liqPrice),
+          leverage: parseInt(p.leverage, 10) || 1,
+          marginType: (p.tradeMode === 0 ? 'CROSS' : 'ISOLATED') as MarginType,
           unrealizedPnl: pnl,
           unrealizedPnlPct: positionValue > 0 ? (pnl / positionValue) * 100 : 0,
-          margin: parseFloat(p.positionIM),
+          margin: safeFloat(p.positionIM),
           timestamp: Date.now(),
         };
       });
@@ -1723,11 +1770,12 @@ class BybitFuturesClient {
       await this.setLeverage(order.symbol, order.leverage);
     }
 
+    const isStopOrder = order.type === 'STOP_MARKET' || order.type === 'TAKE_PROFIT_MARKET';
     const params: Record<string, string | number | boolean> = {
       category: 'linear',
       symbol: order.symbol,
       side: order.side === 'BUY' ? 'Buy' : 'Sell',
-      orderType: order.type === 'MARKET' ? 'Market' : 'Limit',
+      orderType: (order.type === 'MARKET' || isStopOrder) ? 'Market' : 'Limit',
       qty: String(order.size),
     };
 
@@ -1735,8 +1783,14 @@ class BybitFuturesClient {
       params.price = String(order.price);
     }
 
-    if (order.reduceOnly) {
+    if (order.reduceOnly || isStopOrder) {
       params.reduceOnly = true;
+    }
+
+    // Set trigger price for stop/TP orders
+    if (isStopOrder && order.stopPrice) {
+      params.triggerPrice = String(order.stopPrice);
+      params.triggerBy = 'MarkPrice';
     }
 
     if (order.takeProfit) {
@@ -1760,8 +1814,9 @@ class BybitFuturesClient {
       type: order.type,
       size: order.size,
       price: order.price,
+      stopPrice: order.stopPrice,
       leverage: order.leverage || 1,
-      reduceOnly: order.reduceOnly || false,
+      reduceOnly: order.reduceOnly || isStopOrder,
       status: 'NEW',
       filledSize: 0,
       avgFillPrice: 0,
@@ -1770,6 +1825,7 @@ class BybitFuturesClient {
   }
 
   private createDryRunOrder(order: FuturesOrderRequest): FuturesOrder {
+    const isMarket = order.type === 'MARKET';
     return {
       id: `dry-${Date.now()}-${randomBytes(4).toString('hex')}`,
       exchange: 'bybit',
@@ -1780,9 +1836,9 @@ class BybitFuturesClient {
       price: order.price,
       leverage: order.leverage || 1,
       reduceOnly: order.reduceOnly || false,
-      status: 'FILLED',
-      filledSize: order.size,
-      avgFillPrice: order.price || 0,
+      status: isMarket ? 'FILLED' : 'NEW',
+      filledSize: isMarket ? order.size : 0,
+      avgFillPrice: isMarket ? (order.price || 0) : 0,
       timestamp: Date.now(),
     };
   }
@@ -1892,8 +1948,8 @@ class BybitFuturesClient {
       id: o.orderId,
       exchange: 'bybit' as FuturesExchange,
       symbol: o.symbol,
-      side: o.side === 'Buy' ? 'BUY' : 'SELL' as OrderSide,
-      type: o.orderType === 'Market' ? 'MARKET' : 'LIMIT' as OrderType,
+      side: (o.side === 'Buy' ? 'BUY' : 'SELL') as OrderSide,
+      type: (o.orderType === 'Market' ? 'MARKET' : 'LIMIT') as OrderType,
       size: parseFloat(o.qty),
       price: parseFloat(o.price),
       leverage: 1,
@@ -1942,13 +1998,13 @@ class BybitFuturesClient {
 
     return {
       exchange: 'bybit',
-      totalWalletBalance: parseFloat(account?.totalWalletBalance || '0'),
-      totalUnrealizedProfit: parseFloat(account?.totalPerpUPL || '0'),
-      totalMarginBalance: parseFloat(account?.totalMarginBalance || '0'),
-      totalPositionInitialMargin: parseFloat(account?.totalInitialMargin || '0'),
+      totalWalletBalance: safeFloat(account?.totalWalletBalance || '0'),
+      totalUnrealizedProfit: safeFloat(account?.totalPerpUPL || '0'),
+      totalMarginBalance: safeFloat(account?.totalMarginBalance || '0'),
+      totalPositionInitialMargin: safeFloat(account?.totalInitialMargin || '0'),
       totalOpenOrderInitialMargin: 0,
-      availableBalance: parseFloat(account?.totalAvailableBalance || '0'),
-      maxWithdrawAmount: parseFloat(account?.totalAvailableBalance || '0'),
+      availableBalance: safeFloat(account?.totalAvailableBalance || '0'),
+      maxWithdrawAmount: safeFloat(account?.totalAvailableBalance || '0'),
       canTrade: true,
       canDeposit: true,
       canWithdraw: true,
@@ -1981,7 +2037,7 @@ class BybitFuturesClient {
       exchange: 'bybit' as FuturesExchange,
       symbol: t.symbol,
       orderId: t.orderId,
-      side: t.side === 'Buy' ? 'BUY' : 'SELL' as OrderSide,
+      side: (t.side === 'Buy' ? 'BUY' : 'SELL') as OrderSide,
       price: parseFloat(t.execPrice),
       quantity: parseFloat(t.execQty),
       realizedPnl: parseFloat(t.closedPnl),
@@ -2016,8 +2072,8 @@ class BybitFuturesClient {
       id: o.orderId,
       exchange: 'bybit' as FuturesExchange,
       symbol: o.symbol,
-      side: o.side === 'Buy' ? 'BUY' : 'SELL' as OrderSide,
-      type: o.orderType === 'Market' ? 'MARKET' : 'LIMIT' as OrderType,
+      side: (o.side === 'Buy' ? 'BUY' : 'SELL') as OrderSide,
+      type: (o.orderType === 'Market' ? 'MARKET' : 'LIMIT') as OrderType,
       size: parseFloat(o.qty),
       price: parseFloat(o.price),
       leverage: 1,
@@ -2240,14 +2296,15 @@ class BybitFuturesClient {
     });
   }
 
-  async setIsolatedMargin(symbol: string, tradeMode: 0 | 1): Promise<void> {
+  async setIsolatedMargin(symbol: string, tradeMode: 0 | 1, leverage?: number): Promise<void> {
     // 0 = cross, 1 = isolated
+    const lev = String(leverage || 10);
     await this.request('POST', '/v5/position/switch-isolated', {
       category: 'linear',
       symbol,
       tradeMode,
-      buyLeverage: '10',
-      sellLeverage: '10',
+      buyLeverage: lev,
+      sellLeverage: lev,
     });
   }
 
@@ -2649,10 +2706,11 @@ class HyperliquidClient {
   }
 
   private async request(endpoint: string, body?: unknown): Promise<unknown> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    const response = await fetchWithRetry(`${this.baseUrl}${endpoint}`, {
       method: body ? 'POST' : 'GET',
       headers: { 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!response.ok) {
@@ -2684,21 +2742,6 @@ class HyperliquidClient {
   }
 
   private signL1Action(action: unknown, nonce: number): { r: string; s: string; v: number } {
-    // EIP-712 typed data signing for Hyperliquid
-    const domain = {
-      name: 'Exchange',
-      version: '1',
-      chainId: 42161, // Arbitrum
-      verifyingContract: '0x0000000000000000000000000000000000000000',
-    };
-
-    const types = {
-      Agent: [
-        { name: 'source', type: 'string' },
-        { name: 'connectionId', type: 'bytes32' },
-      ],
-    };
-
     // Create the message hash
     const actionHash = keccak256(Buffer.from(JSON.stringify(action)));
     const nonceBuffer = Buffer.alloc(8);
@@ -2719,8 +2762,8 @@ class HyperliquidClient {
     }) as { marginSummary: { accountValue: string; totalMarginUsed: string; totalNtlPos: string } };
 
     const margin = data.marginSummary;
-    const total = parseFloat(margin.accountValue);
-    const used = parseFloat(margin.totalMarginUsed);
+    const total = safeFloat(margin.accountValue);
+    const used = safeFloat(margin.totalMarginUsed);
 
     return {
       exchange: 'hyperliquid',
@@ -2752,28 +2795,28 @@ class HyperliquidClient {
     const allMids = await this.request('/info', { type: 'allMids' }) as Record<string, string>;
 
     return data.assetPositions
-      .filter(ap => parseFloat(ap.position.szi) !== 0)
+      .filter(ap => safeFloat(ap.position.szi) !== 0)
       .map(ap => {
         const p = ap.position;
-        const size = parseFloat(p.szi);
-        const entryPrice = parseFloat(p.entryPx);
-        const markPrice = parseFloat(allMids[p.coin] || p.entryPx);
-        const pnl = parseFloat(p.unrealizedPnl);
+        const size = safeFloat(p.szi);
+        const entryPrice = safeFloat(p.entryPx);
+        const markPrice = safeFloat(allMids[p.coin] || p.entryPx);
+        const pnl = safeFloat(p.unrealizedPnl);
         const positionValue = Math.abs(size) * entryPrice;
 
         return {
           exchange: 'hyperliquid' as FuturesExchange,
           symbol: p.coin,
-          side: size > 0 ? 'LONG' : 'SHORT' as PositionSide,
+          side: (size > 0 ? 'LONG' : 'SHORT') as PositionSide,
           size: Math.abs(size),
           entryPrice,
           markPrice,
-          liquidationPrice: parseFloat(p.liquidationPx || '0'),
-          leverage: parseInt(p.leverage.value),
-          marginType: p.leverage.type === 'cross' ? 'CROSS' : 'ISOLATED' as MarginType,
+          liquidationPrice: safeFloat(p.liquidationPx || '0'),
+          leverage: parseInt(p.leverage.value, 10) || 1,
+          marginType: (p.leverage.type === 'cross' ? 'CROSS' : 'ISOLATED') as MarginType,
           unrealizedPnl: pnl,
           unrealizedPnlPct: positionValue > 0 ? (pnl / positionValue) * 100 : 0,
-          margin: parseFloat(p.marginUsed),
+          margin: safeFloat(p.marginUsed),
           timestamp: Date.now(),
         };
       });
@@ -2789,13 +2832,34 @@ class HyperliquidClient {
     const assetIndex = this.getAssetIndex(order.symbol);
     const nonce = Date.now();
 
+    const isStopOrder = order.type === 'STOP_MARKET' || order.type === 'TAKE_PROFIT_MARKET';
+
     // Get current price for market orders
     let limitPx = order.price;
-    if (order.type === 'MARKET' && !limitPx) {
+    if ((order.type === 'MARKET' || isStopOrder) && !limitPx) {
       const allMids = await this.request('/info', { type: 'allMids' }) as Record<string, string>;
       const midPrice = parseFloat(allMids[order.symbol] || '0');
+      if (midPrice <= 0) {
+        throw new Error(`Cannot determine price for ${order.symbol} on Hyperliquid. Check symbol name (use bare coin name like BTC, not BTCUSDT).`);
+      }
       // Add/subtract 1% slippage for market orders
       limitPx = order.side === 'BUY' ? midPrice * 1.01 : midPrice * 0.99;
+    }
+
+    let orderType: { limit?: { tif: string }; trigger?: { triggerPx: string; isMarket: boolean; tpsl: string } };
+    if (isStopOrder && order.stopPrice) {
+      // Trigger order (stop loss or take profit)
+      orderType = {
+        trigger: {
+          triggerPx: String(order.stopPrice),
+          isMarket: true,
+          tpsl: order.type === 'STOP_MARKET' ? 'sl' : 'tp',
+        },
+      };
+    } else if (order.type === 'LIMIT') {
+      orderType = { limit: { tif: 'Gtc' } };
+    } else {
+      orderType = { limit: { tif: 'Ioc' } }; // Market orders use IOC
     }
 
     const orderWire = {
@@ -2803,16 +2867,14 @@ class HyperliquidClient {
       b: order.side === 'BUY',
       p: String(limitPx),
       s: String(order.size),
-      r: order.reduceOnly || false,
-      t: order.type === 'LIMIT'
-        ? { limit: { tif: 'Gtc' } }
-        : { limit: { tif: 'Ioc' } }, // Market orders use IOC
+      r: order.reduceOnly || isStopOrder,
+      t: orderType,
     };
 
     const action = {
       type: 'order',
       orders: [orderWire],
-      grouping: 'na',
+      grouping: isStopOrder ? 'normalTpsl' : 'na',
     };
 
     const signature = this.signL1Action(action, nonce);
@@ -2843,8 +2905,9 @@ class HyperliquidClient {
       type: order.type,
       size: order.size,
       price: limitPx,
+      stopPrice: order.stopPrice,
       leverage: order.leverage || 1,
-      reduceOnly: order.reduceOnly || false,
+      reduceOnly: order.reduceOnly || isStopOrder,
       status: status?.filled ? 'FILLED' : 'NEW',
       filledSize: status?.filled ? order.size : 0,
       avgFillPrice: limitPx || 0,
@@ -2853,6 +2916,7 @@ class HyperliquidClient {
   }
 
   private createDryRunOrder(order: FuturesOrderRequest): FuturesOrder {
+    const isMarket = order.type === 'MARKET';
     return {
       id: `dry-${Date.now()}-${randomBytes(4).toString('hex')}`,
       exchange: 'hyperliquid',
@@ -2863,9 +2927,9 @@ class HyperliquidClient {
       price: order.price,
       leverage: order.leverage || 1,
       reduceOnly: order.reduceOnly || false,
-      status: 'FILLED',
-      filledSize: order.size,
-      avgFillPrice: order.price || 0,
+      status: isMarket ? 'FILLED' : 'NEW',
+      filledSize: isMarket ? order.size : 0,
+      avgFillPrice: isMarket ? (order.price || 0) : 0,
       timestamp: Date.now(),
     };
   }
@@ -2978,7 +3042,7 @@ class HyperliquidClient {
     });
   }
 
-  async getOpenOrders(): Promise<FuturesOrder[]> {
+  async getOpenOrders(symbol?: string): Promise<FuturesOrder[]> {
     const data = await this.request('/info', {
       type: 'openOrders',
       user: this.walletAddress,
@@ -2991,11 +3055,13 @@ class HyperliquidClient {
       timestamp: number;
     }>;
 
-    return data.map(o => ({
+    const filtered = symbol ? data.filter(o => o.coin === symbol) : data;
+
+    return filtered.map(o => ({
       id: String(o.oid),
       exchange: 'hyperliquid' as FuturesExchange,
       symbol: o.coin,
-      side: o.side === 'B' ? 'BUY' : 'SELL' as OrderSide,
+      side: (o.side === 'B' ? 'BUY' : 'SELL') as OrderSide,
       type: 'LIMIT' as OrderType,
       size: parseFloat(o.sz),
       price: parseFloat(o.limitPx),
@@ -3011,54 +3077,63 @@ class HyperliquidClient {
   // =========== ADDITIONAL COMPREHENSIVE METHODS ===========
 
   async getAccountInfo(): Promise<FuturesAccountInfo> {
-    const data = await this.request('/info', {
-      type: 'clearinghouseState',
-      user: this.walletAddress,
-    }) as {
-      marginSummary: { accountValue: string; totalMarginUsed: string; totalNtlPos: string; totalRawUsd: string };
-      assetPositions: Array<{
-        position: {
-          coin: string;
-          szi: string;
-          entryPx: string;
-          liquidationPx: string;
-          unrealizedPnl: string;
-          leverage: { value: string; type: string };
-        };
-      }>;
-    };
+    const [data, allMids] = await Promise.all([
+      this.request('/info', {
+        type: 'clearinghouseState',
+        user: this.walletAddress,
+      }) as Promise<{
+        marginSummary: { accountValue: string; totalMarginUsed: string; totalNtlPos: string; totalRawUsd: string };
+        assetPositions: Array<{
+          position: {
+            coin: string;
+            szi: string;
+            entryPx: string;
+            liquidationPx: string;
+            unrealizedPnl: string;
+            leverage: { value: string; type: string };
+          };
+        }>;
+      }>,
+      this.request('/info', { type: 'allMids' }) as Promise<Record<string, string>>,
+    ]);
 
+    let totalUnrealized = 0;
     const positions = data.assetPositions
-      .filter(ap => parseFloat(ap.position.szi) !== 0)
+      .filter(ap => safeFloat(ap.position.szi) !== 0)
       .map(ap => {
         const p = ap.position;
-        const size = parseFloat(p.szi);
+        const size = safeFloat(p.szi);
+        const unrealizedPnl = safeFloat(p.unrealizedPnl);
+        totalUnrealized += unrealizedPnl;
         return {
           exchange: 'hyperliquid' as FuturesExchange,
           symbol: p.coin,
-          side: size > 0 ? 'LONG' : 'SHORT' as PositionSide,
+          side: (size > 0 ? 'LONG' : 'SHORT') as PositionSide,
           size: Math.abs(size),
-          entryPrice: parseFloat(p.entryPx),
-          markPrice: parseFloat(p.entryPx),
-          liquidationPrice: parseFloat(p.liquidationPx || '0'),
-          leverage: parseInt(p.leverage.value),
-          marginType: p.leverage.type === 'cross' ? 'CROSS' : 'ISOLATED' as MarginType,
-          unrealizedPnl: parseFloat(p.unrealizedPnl),
+          entryPrice: safeFloat(p.entryPx),
+          markPrice: safeFloat(allMids[p.coin] || p.entryPx),
+          liquidationPrice: safeFloat(p.liquidationPx || '0'),
+          leverage: parseInt(p.leverage.value, 10) || 1,
+          marginType: (p.leverage.type === 'cross' ? 'CROSS' : 'ISOLATED') as MarginType,
+          unrealizedPnl,
           unrealizedPnlPct: 0,
           margin: 0,
           timestamp: Date.now(),
         };
       });
 
+    const accountValue = safeFloat(data.marginSummary.accountValue);
+    const marginUsed = safeFloat(data.marginSummary.totalMarginUsed);
+
     return {
       exchange: 'hyperliquid',
-      totalWalletBalance: parseFloat(data.marginSummary.accountValue),
-      totalUnrealizedProfit: 0,
-      totalMarginBalance: parseFloat(data.marginSummary.accountValue),
-      totalPositionInitialMargin: parseFloat(data.marginSummary.totalMarginUsed),
+      totalWalletBalance: accountValue,
+      totalUnrealizedProfit: totalUnrealized,
+      totalMarginBalance: accountValue,
+      totalPositionInitialMargin: marginUsed,
       totalOpenOrderInitialMargin: 0,
-      availableBalance: parseFloat(data.marginSummary.accountValue) - parseFloat(data.marginSummary.totalMarginUsed),
-      maxWithdrawAmount: parseFloat(data.marginSummary.totalRawUsd),
+      availableBalance: accountValue - marginUsed,
+      maxWithdrawAmount: safeFloat(data.marginSummary.totalRawUsd),
       canTrade: true,
       canDeposit: true,
       canWithdraw: true,
@@ -3087,7 +3162,7 @@ class HyperliquidClient {
       exchange: 'hyperliquid' as FuturesExchange,
       symbol: t.coin,
       orderId: String(t.oid),
-      side: t.side === 'B' ? 'BUY' : 'SELL' as OrderSide,
+      side: (t.side === 'B' ? 'BUY' : 'SELL') as OrderSide,
       price: parseFloat(t.px),
       quantity: parseFloat(t.sz),
       realizedPnl: parseFloat(t.closedPnl),
@@ -3120,13 +3195,13 @@ class HyperliquidClient {
       id: String(o.order.oid),
       exchange: 'hyperliquid' as FuturesExchange,
       symbol: o.order.coin,
-      side: o.order.side === 'B' ? 'BUY' : 'SELL' as OrderSide,
+      side: (o.order.side === 'B' ? 'BUY' : 'SELL') as OrderSide,
       type: 'LIMIT' as OrderType,
       size: parseFloat(o.order.sz),
       price: parseFloat(o.order.limitPx),
       leverage: 1,
       reduceOnly: o.order.reduceOnly,
-      status: o.status === 'filled' ? 'FILLED' : o.status === 'canceled' ? 'CANCELED' : 'NEW' as FuturesOrder['status'],
+      status: (o.status === 'filled' ? 'FILLED' : o.status === 'canceled' ? 'CANCELED' : 'NEW') as FuturesOrder['status'],
       filledSize: o.status === 'filled' ? parseFloat(o.order.sz) : 0,
       avgFillPrice: parseFloat(o.order.limitPx),
       timestamp: o.statusTimestamp,
@@ -3844,11 +3919,16 @@ class MexcFuturesClient {
   private apiSecret: string;
   private baseUrl = 'https://contract.mexc.com';
   private dryRun: boolean;
+  private _marginType: MarginType = 'ISOLATED';
 
   constructor(credentials: FuturesCredentials, dryRun = false) {
     this.apiKey = credentials.apiKey;
     this.apiSecret = credentials.apiSecret;
     this.dryRun = dryRun;
+  }
+
+  setMarginTypePreference(marginType: MarginType): void {
+    this._marginType = marginType;
   }
 
   private sign(timestamp: string, params: string): string {
@@ -3889,15 +3969,16 @@ class MexcFuturesClient {
       headers['Signature'] = this.sign(timestamp, signData);
     }
 
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithRetry(url.toString(), {
       method,
       headers,
       body: method !== 'GET' ? body : undefined,
+      signal: AbortSignal.timeout(30_000),
     });
 
     const data = await response.json() as { success: boolean; code: number; message?: string; data: unknown };
 
-    if (!data.success && data.code !== 0) {
+    if (!data.success || data.code !== 0) {
       throw new Error(`MEXC error: ${data.message || data.code}`);
     }
 
@@ -3923,10 +4004,10 @@ class MexcFuturesClient {
     return {
       exchange: 'mexc',
       asset: 'USDT',
-      available: parseFloat(usdt.availableBalance),
-      total: parseFloat(usdt.equity),
-      unrealizedPnl: parseFloat(usdt.unrealized),
-      marginBalance: parseFloat(usdt.equity),
+      available: safeFloat(usdt.availableBalance),
+      total: safeFloat(usdt.equity),
+      unrealizedPnl: safeFloat(usdt.unrealized),
+      marginBalance: safeFloat(usdt.equity),
     };
   }
 
@@ -3948,45 +4029,46 @@ class MexcFuturesClient {
       symbol: string;
       lastPrice: string;
     }>;
-    const priceMap = new Map(tickers.map(t => [t.symbol, parseFloat(t.lastPrice)]));
+    const priceMap = new Map(tickers.map(t => [t.symbol, safeFloat(t.lastPrice)]));
 
     return data.map(p => {
-      const size = parseFloat(p.holdVol);
-      const entryPrice = parseFloat(p.openAvgPrice);
+      const size = safeFloat(p.holdVol);
+      const entryPrice = safeFloat(p.openAvgPrice);
       const markPrice = priceMap.get(p.symbol) || entryPrice;
-      const pnl = parseFloat(p.unrealised);
+      const pnl = safeFloat(p.unrealised);
       const positionValue = size * entryPrice;
 
       return {
         exchange: 'mexc' as FuturesExchange,
         symbol: p.symbol,
-        side: p.positionType === 1 ? 'LONG' : 'SHORT' as PositionSide,
+        side: (p.positionType === 1 ? 'LONG' : 'SHORT') as PositionSide,
         size,
         entryPrice,
         markPrice,
-        liquidationPrice: parseFloat(p.liquidatePrice),
-        leverage: p.leverage,
+        liquidationPrice: safeFloat(p.liquidatePrice),
+        leverage: p.leverage || 1,
         marginType: 'ISOLATED' as MarginType, // MEXC uses isolated by default
         unrealizedPnl: pnl,
         unrealizedPnlPct: positionValue > 0 ? (pnl / positionValue) * 100 : 0,
-        margin: parseFloat(p.margin || p.im),
+        margin: safeFloat(p.margin || p.im),
         timestamp: Date.now(),
       };
     });
   }
 
   async setLeverage(symbol: string, leverage: number): Promise<void> {
+    const openType = this._marginType === 'CROSS' ? 2 : 1;
     await this.request('POST', '/api/v1/private/position/change_leverage', {
       symbol,
       leverage,
-      openType: 1, // isolated
+      openType,
       positionType: 1, // long
     }, true);
 
     await this.request('POST', '/api/v1/private/position/change_leverage', {
       symbol,
       leverage,
-      openType: 1,
+      openType,
       positionType: 2, // short
     }, true);
   }
@@ -4001,17 +4083,19 @@ class MexcFuturesClient {
       await this.setLeverage(order.symbol, order.leverage);
     }
 
+    const isStopOrder = order.type === 'STOP_MARKET' || order.type === 'TAKE_PROFIT_MARKET';
+
     // MEXC uses vol (contracts) not size
     const params: Record<string, string | number | boolean> = {
       symbol: order.symbol,
       side: order.side === 'BUY' ? 1 : 2, // 1=open long/close short, 2=close long/open short
-      type: order.type === 'MARKET' ? 5 : 1, // 1=limit, 5=market
+      type: (order.type === 'MARKET' || isStopOrder) ? 5 : 1, // 1=limit, 5=market
       vol: order.size,
-      openType: 1, // isolated
+      openType: this._marginType === 'CROSS' ? 2 : 1, // 1=isolated, 2=cross
     };
 
     // Determine if opening or closing
-    const isOpening = !order.reduceOnly;
+    const isOpening = !order.reduceOnly && !isStopOrder;
     if (order.side === 'BUY') {
       params.side = isOpening ? 1 : 4; // 1=open long, 4=close short
     } else {
@@ -4022,29 +4106,17 @@ class MexcFuturesClient {
       params.price = order.price;
     }
 
+    // Set trigger price for stop orders
+    if (isStopOrder && order.stopPrice) {
+      params.triggerPrice = order.stopPrice;
+      params.triggerType = 1; // trigger by mark price
+    }
+
     const result = await this.request('POST', '/api/v1/private/order/submit', params, true) as {
       orderId: string;
     };
 
-    // Place TP/SL if specified
-    if (order.takeProfit) {
-      await this.request('POST', '/api/v1/private/order/submit_tp_sl', {
-        symbol: order.symbol,
-        triggerPrice: order.takeProfit,
-        triggerType: 1, // take profit
-        executePriceType: 1, // market
-      }, true);
-    }
-    if (order.stopLoss) {
-      await this.request('POST', '/api/v1/private/order/submit_tp_sl', {
-        symbol: order.symbol,
-        triggerPrice: order.stopLoss,
-        triggerType: 2, // stop loss
-        executePriceType: 1, // market
-      }, true);
-    }
-
-    return {
+    const mainOrder: FuturesOrder = {
       id: result.orderId,
       exchange: 'mexc',
       symbol: order.symbol,
@@ -4059,9 +4131,39 @@ class MexcFuturesClient {
       avgFillPrice: 0,
       timestamp: Date.now(),
     };
+
+    // Place TP/SL if specified — don't let failures lose the main order
+    try {
+      if (order.takeProfit) {
+        await this.request('POST', '/api/v1/private/order/submit_tp_sl', {
+          symbol: order.symbol,
+          triggerPrice: order.takeProfit,
+          triggerType: 1, // take profit
+          executePriceType: 1, // market
+        }, true);
+      }
+    } catch (err) {
+      logger.error({ err, symbol: order.symbol, takeProfit: order.takeProfit }, 'MEXC: Failed to place take-profit order (main order succeeded)');
+    }
+
+    try {
+      if (order.stopLoss) {
+        await this.request('POST', '/api/v1/private/order/submit_tp_sl', {
+          symbol: order.symbol,
+          triggerPrice: order.stopLoss,
+          triggerType: 2, // stop loss
+          executePriceType: 1, // market
+        }, true);
+      }
+    } catch (err) {
+      logger.error({ err, symbol: order.symbol, stopLoss: order.stopLoss }, 'MEXC: Failed to place stop-loss order (main order succeeded)');
+    }
+
+    return mainOrder;
   }
 
   private createDryRunOrder(order: FuturesOrderRequest): FuturesOrder {
+    const isMarket = order.type === 'MARKET';
     return {
       id: `dry-${Date.now()}-${randomBytes(4).toString('hex')}`,
       exchange: 'mexc',
@@ -4072,9 +4174,9 @@ class MexcFuturesClient {
       price: order.price,
       leverage: order.leverage || 1,
       reduceOnly: order.reduceOnly || false,
-      status: 'FILLED',
-      filledSize: order.size,
-      avgFillPrice: order.price || 0,
+      status: isMarket ? 'FILLED' : 'NEW',
+      filledSize: isMarket ? order.size : 0,
+      avgFillPrice: isMarket ? (order.price || 0) : 0,
       timestamp: Date.now(),
     };
   }
@@ -4179,8 +4281,8 @@ class MexcFuturesClient {
       id: o.orderId,
       exchange: 'mexc' as FuturesExchange,
       symbol: o.symbol,
-      side: (o.side === 1 || o.side === 4) ? 'BUY' : 'SELL' as OrderSide,
-      type: o.type === 5 ? 'MARKET' : 'LIMIT' as OrderType,
+      side: ((o.side === 1 || o.side === 4) ? 'BUY' : 'SELL') as OrderSide,
+      type: (o.type === 5 ? 'MARKET' : 'LIMIT') as OrderType,
       size: parseFloat(o.vol),
       price: parseFloat(o.price),
       leverage: 1,
@@ -4249,7 +4351,7 @@ class MexcFuturesClient {
       exchange: 'mexc' as FuturesExchange,
       symbol: t.symbol,
       orderId: t.orderId,
-      side: (t.side === 1 || t.side === 4) ? 'BUY' : 'SELL' as OrderSide,
+      side: ((t.side === 1 || t.side === 4) ? 'BUY' : 'SELL') as OrderSide,
       price: parseFloat(t.price),
       quantity: parseFloat(t.vol),
       realizedPnl: parseFloat(t.profit),
@@ -4281,8 +4383,8 @@ class MexcFuturesClient {
       id: o.orderId,
       exchange: 'mexc' as FuturesExchange,
       symbol: o.symbol,
-      side: (o.side === 1 || o.side === 4) ? 'BUY' : 'SELL' as OrderSide,
-      type: o.type === 5 ? 'MARKET' : 'LIMIT' as OrderType,
+      side: ((o.side === 1 || o.side === 4) ? 'BUY' : 'SELL') as OrderSide,
+      type: (o.type === 5 ? 'MARKET' : 'LIMIT') as OrderType,
       size: parseFloat(o.vol),
       price: parseFloat(o.price),
       leverage: 1,
@@ -4366,7 +4468,7 @@ class MexcFuturesClient {
 
     return data.map(p => ({
       symbol: p.symbol,
-      side: p.positionType === 1 ? 'LONG' : 'SHORT' as PositionSide,
+      side: (p.positionType === 1 ? 'LONG' : 'SHORT') as PositionSide,
       entryPrice: parseFloat(p.openAvgPrice),
       closePrice: parseFloat(p.closeAvgPrice),
       size: parseFloat(p.holdVol),
@@ -4424,7 +4526,7 @@ class MexcFuturesClient {
       type: order.type === 'MARKET' ? 5 : 1,
       vol: order.size,
       price: order.price,
-      openType: 1,
+      openType: this._marginType === 'CROSS' ? 2 : 1,
     }));
 
     const result = await this.request('POST', '/api/v1/private/order/submit_batch', {
@@ -4534,7 +4636,7 @@ class MexcFuturesClient {
       triggerType: triggerType === 'ge' ? 1 : 2,
       executePriceType: price ? 1 : 2, // 1=limit, 2=market
       price: price || 0,
-      openType: 1,
+      openType: this._marginType === 'CROSS' ? 2 : 1,
     }, true) as { orderId: string };
 
     return result.orderId;
@@ -4574,7 +4676,7 @@ class MexcFuturesClient {
     return data.map(o => ({
       orderId: o.id,
       symbol: o.symbol,
-      side: (o.side === 1 || o.side === 4) ? 'BUY' : 'SELL' as OrderSide,
+      side: ((o.side === 1 || o.side === 4) ? 'BUY' : 'SELL') as OrderSide,
       size: parseFloat(o.vol),
       triggerPrice: parseFloat(o.triggerPrice),
       status: o.state,
@@ -5163,6 +5265,7 @@ export class FuturesService extends EventEmitter {
   private positionMonitorInterval: NodeJS.Timeout | null = null;
   private db: FuturesDatabase | null = null;
   private strategyEngine: StrategyEngine | null = null;
+  private hlPrefs: Map<string, { leverage?: number; marginType?: MarginType }> = new Map();
 
   constructor(configs: FuturesConfig[]) {
     super();
@@ -5394,6 +5497,178 @@ export class FuturesService extends EventEmitter {
 
   getExchanges(): FuturesExchange[] {
     return Array.from(this.clients.keys());
+  }
+
+  async setMarginType(exchange: FuturesExchange, symbol: string, marginType: MarginType): Promise<void> {
+    const client = this.getClient(exchange);
+
+    switch (exchange) {
+      case 'binance':
+        await (client as BinanceFuturesClient).setMarginType(symbol, marginType);
+        break;
+      case 'bybit': {
+        // Bybit: 0 = cross, 1 = isolated
+        const tradeMode = marginType === 'CROSS' ? 0 : 1;
+        // Read current leverage from position to avoid resetting it
+        const bybitClient = client as BybitFuturesClient;
+        const bybitPositions = await bybitClient.getPositions();
+        const bybitPos = bybitPositions.find(p => p.symbol === symbol);
+        const bybitLeverage = bybitPos?.leverage || undefined;
+        try {
+          await bybitClient.setIsolatedMargin(symbol, tradeMode as 0 | 1, bybitLeverage);
+        } catch (err) {
+          const msg = (err as Error).message;
+          // Already set to this mode
+          if (!msg.includes('not modified') && !msg.includes('same')) throw err;
+        }
+        break;
+      }
+      case 'hyperliquid': {
+        // Get current leverage from position or local prefs
+        const hlClient = client as HyperliquidClient;
+        const hlPositions = await hlClient.getPositions();
+        const hlPos = hlPositions.find(p => p.symbol === symbol);
+        const prefs = this.hlPrefs.get(symbol) || {};
+        const currentLeverage = hlPos?.leverage || prefs.leverage || 10;
+        prefs.marginType = marginType;
+        this.hlPrefs.set(symbol, prefs);
+        await hlClient.setLeverage(symbol, currentLeverage, marginType);
+        break;
+      }
+      case 'mexc':
+        // MEXC applies margin type per-order via openType param
+        (client as MexcFuturesClient).setMarginTypePreference(marginType);
+        logger.info({ symbol, marginType }, 'MEXC margin type set (applied to all future orders)');
+        break;
+    }
+  }
+
+  async setLeverage(exchange: FuturesExchange, symbol: string, leverage: number): Promise<void> {
+    const client = this.getClient(exchange);
+
+    if (exchange === 'hyperliquid') {
+      // Preserve current margin type when setting leverage
+      const hlClient = client as HyperliquidClient;
+      const positions = await hlClient.getPositions();
+      const pos = positions.find(p => p.symbol === symbol);
+      const prefs = this.hlPrefs.get(symbol) || {};
+      const currentMarginType = pos?.marginType || prefs.marginType || 'CROSS';
+      prefs.leverage = leverage;
+      this.hlPrefs.set(symbol, prefs);
+      await hlClient.setLeverage(symbol, leverage, currentMarginType);
+    } else if ('setLeverage' in client) {
+      await (client as BinanceFuturesClient | BybitFuturesClient | MexcFuturesClient).setLeverage(symbol, leverage);
+    }
+  }
+
+  async getIncomeHistory(exchange: FuturesExchange, params?: { symbol?: string; limit?: number }): Promise<FuturesIncome[]> {
+    const client = this.getClient(exchange);
+    if (exchange === 'binance') {
+      return (client as BinanceFuturesClient).getIncomeHistory(params?.symbol, undefined, params?.limit);
+    }
+    if (exchange === 'bybit') {
+      return (client as BybitFuturesClient).getIncomeHistory(params?.symbol, params?.limit);
+    }
+    if (exchange === 'mexc') {
+      // MEXC uses position history for realized PnL
+      const mexcClient = client as MexcFuturesClient;
+      const history = await mexcClient.getPositionHistory(params?.symbol, params?.limit || 50);
+      return history.map(h => ({
+        symbol: h.symbol,
+        incomeType: 'REALIZED_PNL' as const,
+        income: h.realizedPnl,
+        asset: 'USDT',
+        timestamp: h.closeTime,
+      }));
+    }
+    if (exchange === 'hyperliquid') {
+      // Hyperliquid uses trade fills with closedPnl
+      const hlClient = client as HyperliquidClient;
+      const trades = await hlClient.getTradeHistory(params?.limit || 50);
+      const filtered = params?.symbol
+        ? trades.filter(t => t.symbol === params.symbol)
+        : trades;
+      return filtered
+        .filter(t => t.realizedPnl !== 0)
+        .map(t => ({
+          symbol: t.symbol,
+          incomeType: 'REALIZED_PNL' as const,
+          income: t.realizedPnl,
+          asset: 'USDC',
+          timestamp: t.timestamp,
+        }));
+    }
+    return [];
+  }
+
+  async getTradeHistory(exchange: FuturesExchange, symbol?: string, limit?: number): Promise<FuturesTrade[]> {
+    const client = this.getClient(exchange);
+
+    switch (exchange) {
+      case 'binance': {
+        if (!symbol) throw new Error('Binance requires symbol for trade history');
+        return (client as BinanceFuturesClient).getTradeHistory(symbol, limit);
+      }
+      case 'bybit':
+        return (client as BybitFuturesClient).getTradeHistory(symbol, limit);
+      case 'hyperliquid': {
+        const trades = await (client as HyperliquidClient).getTradeHistory(limit);
+        return symbol ? trades.filter(t => t.symbol === symbol) : trades;
+      }
+      case 'mexc':
+        return (client as MexcFuturesClient).getTradeHistory(symbol, limit);
+      default:
+        return [];
+    }
+  }
+
+  async getOrderHistory(exchange: FuturesExchange, symbol?: string, limit?: number): Promise<FuturesOrder[]> {
+    const client = this.getClient(exchange);
+
+    switch (exchange) {
+      case 'binance':
+        return (client as BinanceFuturesClient).getOrderHistory(symbol, limit);
+      case 'bybit':
+        return (client as BybitFuturesClient).getOrderHistory(symbol, limit);
+      case 'hyperliquid': {
+        const orders = await (client as HyperliquidClient).getOrderHistory();
+        const filtered = symbol ? orders.filter(o => o.symbol === symbol) : orders;
+        return limit ? filtered.slice(0, limit) : filtered;
+      }
+      case 'mexc':
+        return (client as MexcFuturesClient).getOrderHistory(symbol, limit);
+      default:
+        return [];
+    }
+  }
+
+  async getAccountInfo(exchange: FuturesExchange): Promise<FuturesAccountInfo> {
+    const client = this.getClient(exchange);
+    return client.getAccountInfo();
+  }
+
+  async getOrderBook(exchange: FuturesExchange, symbol: string, limit?: number): Promise<FuturesOrderBook> {
+    const client = this.getClient(exchange);
+    if (exchange === 'hyperliquid') {
+      return (client as HyperliquidClient).getOrderBook(symbol);
+    }
+    return (client as BinanceFuturesClient | BybitFuturesClient | MexcFuturesClient).getOrderBook(symbol, limit);
+  }
+
+  async getTickerPrice(exchange: FuturesExchange, symbol?: string): Promise<Array<{ symbol: string; price: number; timestamp: number }>> {
+    const client = this.getClient(exchange);
+    if ('getTickerPrice' in client) {
+      return (client as BinanceFuturesClient | BybitFuturesClient | MexcFuturesClient).getTickerPrice(symbol);
+    }
+    // Hyperliquid doesn't have a direct ticker API, use order book mid price
+    if (symbol) {
+      const book = await client.getOrderBook(symbol);
+      if (book.bids.length > 0 && book.asks.length > 0) {
+        const mid = (book.bids[0][0] + book.asks[0][0]) / 2;
+        return [{ symbol, price: mid, timestamp: Date.now() }];
+      }
+    }
+    return [];
   }
 }
 

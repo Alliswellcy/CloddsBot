@@ -380,3 +380,154 @@ export async function cancelAllOrders(
   await c.cancelAllOpenOrders({ symbol });
   return 1;
 }
+
+export async function setMarginType(
+  config: BinanceFuturesConfig,
+  symbol: string,
+  marginType: 'ISOLATED' | 'CROSSED'
+): Promise<void> {
+  if (config.dryRun) {
+    logger.info({ symbol, marginType }, '[DRY RUN] Set margin type');
+    return;
+  }
+
+  const c = getClient(config);
+  try {
+    await c.setMarginType({ symbol, marginType });
+  } catch (err: unknown) {
+    // -4046 = already set to this type
+    if (!(err instanceof Error) || !err.message.includes('-4046')) throw err;
+  }
+}
+
+export async function placeLimitOrder(
+  config: BinanceFuturesConfig,
+  symbol: string,
+  side: 'BUY' | 'SELL',
+  quantity: number,
+  price: number,
+  params?: { reduceOnly?: boolean; timeInForce?: string; postOnly?: boolean }
+): Promise<OrderResult> {
+  if (config.dryRun) {
+    logger.info({ symbol, side, quantity, price }, '[DRY RUN] Place limit order');
+    return {
+      orderId: Date.now(),
+      symbol,
+      side,
+      positionSide: 'BOTH',
+      type: 'LIMIT',
+      price,
+      avgPrice: 0,
+      origQty: quantity,
+      executedQty: 0,
+      status: 'DRY_RUN',
+    };
+  }
+
+  const c = getClient(config);
+  const result = await c.submitNewOrder({
+    symbol,
+    side,
+    type: 'LIMIT',
+    quantity,
+    price,
+    timeInForce: params?.postOnly ? 'GTX' : (params?.timeInForce as 'GTC' | 'IOC' | 'FOK' || 'GTC'),
+    ...(params?.reduceOnly ? { reduceOnly: 'true' } : {}),
+  });
+
+  return {
+    orderId: result.orderId,
+    symbol: result.symbol,
+    side: result.side as 'BUY' | 'SELL',
+    positionSide: (result.positionSide || 'BOTH') as 'LONG' | 'SHORT' | 'BOTH',
+    type: result.type,
+    price: parseFloat(String(result.price || 0)),
+    avgPrice: parseFloat(String(result.avgPrice || 0)),
+    origQty: parseFloat(String(result.origQty)),
+    executedQty: parseFloat(String(result.executedQty)),
+    status: result.status,
+  };
+}
+
+export async function placeStopOrder(
+  config: BinanceFuturesConfig,
+  symbol: string,
+  side: 'BUY' | 'SELL',
+  quantity: number,
+  stopPrice: number,
+  params?: { price?: number; reduceOnly?: boolean }
+): Promise<OrderResult> {
+  if (config.dryRun) {
+    logger.info({ symbol, side, quantity, stopPrice }, '[DRY RUN] Place stop order');
+    return {
+      orderId: Date.now(),
+      symbol,
+      side,
+      positionSide: 'BOTH',
+      type: params?.price ? 'STOP' : 'STOP_MARKET',
+      price: params?.price || stopPrice,
+      avgPrice: 0,
+      origQty: quantity,
+      executedQty: 0,
+      status: 'DRY_RUN',
+    };
+  }
+
+  const type = params?.price ? 'STOP' : 'STOP_MARKET';
+  const c = getClient(config);
+  const result = await c.submitNewOrder({
+    symbol,
+    side,
+    type: type as 'STOP' | 'STOP_MARKET',
+    quantity,
+    stopPrice,
+    ...(params?.price ? { price: params.price, timeInForce: 'GTC' as const } : {}),
+    reduceOnly: params?.reduceOnly !== false ? 'true' : undefined,
+  });
+
+  return {
+    orderId: result.orderId,
+    symbol: result.symbol,
+    side: result.side as 'BUY' | 'SELL',
+    positionSide: (result.positionSide || 'BOTH') as 'LONG' | 'SHORT' | 'BOTH',
+    type: result.type,
+    price: parseFloat(String(result.price || 0)),
+    avgPrice: parseFloat(String(result.avgPrice || 0)),
+    origQty: parseFloat(String(result.origQty)),
+    executedQty: parseFloat(String(result.executedQty)),
+    status: result.status,
+  };
+}
+
+export interface IncomeRecord {
+  symbol: string;
+  incomeType: string;
+  income: number;
+  asset: string;
+  time: Date;
+}
+
+export async function getIncomeHistory(
+  config: BinanceFuturesConfig,
+  params?: { symbol?: string; limit?: number }
+): Promise<IncomeRecord[]> {
+  const c = getClient(config);
+  const reqParams: { symbol?: string; limit?: number } = {};
+  if (params?.symbol) reqParams.symbol = params.symbol;
+  if (params?.limit) reqParams.limit = params.limit;
+
+  const data = await c.getIncomeHistory(reqParams) as Array<{
+    symbol: string;
+    incomeType: string;
+    income: string;
+    asset: string;
+    time: number;
+  }>;
+  return data.map(d => ({
+    symbol: d.symbol,
+    incomeType: d.incomeType,
+    income: parseFloat(d.income),
+    asset: d.asset,
+    time: new Date(d.time),
+  }));
+}
