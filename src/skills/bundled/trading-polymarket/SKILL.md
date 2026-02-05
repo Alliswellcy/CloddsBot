@@ -678,6 +678,8 @@ Access Polymarket trading directly from Claude Code:
 /poly redeem                             # Redeem resolved positions
 ```
 
+**Note:** TWAP and bracket orders are persisted to the database and will automatically resume after restarts.
+
 ### Real-Time Fills (WebSocket)
 ```bash
 /poly fills                              # Connect fills WebSocket
