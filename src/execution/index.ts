@@ -282,6 +282,192 @@ export function getPolymarketExchange(negRisk: boolean): string {
   return negRisk ? POLY_NEG_RISK_CTF_EXCHANGE : POLY_CTF_EXCHANGE;
 }
 
+// Cache for tick sizes and neg risk status to avoid repeated API calls
+const tickSizeCache = new Map<string, { tickSize: string; cachedAt: number }>();
+const negRiskCache = new Map<string, { negRisk: boolean; cachedAt: number }>();
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * Get tick size for a token (from orderbook endpoint)
+ * Valid tick sizes: "0.1", "0.01", "0.001", "0.0001"
+ */
+export async function getPolymarketTickSize(tokenId: string): Promise<string> {
+  // Check cache
+  const cached = tickSizeCache.get(tokenId);
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+    return cached.tickSize;
+  }
+
+  try {
+    const response = await fetch(`${POLY_CLOB_URL}/book?token_id=${tokenId}`);
+    if (!response.ok) {
+      return '0.01'; // Default tick size
+    }
+    const data = await response.json() as { tick_size?: string };
+    const tickSize = data.tick_size || '0.01';
+    tickSizeCache.set(tokenId, { tickSize, cachedAt: Date.now() });
+    return tickSize;
+  } catch {
+    return '0.01';
+  }
+}
+
+/**
+ * Validate price against tick size
+ * Returns error message if invalid, null if valid
+ */
+export function validatePriceTickSize(price: number, tickSize: string): string | null {
+  const tick = parseFloat(tickSize);
+  if (tick <= 0) return null; // Skip validation if tick size invalid
+
+  // Check if price is a multiple of tick size (with floating point tolerance)
+  const remainder = Math.abs((price * 10000) % (tick * 10000)) / 10000;
+  const tolerance = tick / 100; // 1% of tick size tolerance for floating point
+
+  if (remainder > tolerance && remainder < tick - tolerance) {
+    return `Price ${price} is not a valid tick size increment. Must be multiple of ${tickSize}`;
+  }
+  return null;
+}
+
+/**
+ * Get neg risk status with caching
+ */
+export async function getPolymarketNegRiskCached(tokenId: string): Promise<boolean> {
+  // Check cache
+  const cached = negRiskCache.get(tokenId);
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+    return cached.negRisk;
+  }
+
+  const negRisk = await checkPolymarketNegRisk(tokenId);
+  negRiskCache.set(tokenId, { negRisk, cachedAt: Date.now() });
+  return negRisk;
+}
+
+/**
+ * Get USDC balance for an address
+ */
+export async function getPolymarketBalance(
+  auth: PolymarketApiKeyAuth,
+  address?: string
+): Promise<{ balance: number; allowance: number }> {
+  const walletAddress = address || auth.address;
+  const url = `${POLY_CLOB_URL}/balance?address=${walletAddress}`;
+
+  const headers = buildPolymarketHeadersForUrl(auth, 'GET', url);
+
+  try {
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const data = await response.json() as { balance?: string; allowance?: string };
+    return {
+      balance: parseFloat(data.balance || '0'),
+      allowance: parseFloat(data.allowance || '0'),
+    };
+  } catch (error) {
+    logger.error({ error, walletAddress }, 'Failed to fetch Polymarket balance');
+    return { balance: 0, allowance: 0 };
+  }
+}
+
+/**
+ * Get positions for an address
+ */
+export async function getPolymarketPositions(
+  auth: PolymarketApiKeyAuth,
+  address?: string
+): Promise<Array<{
+  tokenId: string;
+  conditionId: string;
+  size: number;
+  avgPrice: number;
+  currentPrice: number;
+  unrealizedPnl: number;
+}>> {
+  const walletAddress = address || auth.address;
+  const url = `${POLY_CLOB_URL}/positions?address=${walletAddress}`;
+
+  const headers = buildPolymarketHeadersForUrl(auth, 'GET', url);
+
+  try {
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const data = await response.json() as Array<{
+      asset_id?: string;
+      condition_id?: string;
+      size?: string;
+      avg_price?: string;
+      cur_price?: string;
+      unrealized_pnl?: string;
+    }>;
+
+    return data.map(p => ({
+      tokenId: p.asset_id || '',
+      conditionId: p.condition_id || '',
+      size: parseFloat(p.size || '0'),
+      avgPrice: parseFloat(p.avg_price || '0'),
+      currentPrice: parseFloat(p.cur_price || '0'),
+      unrealizedPnl: parseFloat(p.unrealized_pnl || '0'),
+    }));
+  } catch (error) {
+    logger.error({ error, walletAddress }, 'Failed to fetch Polymarket positions');
+    return [];
+  }
+}
+
+/**
+ * Get trade history for an address
+ */
+export async function getPolymarketTrades(
+  auth: PolymarketApiKeyAuth,
+  limit = 100
+): Promise<Array<{
+  id: string;
+  tokenId: string;
+  side: 'BUY' | 'SELL';
+  price: number;
+  size: number;
+  timestamp: Date;
+  transactionHash?: string;
+}>> {
+  const url = `${POLY_CLOB_URL}/trades?limit=${limit}`;
+  const headers = buildPolymarketHeadersForUrl(auth, 'GET', url);
+
+  try {
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const data = await response.json() as Array<{
+      id?: string;
+      asset_id?: string;
+      side?: string;
+      price?: string;
+      size?: string;
+      timestamp?: string;
+      transaction_hash?: string;
+    }>;
+
+    return data.map(t => ({
+      id: t.id || '',
+      tokenId: t.asset_id || '',
+      side: (t.side?.toUpperCase() || 'BUY') as 'BUY' | 'SELL',
+      price: parseFloat(t.price || '0'),
+      size: parseFloat(t.size || '0'),
+      timestamp: new Date(t.timestamp || Date.now()),
+      transactionHash: t.transaction_hash,
+    }));
+  } catch (error) {
+    logger.error({ error }, 'Failed to fetch Polymarket trades');
+    return [];
+  }
+}
+
 // =============================================================================
 // ORDERBOOK FETCHING FOR SLIPPAGE CALCULATION
 // =============================================================================
@@ -591,10 +777,20 @@ async function placePolymarketOrder(
   negRisk?: boolean,
   postOnly?: boolean
 ): Promise<OrderResult> {
+  // Validate tick size
+  const tickSize = await getPolymarketTickSize(tokenId);
+  const tickError = validatePriceTickSize(price, tickSize);
+  if (tickError) {
+    return { success: false, error: tickError };
+  }
+
+  // Auto-detect negRisk if not provided
+  const actualNegRisk = negRisk ?? await getPolymarketNegRiskCached(tokenId);
+
   // If private key available, use EIP-712 signed order (required for real CLOB)
   if (auth.privateKey) {
     const signedAuth = { ...auth, privateKey: auth.privateKey };
-    return placeSignedPolymarketOrder(signedAuth, tokenId, side, price, size, orderType, negRisk, postOnly);
+    return placeSignedPolymarketOrder(signedAuth, tokenId, side, price, size, orderType, actualNegRisk, postOnly);
   }
 
   // Fallback: simplified payload (may not work with real CLOB without signing)
@@ -606,8 +802,8 @@ async function placePolymarketOrder(
     size: size.toString(),
     orderType: orderType,
     feeRateBps: '0',
+    negRisk: actualNegRisk,
   };
-  if (negRisk !== undefined) order.negRisk = negRisk;
   if (postOnly === true) order.postOnly = true;
 
   const headers = buildPolymarketHeadersForUrl(auth, 'POST', url, order);

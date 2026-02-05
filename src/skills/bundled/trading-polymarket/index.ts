@@ -106,6 +106,8 @@ function helpText(): string {
     '  /poly orders                             - Open orders',
     '  /poly cancel <order-id>                  - Cancel order',
     '  /poly cancel all                         - Cancel all orders',
+    '  /poly trades [limit]                     - Recent trade history',
+    '  /poly balance                            - USDC + positions',
     '',
     '**Advanced Orders:**',
     '  /poly redeem                              - Redeem all resolved positions',
@@ -563,14 +565,55 @@ async function handleCancel(orderId: string): Promise<string> {
 }
 
 async function handleBalance(): Promise<string> {
-  // Polymarket balance = USDC on wallet
   const funderAddress = process.env.POLY_FUNDER_ADDRESS;
   if (!funderAddress) {
     return 'Set POLY_FUNDER_ADDRESS to check USDC balance.';
   }
 
   try {
-    // Query USDC balance on Polygon via public RPC
+    // Try CLOB API first
+    const { getPolymarketBalance, getPolymarketPositions } = await import('../../../execution/index');
+    const apiKey = process.env.POLY_API_KEY;
+    const apiSecret = process.env.POLY_API_SECRET;
+    const apiPassphrase = process.env.POLY_API_PASSPHRASE;
+
+    if (apiKey && apiSecret && apiPassphrase) {
+      const auth = { apiKey, apiSecret, apiPassphrase, address: funderAddress };
+      const [balanceData, positions] = await Promise.all([
+        getPolymarketBalance(auth, funderAddress),
+        getPolymarketPositions(auth, funderAddress),
+      ]);
+
+      let output = [
+        '**Polymarket Balance**',
+        '',
+        `Wallet: ${funderAddress.slice(0, 6)}...${funderAddress.slice(-4)}`,
+        `USDC: $${formatNumber(balanceData.balance)}`,
+        `Allowance: $${formatNumber(balanceData.allowance)}`,
+      ];
+
+      if (positions.length > 0) {
+        output.push('', '**Positions:**');
+        let totalValue = 0;
+        let totalPnl = 0;
+        for (const p of positions.slice(0, 10)) {
+          const value = p.size * p.currentPrice;
+          totalValue += value;
+          totalPnl += p.unrealizedPnl;
+          const pnlStr = p.unrealizedPnl >= 0 ? `+$${p.unrealizedPnl.toFixed(2)}` : `-$${Math.abs(p.unrealizedPnl).toFixed(2)}`;
+          output.push(`  ${p.tokenId.slice(0, 10)}... ${p.size.toFixed(0)} @ ${(p.currentPrice * 100).toFixed(0)}c = $${value.toFixed(2)} (${pnlStr})`);
+        }
+        if (positions.length > 10) {
+          output.push(`  ... and ${positions.length - 10} more`);
+        }
+        output.push('', `**Total Position Value:** $${formatNumber(totalValue)}`);
+        output.push(`**Unrealized PnL:** ${totalPnl >= 0 ? '+' : ''}$${formatNumber(totalPnl)}`);
+      }
+
+      return output.join('\n');
+    }
+
+    // Fallback: Query USDC balance on Polygon via public RPC
     const USDC_CONTRACT = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'; // USDC on Polygon
     const balanceData = `0x70a08231000000000000000000000000${funderAddress.slice(2).toLowerCase()}`;
 
@@ -594,6 +637,8 @@ async function handleBalance(): Promise<string> {
       '',
       `Wallet: ${funderAddress.slice(0, 6)}...${funderAddress.slice(-4)}`,
       `USDC: $${formatNumber(balance)}`,
+      '',
+      '_Set POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE to see positions_',
     ].join('\n');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1143,6 +1188,43 @@ async function execute(args: string): Promise<string> {
             `- \`/poly fills clear\` - Clear tracked fills`;
         } catch (err) {
           return `Failed to connect fills WebSocket: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
+
+      case 'trades':
+      case 'history': {
+        // /poly trades [limit]
+        const limit = parseInt(parts[1]) || 20;
+        const apiKey = process.env.POLY_API_KEY;
+        const apiSecret = process.env.POLY_API_SECRET;
+        const apiPassphrase = process.env.POLY_API_PASSPHRASE;
+
+        if (!apiKey || !apiSecret || !apiPassphrase) {
+          return 'Set POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE to view trades.';
+        }
+
+        try {
+          const { getPolymarketTrades } = await import('../../../execution/index');
+          const auth = { apiKey, apiSecret, apiPassphrase, address: process.env.POLY_FUNDER_ADDRESS || '' };
+          const trades = await getPolymarketTrades(auth, limit);
+
+          if (trades.length === 0) {
+            return 'No recent trades found.';
+          }
+
+          let output = `**Recent Trades (${trades.length})**\n\n`;
+          for (const t of trades) {
+            const time = t.timestamp.toLocaleTimeString();
+            output += `${time} ${t.side} ${t.size.toFixed(0)}@${(t.price * 100).toFixed(0)}c`;
+            if (t.transactionHash) {
+              output += ` [${t.transactionHash.slice(0, 8)}...]`;
+            }
+            output += '\n';
+          }
+
+          return output;
+        } catch (error) {
+          return `Error fetching trades: ${error instanceof Error ? error.message : String(error)}`;
         }
       }
 
