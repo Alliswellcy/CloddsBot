@@ -282,10 +282,21 @@ export function getPolymarketExchange(negRisk: boolean): string {
   return negRisk ? POLY_NEG_RISK_CTF_EXCHANGE : POLY_CTF_EXCHANGE;
 }
 
-// Cache for tick sizes and neg risk status to avoid repeated API calls
+// Cache for tick sizes, neg risk status, fee rates, and orderbooks
 const tickSizeCache = new Map<string, { tickSize: string; cachedAt: number }>();
 const negRiskCache = new Map<string, { negRisk: boolean; cachedAt: number }>();
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const feeRateCache = new Map<string, { feeRateBps: number; cachedAt: number }>();
+const orderbookCache = new Map<string, { data: OrderbookData; cachedAt: number }>();
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour for static data
+const ORDERBOOK_CACHE_TTL_MS = 5000; // 5 seconds for orderbook (needs to be fresh)
+
+// Nonce tracking to prevent duplicate orders
+let lastNonce = Date.now();
+function getNextNonce(): string {
+  const now = Date.now();
+  lastNonce = now > lastNonce ? now : lastNonce + 1;
+  return lastNonce.toString();
+}
 
 /**
  * Get tick size for a token (from orderbook endpoint)
@@ -343,6 +354,143 @@ export async function getPolymarketNegRiskCached(tokenId: string): Promise<boole
   const negRisk = await checkPolymarketNegRisk(tokenId);
   negRiskCache.set(tokenId, { negRisk, cachedAt: Date.now() });
   return negRisk;
+}
+
+/**
+ * Get fee rate in basis points for a token
+ * Crypto 15-min markets have higher fees due to negative risk
+ */
+export async function getPolymarketFeeRate(tokenId: string): Promise<number> {
+  // Check cache
+  const cached = feeRateCache.get(tokenId);
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+    return cached.feeRateBps;
+  }
+
+  try {
+    // Fee rate depends on neg_risk status
+    // Standard markets: 0 bps maker, ~2% taker
+    // Neg risk (crypto): higher fees
+    const negRisk = await getPolymarketNegRiskCached(tokenId);
+    // Polymarket fee formula for neg risk: shares × 0.25 × (price × (1 - price))²
+    // Simplified: ~0-50 bps depending on price
+    const feeRateBps = negRisk ? 25 : 0; // Approximate - actual varies by price
+    feeRateCache.set(tokenId, { feeRateBps, cachedAt: Date.now() });
+    return feeRateBps;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Get orderbook with caching (5 second TTL)
+ */
+export async function getPolymarketOrderbookCached(tokenId: string): Promise<OrderbookData | null> {
+  // Check cache
+  const cached = orderbookCache.get(tokenId);
+  if (cached && Date.now() - cached.cachedAt < ORDERBOOK_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  try {
+    const response = await fetch(`${POLY_CLOB_URL}/book?token_id=${tokenId}`);
+    if (!response.ok) return null;
+
+    const data = await response.json() as {
+      bids?: Array<{ price: string; size: string }>;
+      asks?: Array<{ price: string; size: string }>;
+    };
+
+    const bids: [number, number][] = (data.bids || [])
+      .map((b) => [parseFloat(b.price), parseFloat(b.size)] as [number, number])
+      .sort((a, b) => b[0] - a[0]); // Highest bid first
+
+    const asks: [number, number][] = (data.asks || [])
+      .map((a) => [parseFloat(a.price), parseFloat(a.size)] as [number, number])
+      .sort((a, b) => a[0] - b[0]); // Lowest ask first
+
+    const bestBid = bids[0]?.[0] || 0;
+    const bestAsk = asks[0]?.[0] || 1;
+    const midPrice = (bestBid + bestAsk) / 2;
+
+    const orderbook: OrderbookData = { bids, asks, midPrice };
+    orderbookCache.set(tokenId, { data: orderbook, cachedAt: Date.now() });
+    return orderbook;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate post-only order won't take liquidity
+ * Returns error message if order would cross the spread
+ */
+export async function validatePostOnly(
+  tokenId: string,
+  side: OrderSide,
+  price: number
+): Promise<string | null> {
+  const orderbook = await getPolymarketOrderbookCached(tokenId);
+  if (!orderbook) return null; // Can't validate, let server decide
+
+  if (side === 'buy') {
+    // Buy order: price must be < best ask to be maker-only
+    const bestAsk = orderbook.asks[0]?.[0];
+    if (bestAsk && price >= bestAsk) {
+      return `Post-only buy at ${price} would cross spread (best ask: ${bestAsk}). Use price < ${bestAsk}`;
+    }
+  } else {
+    // Sell order: price must be > best bid to be maker-only
+    const bestBid = orderbook.bids[0]?.[0];
+    if (bestBid && price <= bestBid) {
+      return `Post-only sell at ${price} would cross spread (best bid: ${bestBid}). Use price > ${bestBid}`;
+    }
+  }
+
+  return null;
+}
+
+/** Polymarket error codes */
+type PolymarketErrorCode =
+  | 'INVALID_PRICE'
+  | 'INVALID_SIZE'
+  | 'INSUFFICIENT_BALANCE'
+  | 'INVALID_TICK_SIZE'
+  | 'INVALID_NONCE'
+  | 'MARKET_HALTED'
+  | 'ORDER_WOULD_MATCH'
+  | 'UNKNOWN';
+
+/**
+ * Parse Polymarket error response into structured error
+ */
+function parsePolymarketError(errorMsg: string | undefined, status: number): { code: PolymarketErrorCode; message: string } {
+  if (!errorMsg) {
+    return { code: 'UNKNOWN', message: `HTTP ${status}` };
+  }
+
+  const msg = errorMsg.toLowerCase();
+
+  if (msg.includes('price') && (msg.includes('invalid') || msg.includes('tick'))) {
+    return { code: 'INVALID_TICK_SIZE', message: errorMsg };
+  }
+  if (msg.includes('balance') || msg.includes('insufficient')) {
+    return { code: 'INSUFFICIENT_BALANCE', message: errorMsg };
+  }
+  if (msg.includes('size') && msg.includes('invalid')) {
+    return { code: 'INVALID_SIZE', message: errorMsg };
+  }
+  if (msg.includes('nonce')) {
+    return { code: 'INVALID_NONCE', message: errorMsg };
+  }
+  if (msg.includes('halt') || msg.includes('closed')) {
+    return { code: 'MARKET_HALTED', message: errorMsg };
+  }
+  if (msg.includes('match') || msg.includes('cross')) {
+    return { code: 'ORDER_WOULD_MATCH', message: errorMsg };
+  }
+
+  return { code: 'UNKNOWN', message: errorMsg };
 }
 
 /**
@@ -784,13 +932,24 @@ async function placePolymarketOrder(
     return { success: false, error: tickError };
   }
 
+  // Validate post-only won't cross spread
+  if (postOnly) {
+    const postOnlyError = await validatePostOnly(tokenId, side, price);
+    if (postOnlyError) {
+      return { success: false, error: postOnlyError };
+    }
+  }
+
   // Auto-detect negRisk if not provided
   const actualNegRisk = negRisk ?? await getPolymarketNegRiskCached(tokenId);
+
+  // Get fee rate for this token
+  const feeRateBps = await getPolymarketFeeRate(tokenId);
 
   // If private key available, use EIP-712 signed order (required for real CLOB)
   if (auth.privateKey) {
     const signedAuth = { ...auth, privateKey: auth.privateKey };
-    return placeSignedPolymarketOrder(signedAuth, tokenId, side, price, size, orderType, actualNegRisk, postOnly);
+    return placeSignedPolymarketOrder(signedAuth, tokenId, side, price, size, orderType, actualNegRisk, postOnly, feeRateBps);
   }
 
   // Fallback: simplified payload (may not work with real CLOB without signing)
@@ -801,8 +960,9 @@ async function placePolymarketOrder(
     price: price.toString(),
     size: size.toString(),
     orderType: orderType,
-    feeRateBps: '0',
+    feeRateBps: feeRateBps.toString(),
     negRisk: actualNegRisk,
+    nonce: getNextNonce(),
   };
   if (postOnly === true) order.postOnly = true;
 
@@ -817,12 +977,13 @@ async function placePolymarketOrder(
 
     const data = (await response.json()) as PolymarketOrderResponse;
     if (!response.ok || data.errorMsg) {
-      logger.error({ status: response.status, error: data.errorMsg }, 'Polymarket order failed');
-      return { success: false, error: data.errorMsg || `HTTP ${response.status}` };
+      const { code, message } = parsePolymarketError(data.errorMsg, response.status);
+      logger.error({ status: response.status, errorCode: code, error: message }, 'Polymarket order failed');
+      return { success: false, error: `[${code}] ${message}` };
     }
 
     const orderId = data.orderID || data.order_id;
-    logger.info({ orderId, tokenId, side, price, size }, 'Polymarket order placed');
+    logger.info({ orderId, tokenId, side, price, size, feeRateBps }, 'Polymarket order placed');
     return { success: true, orderId, status: 'open', transactionHash: data.transactionsHashes?.[0] };
   } catch (error) {
     logger.error({ error }, 'Error placing Polymarket order');
@@ -843,6 +1004,7 @@ async function placeSignedPolymarketOrder(
   orderType: OrderType = 'GTC',
   negRisk?: boolean,
   postOnly?: boolean,
+  feeRateBps?: number,
 ): Promise<OrderResult> {
   const url = `${POLY_CLOB_URL}/order`;
 
@@ -858,6 +1020,8 @@ async function placeSignedPolymarketOrder(
     size,
     side: side === 'buy' ? 'buy' : 'sell',
     negRisk,
+    feeRateBps,
+    nonce: getNextNonce(),
   }, signerCfg);
 
   // Set owner to API key (required by Polymarket CLOB)
@@ -876,12 +1040,13 @@ async function placeSignedPolymarketOrder(
 
     const data = (await response.json()) as PolymarketOrderResponse;
     if (!response.ok || data.errorMsg) {
-      logger.error({ status: response.status, error: data.errorMsg }, 'Polymarket signed order failed');
-      return { success: false, error: data.errorMsg || `HTTP ${response.status}` };
+      const { code, message } = parsePolymarketError(data.errorMsg, response.status);
+      logger.error({ status: response.status, errorCode: code, error: message }, 'Polymarket signed order failed');
+      return { success: false, error: `[${code}] ${message}` };
     }
 
     const orderId = data.orderID || data.order_id;
-    logger.info({ orderId, tokenId, side, price, size }, 'Polymarket signed order placed');
+    logger.info({ orderId, tokenId, side, price, size, feeRateBps }, 'Polymarket signed order placed');
     return { success: true, orderId, status: 'open', transactionHash: data.transactionsHashes?.[0] };
   } catch (error) {
     logger.error({ error }, 'Error placing Polymarket signed order');
