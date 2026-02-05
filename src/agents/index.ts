@@ -101,7 +101,21 @@ import {
   createMeteoraDlmmPool,
   createCustomizableMeteoraDlmmPool,
 } from '../solana/meteora';
-import { executeRaydiumSwap, getRaydiumQuote } from '../solana/raydium';
+import {
+  executeRaydiumSwap,
+  getRaydiumQuote,
+  getClmmPositions,
+  createClmmPosition,
+  increaseClmmLiquidity,
+  decreaseClmmLiquidity,
+  closeClmmPosition,
+  harvestClmmRewards,
+  addAmmLiquidity,
+  removeAmmLiquidity,
+  swapClmm,
+  createClmmPool,
+  getClmmConfigs,
+} from '../solana/raydium';
 import {
   executeOrcaWhirlpoolSwap,
   getOrcaWhirlpoolQuote,
@@ -5371,6 +5385,151 @@ function buildTools(): ToolDefinition[] {
           swap_mode: { type: 'string', description: 'BaseIn or BaseOut', enum: ['BaseIn', 'BaseOut'] },
         },
         required: ['input_mint', 'output_mint', 'amount'],
+      },
+    },
+    // Raydium CLMM (Concentrated Liquidity) Tools
+    {
+      name: 'raydium_clmm_positions',
+      description: 'List your Raydium CLMM (concentrated liquidity) positions',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_id: { type: 'string', description: 'Optional: filter by pool ID' },
+        },
+      },
+    },
+    {
+      name: 'raydium_clmm_create_position',
+      description: 'Create a new concentrated liquidity position in a Raydium CLMM pool',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_id: { type: 'string', description: 'CLMM pool ID' },
+          price_lower: { type: 'number', description: 'Lower price bound' },
+          price_upper: { type: 'number', description: 'Upper price bound' },
+          base_amount: { type: 'string', description: 'Amount of base token in lamports' },
+          base_in: { type: 'boolean', description: 'true=mintA is input, false=mintB is input' },
+          slippage: { type: 'number', description: 'Slippage tolerance (0.01 = 1%)' },
+        },
+        required: ['pool_id', 'price_lower', 'price_upper', 'base_amount'],
+      },
+    },
+    {
+      name: 'raydium_clmm_increase_liquidity',
+      description: 'Add more liquidity to an existing Raydium CLMM position',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_id: { type: 'string', description: 'CLMM pool ID' },
+          position_nft_mint: { type: 'string', description: 'Position NFT mint address' },
+          amount_a: { type: 'string', description: 'Amount of token A to add (lamports)' },
+          amount_b: { type: 'string', description: 'Amount of token B to add (lamports)' },
+          slippage: { type: 'number', description: 'Slippage tolerance (0.05 = 5%)' },
+        },
+        required: ['pool_id', 'position_nft_mint'],
+      },
+    },
+    {
+      name: 'raydium_clmm_decrease_liquidity',
+      description: 'Remove liquidity from a Raydium CLMM position',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_id: { type: 'string', description: 'CLMM pool ID' },
+          position_nft_mint: { type: 'string', description: 'Position NFT mint address' },
+          liquidity: { type: 'string', description: 'Amount of liquidity to remove (raw)' },
+          percent_bps: { type: 'number', description: 'Or specify percentage in bps (5000 = 50%)' },
+          close_position: { type: 'boolean', description: 'Close position after removing all liquidity' },
+          slippage: { type: 'number', description: 'Slippage tolerance' },
+        },
+        required: ['pool_id', 'position_nft_mint'],
+      },
+    },
+    {
+      name: 'raydium_clmm_close_position',
+      description: 'Close a Raydium CLMM position (must have zero liquidity)',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_id: { type: 'string', description: 'CLMM pool ID' },
+          position_nft_mint: { type: 'string', description: 'Position NFT mint address' },
+        },
+        required: ['pool_id', 'position_nft_mint'],
+      },
+    },
+    {
+      name: 'raydium_clmm_harvest',
+      description: 'Harvest rewards from Raydium CLMM positions',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_id: { type: 'string', description: 'Optional: harvest only from specific pool' },
+        },
+      },
+    },
+    {
+      name: 'raydium_clmm_swap',
+      description: 'Swap directly on a specific Raydium CLMM pool',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_id: { type: 'string', description: 'CLMM pool ID' },
+          input_mint: { type: 'string', description: 'Input token mint' },
+          amount_in: { type: 'string', description: 'Amount to swap (lamports)' },
+          slippage: { type: 'number', description: 'Slippage tolerance (0.01 = 1%)' },
+        },
+        required: ['pool_id', 'input_mint', 'amount_in'],
+      },
+    },
+    // Raydium AMM (V4) Liquidity Tools
+    {
+      name: 'raydium_amm_add_liquidity',
+      description: 'Add liquidity to a Raydium AMM (v4) pool',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_id: { type: 'string', description: 'AMM pool ID' },
+          amount_a: { type: 'string', description: 'Amount of token A (lamports)' },
+          amount_b: { type: 'string', description: 'Amount of token B (lamports)' },
+          fixed_side: { type: 'string', description: 'Which side is fixed: a or b', enum: ['a', 'b'] },
+          slippage: { type: 'number', description: 'Slippage tolerance (0.01 = 1%)' },
+        },
+        required: ['pool_id'],
+      },
+    },
+    {
+      name: 'raydium_amm_remove_liquidity',
+      description: 'Remove liquidity from a Raydium AMM (v4) pool',
+      input_schema: {
+        type: 'object',
+        properties: {
+          pool_id: { type: 'string', description: 'AMM pool ID' },
+          lp_amount: { type: 'string', description: 'Amount of LP tokens to burn (lamports)' },
+          slippage: { type: 'number', description: 'Slippage tolerance (0.1 = 10%)' },
+        },
+        required: ['pool_id', 'lp_amount'],
+      },
+    },
+    {
+      name: 'raydium_clmm_create_pool',
+      description: 'Create a new Raydium CLMM pool',
+      input_schema: {
+        type: 'object',
+        properties: {
+          mint_a: { type: 'string', description: 'Token A mint address' },
+          mint_b: { type: 'string', description: 'Token B mint address' },
+          initial_price: { type: 'number', description: 'Initial pool price (A per B)' },
+          config_index: { type: 'number', description: 'Fee tier config index (default 0)' },
+        },
+        required: ['mint_a', 'mint_b', 'initial_price'],
+      },
+    },
+    {
+      name: 'raydium_clmm_configs',
+      description: 'Get available Raydium CLMM fee tier configurations',
+      input_schema: {
+        type: 'object',
+        properties: {},
       },
     },
     {
@@ -13618,6 +13777,175 @@ async function executeTool(
             slippageBps: toolInput.slippage_bps as number | undefined,
             swapMode: toolInput.swap_mode as 'BaseIn' | 'BaseOut' | undefined,
           });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      // Raydium CLMM (Concentrated Liquidity) Cases
+      case 'raydium_clmm_positions': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const poolId = toolInput.pool_id as string | undefined;
+          const result = await getClmmPositions(connection, keypair, poolId);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_clmm_create_position': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await createClmmPosition(connection, keypair, {
+            poolId: toolInput.pool_id as string,
+            priceLower: toolInput.price_lower as number,
+            priceUpper: toolInput.price_upper as number,
+            baseAmount: toolInput.base_amount as string,
+            baseIn: toolInput.base_in as boolean | undefined,
+            slippage: toolInput.slippage as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_clmm_increase_liquidity': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await increaseClmmLiquidity(connection, keypair, {
+            poolId: toolInput.pool_id as string,
+            positionNftMint: toolInput.position_nft_mint as string,
+            amountA: toolInput.amount_a as string | undefined,
+            amountB: toolInput.amount_b as string | undefined,
+            slippage: toolInput.slippage as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_clmm_decrease_liquidity': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await decreaseClmmLiquidity(connection, keypair, {
+            poolId: toolInput.pool_id as string,
+            positionNftMint: toolInput.position_nft_mint as string,
+            liquidity: toolInput.liquidity as string | undefined,
+            percentBps: toolInput.percent_bps as number | undefined,
+            closePosition: toolInput.close_position as boolean | undefined,
+            slippage: toolInput.slippage as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_clmm_close_position': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await closeClmmPosition(
+            connection,
+            keypair,
+            toolInput.pool_id as string,
+            toolInput.position_nft_mint as string
+          );
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_clmm_harvest': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const poolId = toolInput.pool_id as string | undefined;
+          const result = await harvestClmmRewards(connection, keypair, poolId);
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_clmm_swap': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await swapClmm(connection, keypair, {
+            poolId: toolInput.pool_id as string,
+            inputMint: toolInput.input_mint as string,
+            amountIn: toolInput.amount_in as string,
+            slippage: toolInput.slippage as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      // Raydium AMM (V4) Liquidity Cases
+      case 'raydium_amm_add_liquidity': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await addAmmLiquidity(connection, keypair, {
+            poolId: toolInput.pool_id as string,
+            amountA: toolInput.amount_a as string | undefined,
+            amountB: toolInput.amount_b as string | undefined,
+            fixedSide: toolInput.fixed_side as 'a' | 'b' | undefined,
+            slippage: toolInput.slippage as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_amm_remove_liquidity': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await removeAmmLiquidity(connection, keypair, {
+            poolId: toolInput.pool_id as string,
+            lpAmount: toolInput.lp_amount as string,
+            slippage: toolInput.slippage as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_clmm_create_pool': {
+        try {
+          const keypair = loadSolanaKeypair();
+          const connection = getSolanaConnection();
+          const result = await createClmmPool(connection, keypair, {
+            mintA: toolInput.mint_a as string,
+            mintB: toolInput.mint_b as string,
+            initialPrice: toolInput.initial_price as number,
+            configIndex: toolInput.config_index as number | undefined,
+          });
+          return JSON.stringify(result);
+        } catch (err: unknown) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+      }
+
+      case 'raydium_clmm_configs': {
+        try {
+          const connection = getSolanaConnection();
+          const result = await getClmmConfigs(connection);
           return JSON.stringify(result);
         } catch (err: unknown) {
           return JSON.stringify({ error: (err as Error).message });

@@ -139,7 +139,19 @@ await closeJupiterDCA(connection, keypair, dca.dcaPubKey);
 ### Raydium
 
 ```typescript
-import { executeRaydiumSwap, getRaydiumQuote, listRaydiumPools } from 'clodds/solana/raydium';
+import {
+  executeRaydiumSwap,
+  getRaydiumQuote,
+  listRaydiumPools,
+  getClmmPositions,
+  createClmmPosition,
+  increaseClmmLiquidity,
+  decreaseClmmLiquidity,
+  closeClmmPosition,
+  harvestClmmRewards,
+  addAmmLiquidity,
+  removeAmmLiquidity,
+} from 'clodds/solana/raydium';
 
 // Get quote
 const quote = await getRaydiumQuote({
@@ -150,15 +162,36 @@ const quote = await getRaydiumQuote({
 console.log(`Expected output: ${quote.outAmount}`);
 
 // Execute swap
-const result = await executeRaydiumSwap({
-  inputMint: 'SOL',
-  outputMint: 'USDC',
-  amount: 1_000_000_000,
-  slippage: 0.5,
+const result = await executeRaydiumSwap(connection, keypair, {
+  inputMint: 'So11111111111111111111111111111111111111112',
+  outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  amount: '1000000000',
+  slippageBps: 50,
 });
 
 // List pools
-const pools = await listRaydiumPools({ token: 'SOL' });
+const pools = await listRaydiumPools({ tokenMints: ['So11111111111111111111111111111111111111112'] });
+
+// CLMM: Open concentrated liquidity position
+const position = await createClmmPosition(connection, keypair, {
+  poolId: 'POOL_ID_HERE',
+  priceLower: 100,
+  priceUpper: 200,
+  baseAmount: '1000000000',
+});
+
+// CLMM: List positions
+const positions = await getClmmPositions(connection, keypair);
+
+// CLMM: Harvest rewards
+const rewards = await harvestClmmRewards(connection, keypair);
+
+// AMM: Add liquidity
+await addAmmLiquidity(connection, keypair, {
+  poolId: 'AMM_POOL_ID',
+  amountA: '1000000000',
+  fixedSide: 'a',
+});
 ```
 
 ### Orca Whirlpools
