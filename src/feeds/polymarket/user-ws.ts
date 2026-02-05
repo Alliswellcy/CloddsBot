@@ -4,7 +4,11 @@
  * Each user gets their own authenticated WebSocket connection
  * to receive real-time fill notifications for their orders.
  *
- * Based on Clawdbot's per-session isolation pattern.
+ * Protocol (from Polymarket docs):
+ * 1. Connect to wss://ws-subscriptions-clob.polymarket.com/ws/user
+ * 2. Send subscription: {"type": "subscribe", "channel": "user", "auth": {...}}
+ * 3. Send JSON ping {"type": "ping"} every 10 seconds
+ * 4. Receive trade/order events
  */
 
 import WebSocket from 'ws';
@@ -14,6 +18,8 @@ import type { PolymarketCredentials } from '../../types.js';
 import { buildPolymarketHeadersForUrl } from '../../utils/polymarket-auth.js';
 
 const USER_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/user';
+const PING_INTERVAL_MS = 10000; // 10 seconds per Polymarket docs
+const RECONNECT_DELAY_MS = 5000;
 
 export interface FillEvent {
   orderId: string;
@@ -27,8 +33,21 @@ export interface FillEvent {
   transactionHash?: string;
 }
 
+export interface OrderEvent {
+  orderId: string;
+  marketId: string;
+  tokenId: string;
+  type: 'PLACEMENT' | 'UPDATE' | 'CANCELLATION';
+  side: 'BUY' | 'SELL';
+  price: number;
+  originalSize: number;
+  sizeMatched: number;
+  timestamp: number;
+}
+
 export interface UserWebSocketEvents {
   fill: (event: FillEvent) => void;
+  order: (event: OrderEvent) => void;
   connected: () => void;
   disconnected: () => void;
   error: (error: Error) => void;
@@ -54,6 +73,45 @@ export function createUserWebSocket(
   let pingInterval: NodeJS.Timeout | null = null;
   let reconnectTimeout: NodeJS.Timeout | null = null;
   let connected = false;
+  let subscribed = false;
+
+  const sendSubscription = (): void => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    // Build auth headers for subscription message
+    const authHeaders = buildPolymarketHeadersForUrl(
+      {
+        address: credentials.funderAddress,
+        apiKey: credentials.apiKey,
+        apiSecret: credentials.apiSecret,
+        apiPassphrase: credentials.apiPassphrase,
+      },
+      'GET',
+      USER_WS_URL
+    );
+
+    // Send subscription with embedded auth
+    const subscribeMsg = {
+      type: 'subscribe',
+      channel: 'user',
+      auth: {
+        apiKey: credentials.apiKey,
+        secret: credentials.apiSecret,
+        passphrase: credentials.apiPassphrase,
+        // Include HMAC headers for additional auth
+        ...authHeaders,
+      },
+    };
+
+    ws.send(JSON.stringify(subscribeMsg));
+    logger.info({ userId }, 'Sent user channel subscription');
+  };
+
+  const sendPing = (): void => {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping' }));
+    }
+  };
 
   const connect = async (): Promise<void> => {
     if (ws && connected) {
@@ -62,29 +120,18 @@ export function createUserWebSocket(
 
     return new Promise((resolve, reject) => {
       try {
-        const headers = buildPolymarketHeadersForUrl(
-          {
-            address: credentials.funderAddress,
-            apiKey: credentials.apiKey,
-            apiSecret: credentials.apiSecret,
-            apiPassphrase: credentials.apiPassphrase,
-          },
-          'GET',
-          USER_WS_URL
-        );
-
-        ws = new WebSocket(USER_WS_URL, { headers });
+        ws = new WebSocket(USER_WS_URL);
 
         ws.on('open', () => {
           connected = true;
+          subscribed = false;
           logger.info({ userId }, 'User WebSocket connected');
 
-          // Start ping/pong keepalive (every 30s)
-          pingInterval = setInterval(() => {
-            if (ws?.readyState === WebSocket.OPEN) {
-              ws.ping();
-            }
-          }, 30000);
+          // Send subscription message
+          sendSubscription();
+
+          // Start JSON ping keepalive (every 10s per Polymarket docs)
+          pingInterval = setInterval(sendPing, PING_INTERVAL_MS);
 
           emitter.emit('connected');
           resolve();
@@ -94,23 +141,55 @@ export function createUserWebSocket(
           try {
             const message = JSON.parse(data.toString());
 
-            // Handle different message types
+            // Handle pong response
+            if (message.type === 'pong') {
+              return;
+            }
+
+            // Handle subscription confirmation
+            if (message.type === 'subscribed' || message.channel === 'user') {
+              if (!subscribed) {
+                subscribed = true;
+                logger.info({ userId }, 'User channel subscription confirmed');
+              }
+            }
+
+            // Handle trade events (fills)
             if (message.event_type === 'trade' || message.type === 'trade') {
               const fill: FillEvent = {
-                orderId: message.order_id || message.orderId,
-                marketId: message.market || message.marketId,
-                tokenId: message.asset_id || message.tokenId,
-                side: message.side?.toUpperCase() || 'BUY',
+                orderId: message.order_id || message.id || '',
+                marketId: message.market || message.condition_id || '',
+                tokenId: message.asset_id || message.token_id || '',
+                side: (message.side?.toUpperCase() || 'BUY') as 'BUY' | 'SELL',
                 size: parseFloat(message.size || message.matched_amount || '0'),
                 price: parseFloat(message.price || '0'),
-                status: message.status || 'MATCHED',
-                timestamp: message.timestamp || Date.now(),
+                status: (message.status?.toUpperCase() || 'MATCHED') as FillEvent['status'],
+                timestamp: message.timestamp ? new Date(message.timestamp).getTime() : Date.now(),
                 transactionHash: message.transaction_hash || message.transactionHash,
               };
 
               logger.info({ userId, fill }, 'Fill notification received');
               emitter.emit('fill', fill);
             }
+
+            // Handle order events (placements, updates, cancellations)
+            if (message.event_type === 'order' || message.type === 'order') {
+              const orderEvent: OrderEvent = {
+                orderId: message.order_id || message.id || '',
+                marketId: message.market || message.condition_id || '',
+                tokenId: message.asset_id || message.token_id || '',
+                type: (message.order_type || message.type || 'UPDATE') as OrderEvent['type'],
+                side: (message.side?.toUpperCase() || 'BUY') as 'BUY' | 'SELL',
+                price: parseFloat(message.price || '0'),
+                originalSize: parseFloat(message.original_size || message.size || '0'),
+                sizeMatched: parseFloat(message.size_matched || '0'),
+                timestamp: message.timestamp ? new Date(message.timestamp).getTime() : Date.now(),
+              };
+
+              logger.info({ userId, orderEvent }, 'Order event received');
+              emitter.emit('order', orderEvent);
+            }
+
           } catch (err) {
             logger.error({ userId, err, data: data.toString() }, 'Failed to parse WS message');
           }
@@ -118,6 +197,7 @@ export function createUserWebSocket(
 
         ws.on('close', (code, reason) => {
           connected = false;
+          subscribed = false;
           if (pingInterval) {
             clearInterval(pingInterval);
             pingInterval = null;
@@ -126,14 +206,14 @@ export function createUserWebSocket(
           logger.info({ userId, code, reason: reason.toString() }, 'User WebSocket disconnected');
           emitter.emit('disconnected');
 
-          // Auto-reconnect after 5 seconds (unless intentionally closed)
+          // Auto-reconnect after delay (unless intentionally closed)
           if (code !== 1000) {
             reconnectTimeout = setTimeout(() => {
               logger.info({ userId }, 'Attempting WebSocket reconnection');
               connect().catch(err => {
                 logger.error({ userId, err }, 'Reconnection failed');
               });
-            }, 5000);
+            }, RECONNECT_DELAY_MS);
           }
         });
 
@@ -141,10 +221,6 @@ export function createUserWebSocket(
           logger.error({ userId, error }, 'User WebSocket error');
           emitter.emit('error', error);
           reject(error);
-        });
-
-        ws.on('pong', () => {
-          // Keepalive confirmed
         });
 
       } catch (err) {
@@ -167,9 +243,10 @@ export function createUserWebSocket(
       ws = null;
     }
     connected = false;
+    subscribed = false;
   };
 
-  const isConnected = (): boolean => connected;
+  const isConnected = (): boolean => connected && subscribed;
 
   emitter.connect = connect;
   emitter.disconnect = disconnect;

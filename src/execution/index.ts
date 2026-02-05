@@ -37,6 +37,7 @@ import {
   createUserWebSocket,
   type UserWebSocket,
   type FillEvent,
+  type OrderEvent,
 } from '../feeds/polymarket/user-ws';
 
 // =============================================================================
@@ -124,6 +125,20 @@ export interface TrackedFill {
   receivedAt: number;
 }
 
+/** Real-time order event tracking for WebSocket updates */
+export interface TrackedOrder {
+  orderId: string;
+  marketId: string;
+  tokenId: string;
+  type: 'PLACEMENT' | 'UPDATE' | 'CANCELLATION';
+  side: OrderSide;
+  price: number;
+  originalSize: number;
+  sizeMatched: number;
+  timestamp: number;
+  receivedAt: number;
+}
+
 export interface ExecutionConfig {
   polymarket?: PolymarketApiKeyAuth & {
     privateKey?: string;  // For EIP-712 order signing
@@ -200,12 +215,16 @@ export interface ExecutionService {
   isFillsWebSocketConnected(): boolean;
   /** Subscribe to fill events */
   onFill(callback: (fill: TrackedFill) => void): () => void;
+  /** Subscribe to order events (placement, update, cancellation) */
+  onOrder(callback: (order: TrackedOrder) => void): () => void;
   /** Get all tracked fills (received via WebSocket) */
   getTrackedFills(): TrackedFill[];
   /** Get tracked fill for a specific order */
   getTrackedFill(orderId: string): TrackedFill | undefined;
   /** Clear old tracked fills (older than specified ms, default 1 hour) */
   clearOldFills(maxAgeMs?: number): number;
+  /** Wait for a fill to reach CONFIRMED status (or timeout) */
+  waitForFill(orderId: string, timeoutMs?: number): Promise<TrackedFill | null>;
 }
 
 // =============================================================================
@@ -1603,7 +1622,10 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
   // ==========================================================================
   let userWs: UserWebSocket | null = null;
   const trackedFills = new Map<string, TrackedFill>();
+  const trackedOrders = new Map<string, TrackedOrder>();
   const fillCallbacks = new Set<(fill: TrackedFill) => void>();
+  const orderCallbacks = new Set<(order: TrackedOrder) => void>();
+  const fillWaiters = new Map<string, Array<(fill: TrackedFill | null) => void>>();
 
   function handleFillEvent(event: FillEvent): void {
     const fill: TrackedFill = {
@@ -1619,7 +1641,7 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
       receivedAt: Date.now(),
     };
 
-    // Update or insert
+    // Update or insert (only if higher priority status)
     const existing = trackedFills.get(event.orderId);
     if (!existing || getStatusPriority(fill.status) > getStatusPriority(existing.status)) {
       trackedFills.set(event.orderId, fill);
@@ -1632,6 +1654,44 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
         } catch (err) {
           logger.error({ err }, 'Fill callback error');
         }
+      }
+
+      // Resolve waiters if CONFIRMED or FAILED
+      if (fill.status === 'CONFIRMED' || fill.status === 'FAILED') {
+        const waiters = fillWaiters.get(event.orderId);
+        if (waiters) {
+          for (const resolve of waiters) {
+            resolve(fill);
+          }
+          fillWaiters.delete(event.orderId);
+        }
+      }
+    }
+  }
+
+  function handleOrderEvent(event: OrderEvent): void {
+    const order: TrackedOrder = {
+      orderId: event.orderId,
+      marketId: event.marketId,
+      tokenId: event.tokenId,
+      type: event.type,
+      side: event.side.toLowerCase() as OrderSide,
+      price: event.price,
+      originalSize: event.originalSize,
+      sizeMatched: event.sizeMatched,
+      timestamp: event.timestamp,
+      receivedAt: Date.now(),
+    };
+
+    trackedOrders.set(event.orderId, order);
+    logger.info({ order }, 'Order event tracked via WebSocket');
+
+    // Notify subscribers
+    for (const callback of orderCallbacks) {
+      try {
+        callback(order);
+      } catch (err) {
+        logger.error({ err }, 'Order callback error');
       }
     }
   }
@@ -1665,6 +1725,7 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
     });
 
     userWs.on('fill', handleFillEvent);
+    userWs.on('order', handleOrderEvent);
     userWs.on('error', (err) => {
       logger.error({ err }, 'Fills WebSocket error');
     });
@@ -1679,6 +1740,38 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
       userWs = null;
       logger.info('Fills WebSocket disconnected');
     }
+  }
+
+  function waitForFill(orderId: string, timeoutMs = 60000): Promise<TrackedFill | null> {
+    // Check if already have a confirmed/failed fill
+    const existing = trackedFills.get(orderId);
+    if (existing && (existing.status === 'CONFIRMED' || existing.status === 'FAILED')) {
+      return Promise.resolve(existing);
+    }
+
+    return new Promise((resolve) => {
+      // Set up timeout
+      const timeout = setTimeout(() => {
+        const waiters = fillWaiters.get(orderId);
+        if (waiters) {
+          const idx = waiters.indexOf(resolve);
+          if (idx !== -1) waiters.splice(idx, 1);
+          if (waiters.length === 0) fillWaiters.delete(orderId);
+        }
+        resolve(null); // Timeout - return null
+      }, timeoutMs);
+
+      // Add to waiters
+      const resolveWrapper = (fill: TrackedFill | null) => {
+        clearTimeout(timeout);
+        resolve(fill);
+      };
+
+      if (!fillWaiters.has(orderId)) {
+        fillWaiters.set(orderId, []);
+      }
+      fillWaiters.get(orderId)!.push(resolveWrapper);
+    });
   }
 
   // ==========================================================================
@@ -2317,6 +2410,13 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
       };
     },
 
+    onOrder(callback: (order: TrackedOrder) => void) {
+      orderCallbacks.add(callback);
+      return () => {
+        orderCallbacks.delete(callback);
+      };
+    },
+
     getTrackedFills() {
       return Array.from(trackedFills.values());
     },
@@ -2334,7 +2434,17 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
           cleared++;
         }
       }
+      // Also clear old orders
+      for (const [orderId, order] of trackedOrders) {
+        if (now - order.receivedAt > maxAgeMs) {
+          trackedOrders.delete(orderId);
+        }
+      }
       return cleared;
+    },
+
+    waitForFill(orderId: string, timeoutMs?: number) {
+      return waitForFill(orderId, timeoutMs);
     },
   };
 

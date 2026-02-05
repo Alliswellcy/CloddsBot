@@ -389,9 +389,11 @@ function wrapExecutionWithLogging(
     disconnectFillsWebSocket: execution.disconnectFillsWebSocket.bind(execution),
     isFillsWebSocketConnected: execution.isFillsWebSocketConnected.bind(execution),
     onFill: execution.onFill.bind(execution),
+    onOrder: execution.onOrder.bind(execution),
     getTrackedFills: execution.getTrackedFills.bind(execution),
     getTrackedFill: execution.getTrackedFill.bind(execution),
     clearOldFills: execution.clearOldFills.bind(execution),
+    waitForFill: execution.waitForFill.bind(execution),
   };
 }
 

@@ -124,6 +124,12 @@ function helpText(): string {
     '**Cross-Platform:**',
     '  /poly route <token> <buy|sell> <size>   - Compare prices across platforms',
     '',
+    '**Real-Time Fills:**',
+    '  /poly fills                             - Connect fills WebSocket',
+    '  /poly fills status                      - Show connection + recent fills',
+    '  /poly fills stop                        - Disconnect fills WebSocket',
+    '  /poly fills clear                       - Clear tracked fills',
+    '',
     '**Env vars:** POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE',
     '  Optional: POLY_PRIVATE_KEY, POLY_FUNDER_ADDRESS',
     '',
@@ -1064,6 +1070,75 @@ async function execute(args: string): Promise<string> {
           `Error rate: ${(state.errorRate * 100).toFixed(0)}%\n` +
           (state.tripReason ? `Trip reason: ${state.tripReason}\n` : '') +
           `\nUse \`/risk trip\` / \`/risk reset\` to manually control.`;
+      }
+
+      case 'fills': {
+        // /poly fills [status|stop|clear]
+        const subcommand = parts[1]?.toLowerCase();
+        const exec = getExecution();
+        if (!exec) {
+          return 'Polymarket trading not configured. Set env vars and restart.';
+        }
+
+        if (subcommand === 'status') {
+          const connected = exec.isFillsWebSocketConnected();
+          const fills = exec.getTrackedFills();
+          const recentFills = fills.slice(-5);
+
+          let output = `**Fills WebSocket Status**\n`;
+          output += `Connection: ${connected ? 'Connected' : 'Disconnected'}\n`;
+          output += `Tracked fills: ${fills.length}\n\n`;
+
+          if (recentFills.length > 0) {
+            output += `**Recent Fills:**\n`;
+            for (const fill of recentFills) {
+              output += `- ${fill.orderId.slice(0, 8)}... ${fill.side.toUpperCase()} ${fill.size}@${fill.price} [${fill.status}]`;
+              if (fill.transactionHash) {
+                output += ` tx:${fill.transactionHash.slice(0, 10)}...`;
+              }
+              output += '\n';
+            }
+          }
+
+          return output;
+        }
+
+        if (subcommand === 'stop') {
+          exec.disconnectFillsWebSocket();
+          return 'Fills WebSocket disconnected.';
+        }
+
+        if (subcommand === 'clear') {
+          const cleared = exec.clearOldFills(0); // Clear all
+          return `Cleared ${cleared} tracked fills.`;
+        }
+
+        // Default: connect and show status
+        try {
+          await exec.connectFillsWebSocket();
+
+          // Set up fill logging if not already
+          let listenersSetUp = false;
+          if (!listenersSetUp) {
+            exec.onFill((fill) => {
+              logger.info(
+                { fill },
+                `FILL: ${fill.side.toUpperCase()} ${fill.size}@${fill.price} [${fill.status}]`
+              );
+            });
+            listenersSetUp = true;
+          }
+
+          return `Fills WebSocket connected!\n\n` +
+            `Real-time fill notifications are now active.\n` +
+            `Fill events will be logged as orders are matched, mined, and confirmed.\n\n` +
+            `Commands:\n` +
+            `- \`/poly fills status\` - Show connection status and recent fills\n` +
+            `- \`/poly fills stop\` - Disconnect WebSocket\n` +
+            `- \`/poly fills clear\` - Clear tracked fills`;
+        } catch (err) {
+          return `Failed to connect fills WebSocket: ${err instanceof Error ? err.message : String(err)}`;
+        }
       }
 
       case 'help':
