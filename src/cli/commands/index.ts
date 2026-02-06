@@ -3702,19 +3702,14 @@ export function createOnboardCommand(program: Command): void {
       const figlet = await import('figlet');
       const banner = figlet.default.textSync('Clodds', { font: 'ANSI Shadow' });
       console.log('');
-      console.log(`              ${dim('\u2727')}    ${cyan('.-."""-.')}    ${dim('*')}`);
-      console.log(`           ${dim('*')}     ${cyan('/ .===. \\')}`);
-      console.log(`                 ${cyan('| |')} ${magenta('\u2661\u2661\u2661')} ${cyan('| |')}`);
-      console.log(`                 ${cyan('\\ \\.===./ /')}`);
-      console.log(`             ${dim('\u2726')}   ${cyan(" '-.._.-'")}`);
-      console.log(`                 ${yellow('\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584')}`);
+      console.log(`                       \uD83D\uDD2E`);
       console.log('');
       for (const line of banner.split('\n')) {
         if (line.trim()) console.log(`  ${magenta(line)}`);
       }
       console.log('');
-      console.log(`  ${bold('AI Trading Terminal')} ${dim('for prediction markets, crypto & futures')}`);
-      console.log(`  ${dim('10 markets  |  22 channels  |  103 skills')}`);
+      console.log(`  \u2728 ${bold('AI Trading Terminal')} ${dim('for prediction markets, crypto & futures')}`);
+      console.log(`  ${dim('   10 markets  \u00b7  22 channels  \u00b7  103 skills')}`);
       console.log('');
       console.log(`  ${dim('='.repeat(56))}`);
       console.log('');
