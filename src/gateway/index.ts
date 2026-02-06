@@ -2021,9 +2021,62 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   // Set feature engineering for REST API
   httpGateway.setFeatureEngineering(featureEngine);
 
-  // Create bot manager, trade logger, and strategy builder
-  botManager = createBotManager(db);
+  // Create trade logger first (shared with bot manager)
   tradeLogger = createTradeLogger(db);
+
+  // Create bot manager with execution callbacks
+  botManager = createBotManager(db, {
+    tradeLogger,
+    executeOrder: executionService
+      ? async (signal, strategyId) => {
+          const side = signal.type === 'buy' ? 'buy' : 'sell';
+          const orderReq = {
+            platform: signal.platform as 'polymarket' | 'kalshi' | 'opinion' | 'predictfun',
+            marketId: signal.marketId,
+            outcome: signal.outcome,
+            price: signal.price || 0.5,
+            size: signal.size || 100,
+          };
+          const result = side === 'buy'
+            ? await executionService!.buyLimit(orderReq)
+            : await executionService!.sellLimit(orderReq);
+          if (!result.success) return null;
+          return tradeLogger!.logTrade({
+            platform: signal.platform,
+            marketId: signal.marketId,
+            outcome: signal.outcome,
+            side,
+            orderType: 'limit',
+            price: result.avgFillPrice ?? signal.price ?? 0.5,
+            size: result.filledSize ?? signal.size ?? 100,
+            filled: result.filledSize ?? 0,
+            cost: (result.avgFillPrice ?? signal.price ?? 0.5) * (result.filledSize ?? signal.size ?? 100),
+            status: result.filledSize ? 'filled' : 'pending',
+            strategyId,
+            orderId: result.orderId,
+          });
+        }
+      : undefined,
+    getPrice: async (platform, marketId) => {
+      const market = await feeds.getMarket(marketId, platform);
+      if (!market) return null;
+      const outcome = market.outcomes[0];
+      return outcome?.price ?? null;
+    },
+    getMarket: async (platform, marketId) => {
+      return feeds.getMarket(marketId, platform);
+    },
+    getPortfolio: async () => {
+      const positions = db.getPositions('default');
+      let totalValue = 0;
+      const mapped = positions.map((p: any) => {
+        const value = p.shares * (p.currentPrice || p.avgPrice);
+        totalValue += value;
+        return { platform: p.platform, marketId: p.marketId, outcome: p.outcome, shares: p.shares, avgPrice: p.avgPrice, currentPrice: p.currentPrice || p.avgPrice };
+      });
+      return { value: totalValue, balance: totalValue * 0.2, positions: mapped };
+    },
+  });
   strategyBuilder = createStrategyBuilder(db);
 
   // Register built-in strategies
@@ -2040,6 +2093,42 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     });
     botManager.registerStrategy(mmStrategy);
     logger.info('Market making strategy registered');
+  }
+
+  // Register crypto HFT adapter if configured
+  if (config.trading?.cryptoHft?.enabled) {
+    try {
+      const { createCryptoFeed } = await import('../feeds/crypto/index.js');
+      const { createCryptoHftAdapter } = await import('../trading/adapters/index.js');
+      const cryptoFeed = createCryptoFeed();
+      const hftStrategy = createCryptoHftAdapter({
+        feed: cryptoFeed,
+        execution: executionService,
+        config: config.trading.cryptoHft,
+      });
+      botManager.registerStrategy(hftStrategy);
+      logger.info('Crypto HFT adapter registered');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load crypto HFT adapter');
+    }
+  }
+
+  // Register HFT divergence adapter if configured
+  if (config.trading?.hftDivergence?.enabled) {
+    try {
+      const { createCryptoFeed } = await import('../feeds/crypto/index.js');
+      const { createDivergenceAdapter } = await import('../trading/adapters/index.js');
+      const cryptoFeed = createCryptoFeed();
+      const divStrategy = createDivergenceAdapter({
+        feed: cryptoFeed,
+        execution: executionService,
+        config: config.trading.hftDivergence,
+      });
+      botManager.registerStrategy(divStrategy);
+      logger.info('HFT divergence adapter registered');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load HFT divergence adapter');
+    }
   }
 
   logger.info({ strategies: botManager.getStrategies().length }, 'Bot manager initialized with built-in strategies');

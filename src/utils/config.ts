@@ -394,6 +394,35 @@ export async function loadConfig(customPath?: string): Promise<Config> {
   // Substitute environment variables
   const config = substituteEnvVars(merged) as Config;
 
+  // Apply trading feature env overrides
+  const envBool = (v: string | undefined) => v === '1' || v?.toLowerCase() === 'true';
+  if (process.env.MARKET_MAKING_ENABLED) {
+    if (!config.trading) config.trading = { enabled: false, dryRun: true, maxOrderSize: 100, maxDailyLoss: 200 };
+    config.trading.marketMaking = {
+      ...config.trading.marketMaking,
+      enabled: envBool(process.env.MARKET_MAKING_ENABLED),
+    };
+  }
+  if (process.env.MARKET_MAKING_SPREAD_BPS) {
+    if (!config.trading) config.trading = { enabled: false, dryRun: true, maxOrderSize: 100, maxDailyLoss: 200 };
+    if (!config.trading.marketMaking) config.trading.marketMaking = { enabled: false };
+    (config.trading.marketMaking as any).spreadBps = parseInt(process.env.MARKET_MAKING_SPREAD_BPS, 10);
+  }
+  if (process.env.CRYPTO_HFT_ENABLED) {
+    if (!config.trading) config.trading = { enabled: false, dryRun: true, maxOrderSize: 100, maxDailyLoss: 200 };
+    config.trading.cryptoHft = {
+      ...config.trading.cryptoHft,
+      enabled: envBool(process.env.CRYPTO_HFT_ENABLED),
+    };
+  }
+  if (process.env.HFT_DIVERGENCE_ENABLED) {
+    if (!config.trading) config.trading = { enabled: false, dryRun: true, maxOrderSize: 100, maxDailyLoss: 200 };
+    config.trading.hftDivergence = {
+      ...config.trading.hftDivergence,
+      enabled: envBool(process.env.HFT_DIVERGENCE_ENABLED),
+    };
+  }
+
   // Apply group policies from env JSON
   if (process.env.CLODDS_GROUP_POLICIES) {
     try {

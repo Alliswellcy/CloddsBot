@@ -201,11 +201,13 @@ export interface BotManagerConfig {
   getMarket?: (platform: Platform, marketId: string) => Promise<Market | null>;
   /** Portfolio provider */
   getPortfolio?: () => Promise<{ value: number; balance: number; positions: any[] }>;
+  /** External trade logger (shared with gateway); creates own if not provided */
+  tradeLogger?: TradeLogger;
 }
 
 export function createBotManager(db: Database, config: BotManagerConfig = {}): BotManager {
   const emitter = new EventEmitter() as BotManager;
-  const tradeLogger = createTradeLogger(db);
+  const tradeLogger = config.tradeLogger ?? createTradeLogger(db);
   const strategies = new Map<string, Strategy>();
   const botIntervals = new Map<string, NodeJS.Timeout>();
   const botStatuses = new Map<string, BotStatus>();
