@@ -19,7 +19,7 @@ import { createGateway } from '../gateway/index';
 import { loadConfig } from '../utils/config';
 import { logger } from '../utils/logger';
 import { installHttpClient, configureHttpClient } from '../utils/http';
-import { runDoctor } from './commands/doctor';
+
 import { createSkillsCommands } from './commands/skills';
 import { addAllCommands } from './commands/index';
 import { startRepl } from './commands/repl';
@@ -271,36 +271,6 @@ pairing
     db.close();
   });
 
-// Doctor command
-program
-  .command('doctor')
-  .description('Run system diagnostics')
-  .action(async () => {
-    console.log('\n🔍 Running Clodds diagnostics...\n');
-
-    const results = await runDoctor();
-
-    for (const result of results) {
-      const icon = result.status === 'pass' ? '✅' :
-                   result.status === 'warn' ? '⚠️' : '❌';
-      console.log(`${icon} ${result.name}: ${result.message}`);
-      if (result.fix) {
-        console.log(`   ↳ Fix: ${result.fix}`);
-      }
-    }
-
-    const passed = results.filter(r => r.status === 'pass').length;
-    const warnings = results.filter(r => r.status === 'warn').length;
-    const failed = results.filter(r => r.status === 'fail').length;
-
-    console.log(`\n${'─'.repeat(50)}`);
-    console.log(`Results: ${passed} passed, ${warnings} warnings, ${failed} failed\n`);
-
-    if (failed > 0) {
-      console.log('Fix the failed checks above before running Clodds.');
-      process.exit(1);
-    }
-  });
 
 // Webhook endpoints helper
 program
