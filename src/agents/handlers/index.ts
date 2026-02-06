@@ -39,6 +39,7 @@ import { hyperliquidHandlers } from './hyperliquid';
 import { predictfunHandlers } from './predictfun';
 import { manifoldHandlers } from './manifold';
 import { kalshiHandlers } from './kalshi';
+import { agentbetsHandlers } from './agentbets';
 import { bittensorHandlers } from './bittensor';
 export { setBittensorService } from './bittensor';
 
@@ -64,6 +65,7 @@ const allHandlers: HandlersMap = {
   ...predictfunHandlers,
   ...manifoldHandlers,
   ...kalshiHandlers,
+  ...agentbetsHandlers,
   ...bittensorHandlers,
 };
 

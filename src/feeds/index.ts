@@ -16,6 +16,7 @@ import { createOpinionFeed, OpinionFeed } from './opinion/index';
 import { createVirtualsFeed, VirtualsFeed } from './virtuals/index';
 import { createPredictFunFeed, PredictFunFeed } from './predictfun/index';
 import { createHedgehogFeed, HedgehogFeed } from './hedgehog/index';
+import { createAgentBetsFeed, AgentBetsFeed } from './agentbets/index';
 import { createNewsFeed, NewsFeed } from './news/index';
 import { analyzeEdge, calculateKelly, EdgeAnalysis } from './external/index';
 import { createMarketCache, type MarketCacheKey } from '../cache/index';
@@ -293,6 +294,13 @@ export async function createFeedManager(config: Config['feeds']): Promise<FeedMa
     hedgehog.on('orderbook', (update: OrderbookUpdate) => {
       emitter.emit('orderbook', update);
     });
+  }
+
+  // Initialize AgentBets (AI-native prediction market on Solana — Colosseum Agent Hackathon)
+  if ((config as any).agentbets?.enabled) {
+    logger.info('Initializing AgentBets feed');
+    const agentbetsFeed = await createAgentBetsFeed();
+    trackFeed('agentbets', agentbetsFeed as unknown as FeedAdapter);
   }
 
   // Initialize News feed

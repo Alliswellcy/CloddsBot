@@ -35,6 +35,7 @@ import { logger } from '../utils/logger';
 
 const SKILL_MANIFEST: string[] = [
   'acp',
+  'agentbets',
   'ai-strategy',
   'alerts',
   'analytics',

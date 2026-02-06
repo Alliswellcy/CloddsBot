@@ -43,7 +43,7 @@ export interface AgentBetsFeed extends EventEmitter {
 
 export async function createAgentBetsFeed(): Promise<AgentBetsFeed> {
   const emitter = new EventEmitter();
-  let pollInterval: NodeJS.Timer | null = null;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
   const POLL_INTERVAL_MS = 30000; // 30 seconds
 
   function convertToMarket(m: AgentBetsMarket): Market {

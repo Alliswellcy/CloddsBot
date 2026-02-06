@@ -20,6 +20,7 @@ export type Platform =
   | 'opinion'
   | 'virtuals'
   | 'hedgehog'
+  | 'agentbets'
   | 'hyperliquid'
   | 'binance'
   | 'bybit'

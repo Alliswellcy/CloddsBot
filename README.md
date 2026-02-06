@@ -14,20 +14,20 @@
   <img src="https://img.shields.io/badge/typescript-5.3-blue" alt="TypeScript">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/channels-22-purple" alt="22 Channels">
-  <img src="https://img.shields.io/badge/markets-9-orange" alt="9 Markets">
+  <img src="https://img.shields.io/badge/markets-10-orange" alt="9 Markets">
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> •
   <a href="#everything-we-built">Features</a> •
   <a href="#channels">Channels</a> •
-  <a href="#prediction-markets-9">Markets</a> •
+  <a href="#prediction-markets-10">Markets</a> •
   <a href="#documentation">Docs</a>
 </p>
 
 ---
 
-**Clodds** is a personal AI trading terminal for prediction markets, crypto spot, and **perpetual futures with leverage**. Run it on your own machine, chat via any of **22 messaging platforms**, trade across **9 prediction markets + 5 futures exchanges**, and manage your portfolio — all through natural conversation.
+**Clodds** is a personal AI trading terminal for prediction markets, crypto spot, and **perpetual futures with leverage**. Run it on your own machine, chat via any of **22 messaging platforms**, trade across **10 prediction markets + 5 futures exchanges**, and manage your portfolio — all through natural conversation.
 
 Built on Claude with arbitrage detection algorithms based on [arXiv:2508.03474](https://arxiv.org/abs/2508.03474), which documented arbitrage patterns on Polymarket. See [Arbitrage Limitations](#arbitrage-limitations) for practical considerations.
 
@@ -148,7 +148,7 @@ All channels support real-time sync, rich media, and offline queuing.
 
 ---
 
-## Prediction Markets (9)
+## Prediction Markets (10)
 
 | Platform | Trading | Type |
 |----------|:-------:|------|
@@ -160,6 +160,7 @@ All channels support real-time sync, rich media, and offline queuing.
 | Manifold | data | Play Money |
 | Metaculus | data | Forecasting |
 | PredictIt | data | US Politics |
+| AgentBets | data | AI Agents / Solana (Colosseum Hackathon) |
 
 Supports limit/market orders, maker rebates, real-time orderbooks, P&L tracking, and smart routing.
 
