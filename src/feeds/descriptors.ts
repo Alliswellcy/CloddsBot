@@ -155,6 +155,29 @@ const drift: FeedDescriptor = {
   },
 };
 
+const agentbets: FeedDescriptor = {
+  id: 'agentbets',
+  name: 'AgentBets',
+  description: 'Prediction markets for AI agents on Solana devnet — built for the Colosseum hackathon',
+  status: 'available',
+  skillCommand: '/agentbets',
+  category: 'prediction_market',
+  capabilities: [
+    FeedCapability.MARKET_DATA,
+    FeedCapability.EDGE_DETECTION,
+  ],
+  dataTypes: ['markets', 'prices', 'opportunities'],
+  connectionType: 'polling',
+  requiredEnv: [],
+  optionalEnv: [],
+  configKey: undefined,
+  docsUrl: 'https://github.com/nox-oss/agentbets',
+  create: async () => {
+    const { createAgentBetsFeed } = await import('./agentbets/index');
+    return createAgentBetsFeed() as any;
+  },
+};
+
 const betfair: FeedDescriptor = {
   id: 'betfair',
   name: 'Betfair',
@@ -497,6 +520,7 @@ export function registerAllFeeds(): void {
   registry.register(metaculus);
   registry.register(predictit);
   registry.register(drift);
+  registry.register(agentbets);
   registry.register(betfair);
   registry.register(smarkets);
   registry.register(opinion);
@@ -519,7 +543,7 @@ export function registerAllFeeds(): void {
 
 /** Get all descriptor objects for programmatic access. */
 export const allDescriptors: FeedDescriptor[] = [
-  polymarket, kalshi, manifold, metaculus, predictit, drift,
+  polymarket, kalshi, manifold, metaculus, predictit, drift, agentbets,
   betfair, smarkets, opinion, predictfunDesc, hedgehog, virtuals,
   polymarketRtds, crypto, news, externalData,
   weatherOpenMeteo, weatherNWS, acledConflict, fredEconomics,
