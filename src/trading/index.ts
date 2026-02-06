@@ -63,6 +63,8 @@ export * from './copy-trading';
 export * from './kelly';
 export * from './ml-signals';
 export * from './market-making/index';
+export { createTradingBridge, type TradingBridge, type TradingBridgeOpts } from './bridge';
+export { createCryptoHftAdapter, createDivergenceAdapter } from './adapters/index';
 
 import {
   createTradeLogger,

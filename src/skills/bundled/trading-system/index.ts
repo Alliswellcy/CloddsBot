@@ -19,9 +19,9 @@ function helpText(): string {
   /trading status                    - System status
   /trading stats                     - Trading statistics
   /trading bots                      - Active bots
-  /trading start <strategy>          - Start a strategy bot
-  /trading stop <strategy>           - Stop a bot
-  /trading strategies                - Available strategies
+  /trading start <strategy> [--dry-run] - Start a strategy bot
+  /trading stop <strategy>             - Stop a bot
+  /trading strategies                  - Available strategies
   /trading safety                    - Circuit breaker/safety status
   /trading kill [reason]             - Emergency kill switch
   /trading resume                    - Resume after kill
@@ -143,6 +143,30 @@ Fees: $${stats.netFees.toFixed(2)} (maker: ${stats.makerTrades}, taker: ${stats.
           } else if (strategyId === 'arbitrage') {
             const strategy = tradingMod.createArbitrageStrategy();
             system.bots.registerStrategy(strategy);
+          } else if (strategyId === 'crypto-hft' || strategyId === 'hft') {
+            try {
+              const { createCryptoHftAdapter } = await import('../../../trading/adapters/index.js');
+              const { createCryptoFeed } = await import('../../../feeds/crypto/index.js');
+              const feed = createCryptoFeed();
+              feed.start();
+              const dryRun = args.includes('--dry-run') || args.includes('--dry');
+              const adapter = createCryptoHftAdapter({ feed, execution: dryRun ? null : system.execution, config: { dryRun } });
+              system.bots.registerStrategy(adapter);
+            } catch (e: any) {
+              return `Failed to load crypto-hft adapter: ${e.message}`;
+            }
+          } else if (strategyId === 'hft-divergence' || strategyId === 'divergence') {
+            try {
+              const { createDivergenceAdapter } = await import('../../../trading/adapters/index.js');
+              const { createCryptoFeed } = await import('../../../feeds/crypto/index.js');
+              const feed = createCryptoFeed();
+              feed.start();
+              const dryRun = args.includes('--dry-run') || args.includes('--dry');
+              const adapter = createDivergenceAdapter({ feed, execution: dryRun ? null : system.execution, config: { dryRun } });
+              system.bots.registerStrategy(adapter);
+            } catch (e: any) {
+              return `Failed to load hft-divergence adapter: ${e.message}`;
+            }
           } else {
             return `Strategy "${strategyId}" not found. Use /trading strategies to see available ones.`;
           }
@@ -177,10 +201,12 @@ Fees: $${stats.netFees.toFixed(2)} (maker: ${stats.makerTrades}, taker: ${stats.
         }
 
         lines.push('', '**Built-in Strategies:**');
-        lines.push('  mean-reversion - Mean reversion on prediction markets');
-        lines.push('  momentum       - Momentum/trend following');
-        lines.push('  arbitrage      - Cross-platform arbitrage');
-        lines.push('', 'Start with: /trading start <strategy-id>');
+        lines.push('  mean-reversion  - Mean reversion on prediction markets');
+        lines.push('  momentum        - Momentum/trend following');
+        lines.push('  arbitrage       - Cross-platform arbitrage');
+        lines.push('  crypto-hft      - 15-min crypto binary market HFT (4 strategies)');
+        lines.push('  hft-divergence  - Spot vs Polymarket divergence trading');
+        lines.push('', 'Start with: /trading start <strategy-id> [--dry-run]');
 
         return lines.join('\n');
       }
