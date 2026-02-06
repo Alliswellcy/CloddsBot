@@ -3667,6 +3667,7 @@ export function createOnboardCommand(program: Command): void {
       const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
       const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
       const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
+      const magenta = (s: string) => `\x1b[35m${s}\x1b[0m`;
       const bgCyan = (s: string) => `\x1b[46m\x1b[30m${s}\x1b[0m`;
 
       const cloddsDir = join(homedir(), '.clodds');
@@ -3699,10 +3700,19 @@ export function createOnboardCommand(program: Command): void {
       // WELCOME
       // ═══════════════════════════════════════════════════════════════════
       console.log('');
-      console.log(bold('   ___  _            _     _'));
-      console.log(bold('  / __|| |  ___   __| | __| | ___'));
-      console.log(bold(' | (__ | | / _ \\ / _` |/ _` |/ __|'));
-      console.log(bold('  \\___||_| \\___/ \\__,_|\\__,_|\\__|'));
+      console.log(`       ${dim('*')}   ${magenta('_')}     ${dim('.')}          ${dim('*')}`);
+      console.log(`        ${dim('.')} ${magenta('/ \\')}   ${dim('*')}`);
+      console.log(`          ${magenta('|')}${yellow('\u00b0')}${magenta('|')}              ${dim('*')}`);
+      console.log(`      ${dim('.')}  ${magenta('\\_/')}    ${dim('.')}`);
+      console.log(`      ${red('/\\\\')}${dim('~~~')}${red('/\\\\')}${dim('~~~')}${red('/\\\\')}`);
+      console.log(`     ${red('(  )')} ${cyan('(\u25cf)')}  ${red('(  )')}`);
+      console.log(`      ${red('\\\\/')}  ${cyan('||')}  ${red('\\\\/')}`);
+      console.log(`       ${dim('\u2500\u2500')} ${cyan('/')}  ${cyan('\\\\')} ${dim('\u2500\u2500')}`);
+      console.log('');
+      console.log(bold(`    ___  _             _      _`));
+      console.log(bold(`   / __|| |  ___    __| |  __| | ___`));
+      console.log(bold(`  | (__ | | / _ \\  / _\` | / _\` |/ __|`));
+      console.log(bold(`   \\___||_| \\___/  \\__,_| \\__,_|\\____|`));
       console.log('');
       console.log(`  ${bold('AI Trading Terminal')} ${dim('for prediction markets, crypto & futures')}`);
       console.log(`  ${dim('10 markets  |  22 channels  |  103 skills')}`);
