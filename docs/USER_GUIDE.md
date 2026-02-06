@@ -200,6 +200,27 @@ clodds market-index sync        # Sync market index
 clodds whatsapp login           # Login with QR code
 ```
 
+### Bittensor Commands
+
+```bash
+clodds bittensor setup          # Interactive setup wizard (Python, btcli, wallet, config)
+clodds bittensor status         # Show mining configuration and status
+clodds bittensor check          # Verify all dependencies are installed
+clodds bittensor wallet show    # Show wallet address and balance
+clodds bittensor wallet create  # Create a new Bittensor wallet
+clodds bittensor wallet balance # Check TAO balance
+clodds bittensor register <id>  # Register on a subnet (e.g. 64 for Chutes)
+```
+
+### Doctor Command
+
+```bash
+clodds doctor                   # Comprehensive system health check
+clodds doctor --verbose         # Include all optional features and services
+```
+
+Checks AI providers, messaging channels, trading platforms, external services, and Bittensor dependencies. Use this to diagnose configuration issues.
+
 ### Locale Commands (i18n)
 
 ```bash

@@ -5,6 +5,30 @@ All notable changes to Clodds will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-02-06
+
+### Added
+
+#### Bittensor Subnet Mining
+- Full Bittensor integration: wallet management, subnet registration, earnings tracking
+- `clodds bittensor setup` interactive wizard: installs Python/btcli, creates wallet, configures network (mainnet/testnet)
+- CLI commands: `bittensor status`, `bittensor check`, `bittensor wallet show/create/balance`, `bittensor register <subnetId>`
+- Chat commands: `/tao status`, `/tao earnings`, `/tao wallet`, `/tao miners`, `/tao subnets`
+- AI agent tool: natural language Bittensor control ("How much TAO did I earn today?")
+- HTTP API: `/api/bittensor/status`, `/api/bittensor/wallet`, `/api/bittensor/earnings`, `/api/bittensor/miners`
+- Chutes SN64 GPU compute miner manager
+- SQLite persistence for earnings, miner status, and cost tracking
+- Wallet management via `@polkadot/api` (Substrate chain)
+- Python sidecar for btcli commands
+
+#### System Health & Resilience
+- `clodds doctor` command: comprehensive health checks for providers, channels, trading platforms, services, and features
+- `clodds doctor --verbose`: shows all optional features with enabled/disabled status
+- Channel init resilience: one bad channel no longer blocks others from starting
+- Channel start resilience: per-channel try-catch during startup
+- Feed startup resilience: per-feed error isolation (broken feed no longer blocks `Promise.all`)
+- Extended `creds test` with OpenAI and Slack validation
+
 ## [0.3.8] - 2026-02-04
 
 ### Added

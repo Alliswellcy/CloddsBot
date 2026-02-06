@@ -316,6 +316,30 @@ User Intent → Agent → Tool → Execution Engine → Platform API
                             Portfolio Update
 ```
 
+### Bittensor Module
+
+The Bittensor integration enables TAO subnet mining:
+
+```
+src/bittensor/
+├── index.ts           # Barrel exports
+├── types.ts           # All interfaces (BittensorConfig, MinerStatus, etc.)
+├── wallet.ts          # TAO wallet via @polkadot/api (balance, registration)
+├── python-runner.ts   # child_process wrapper for btcli commands
+├── chutes.ts          # Chutes SN64 miner manager (GPU nodes)
+├── service.ts         # createBittensorService() factory
+├── persistence.ts     # SQLite tables (earnings, miner_status, cost_log)
+├── server.ts          # Express router for /api/bittensor/* endpoints
+├── tool.ts            # AI agent tool definition
+└── plugin.ts          # /tao slash command plugin
+```
+
+**Architecture:**
+- **TypeScript** for chain queries via `@polkadot/api` (Bittensor is a Substrate chain)
+- **Python sidecar** for btcli operations (all Bittensor tooling is Python-only)
+- **Gateway wired**: service lifecycle (start/stop), HTTP routes behind auth, agent tool handler
+- **Disabled by default**: set `BITTENSOR_ENABLED=true` to activate
+
 ---
 
 ## Data Flow

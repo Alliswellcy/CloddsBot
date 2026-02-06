@@ -135,6 +135,7 @@ See [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) for all commands.
 | **Crypto Whale Tracking** | Multi-chain whale monitoring (Solana, ETH, Polygon, ARB, Base, OP) |
 | **Payments** | x402 protocol for machine-to-machine USDC payments (Base + Solana) |
 | **Bridging** | Wormhole cross-chain token transfers |
+| **Bittensor Mining** | Subnet mining with wallet management, earnings tracking, Chutes SN64 support |
 | **Automation** | Trading bots, cron jobs, webhooks, skills system |
 
 ---
@@ -235,6 +236,23 @@ Polymarket @ 52c vs Kalshi @ 55c → 3c spread
 
 ---
 
+## Bittensor Mining
+
+Mine TAO on Bittensor subnets directly from Clodds:
+
+```bash
+clodds bittensor setup           # Interactive wizard: Python, btcli, wallet, config
+clodds bittensor status          # Check mining status
+clodds bittensor wallet balance  # Check TAO balance
+clodds bittensor register 64     # Register on Chutes (SN64)
+```
+
+**In chat:** `/tao status`, `/tao earnings daily`, `/tao wallet`
+
+Features: Wallet management via `@polkadot/api`, Python sidecar for btcli, Chutes SN64 GPU compute, earnings tracking with SQLite persistence, HTTP API at `/api/bittensor/*`.
+
+---
+
 ## Trading Bots
 
 Built-in strategies: Mean Reversion, Momentum, Arbitrage, Market Making
@@ -326,6 +344,15 @@ Enable: `clodds config set ledger.enabled true`
 │ Risk Manager  │         │ Pump.fun      │         │ Wormhole      │
 │ Backtesting   │         │               │         │ Bridge        │
 └───────────────┘         └───────────────┘         └───────────────┘
+                                  │
+                          ┌───────────────┐
+                          │  BITTENSOR    │
+                          ├───────────────┤
+                          │ Wallet        │
+                          │ Subnet Mining │
+                          │ Earnings      │
+                          │ Chutes (SN64) │
+                          └───────────────┘
 ```
 
 ---
