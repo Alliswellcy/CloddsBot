@@ -44,6 +44,7 @@ import type {
   OrderbookSnapshot,
   OrderMode,
   ClosedPosition,
+  ExitReason,
 } from './types.js';
 
 // ── Default Config (all real thresholds from firstorder.rs) ─────────────────
@@ -326,7 +327,7 @@ export function createCryptoHftEngine(
 
   async function executeExit(
     pos: OpenPosition,
-    reason: string,
+    reason: ExitReason,
     exitPrice: number,
     useMaker: boolean
   ) {
@@ -337,12 +338,12 @@ export function createCryptoHftEngine(
     const sellShares = Math.max(0.01, Math.floor((pos.shares - config.exitShareBuffer) * 100) / 100);
 
     if (config.dryRun) {
-      positionMgr.close(pos.id, exitPrice, reason as any, useMaker);
+      positionMgr.close(pos.id, exitPrice, reason, useMaker);
       return;
     }
 
     if (!execution) {
-      positionMgr.close(pos.id, exitPrice, reason as any, useMaker);
+      positionMgr.close(pos.id, exitPrice, reason, useMaker);
       return;
     }
 
@@ -365,12 +366,12 @@ export function createCryptoHftEngine(
       positionMgr.close(
         pos.id,
         result.avgFillPrice ?? exitPrice,
-        reason as any,
+        reason,
         useMaker && result.success
       );
     } catch (err) {
       logger.error({ err, positionId: pos.id, reason }, 'Exit execution error');
-      positionMgr.close(pos.id, exitPrice, reason as any, false);
+      positionMgr.close(pos.id, exitPrice, reason, false);
     }
   }
 

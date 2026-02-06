@@ -51,14 +51,19 @@ async function getExecution(): Promise<ExecutionService | null> {
     const privateKey = process.env.POLY_PRIVATE_KEY || process.env.PRIVATE_KEY;
     if (!privateKey) return null;
 
+    const apiKey = process.env.POLY_API_KEY ?? '';
+    const apiSecret = process.env.POLY_API_SECRET ?? '';
+    const apiPassphrase = process.env.POLY_API_PASSPHRASE ?? '';
+
     const { createExecutionService } = await import('../../../execution/index.js');
     execInstance = createExecutionService({
       polymarket: {
         privateKey,
+        address: process.env.POLY_FUNDER_ADDRESS ?? '',
         funderAddress: process.env.POLY_FUNDER_ADDRESS,
-        apiKey: process.env.POLY_API_KEY,
-        apiSecret: process.env.POLY_API_SECRET,
-        apiPassphrase: process.env.POLY_API_PASSPHRASE,
+        apiKey,
+        apiSecret,
+        apiPassphrase,
       },
       dryRun: process.env.DRY_RUN === 'true',
     });

@@ -1,6 +1,6 @@
 ---
 name: crypto-hft
-description: "Automated trading on Polymarket 15-minute crypto binary markets"
+description: "Trade 15-minute crypto binary markets on Polymarket with 4 automated strategies"
 commands:
   - /crypto-hft
   - /hft
