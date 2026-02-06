@@ -36,6 +36,7 @@ export interface GatewayServer {
   setTickStreamer(streamer: TickStreamer | null): void;
   setFeatureEngineering(service: FeatureEngineering | null): void;
   setBittensorRouter(router: Router | null): void;
+  setTradingApiRouter(router: Router | null): void;
 }
 
 export type ChannelWebhookHandler = (
@@ -1505,6 +1506,11 @@ export function createServer(
     setBittensorRouter(router: Router | null): void {
       if (router) {
         app.use('/api/bittensor', requireAuth, router);
+      }
+    },
+    setTradingApiRouter(router: Router | null): void {
+      if (router) {
+        app.use('/api', requireAuth, router);
       }
     },
   };

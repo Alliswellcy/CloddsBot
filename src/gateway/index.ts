@@ -65,6 +65,7 @@ import { createSignalBus, type SignalBus } from './signal-bus';
 import { createTradingOrchestrator, type TradingOrchestrator } from '../trading/orchestrator';
 import { createSafetyManager, type SafetyManager } from '../trading/safety';
 import { createCircuitBreaker } from '../execution/circuit-breaker';
+import { createTradingApiRouter } from './api-routes';
 
 // =============================================================================
 // TYPES
@@ -1942,6 +1943,18 @@ export async function createGateway(config: Config): Promise<AppGateway> {
 
   // Set feature engineering for REST API
   httpGateway.setFeatureEngineering(featureEngine);
+
+  // Wire trading API endpoints (positions, portfolio, orders, signals, orchestrator)
+  const tradingApiRouter = createTradingApiRouter({
+    db,
+    execution: executionService,
+    orchestrator,
+    safety: safetyManager,
+    signalRouter,
+    botManager: null, // BotManager lives inside TradingSystem, not gateway scope
+    tradeLogger: null, // TradeLogger lives inside TradingSystem, not gateway scope
+  });
+  httpGateway.setTradingApiRouter(tradingApiRouter);
 
   return {
     async start(): Promise<void> {
