@@ -53,6 +53,7 @@ const SKILL_MANIFEST: string[] = [
   'copy-trading',
   'copy-trading-solana',
   'credentials',
+  'crypto-hft',
   'doctor',
   'drift',
   'drift-sdk',
