@@ -392,6 +392,11 @@ async function getBondingCurveQuote(
 
   const vReserve = BigInt(assetBalance);
   const tReserve = BigInt(tokenBalance);
+
+  if (tReserve === 0n || vReserve === 0n) {
+    throw new Error('Bonding curve has no liquidity (zero reserves)');
+  }
+
   const currentPrice = Number(formatUnits(vReserve, 18)) / Number(formatUnits(tReserve, tokenDecimals));
 
   let inputAmount: bigint;
@@ -414,7 +419,10 @@ async function getBondingCurveQuote(
 
     const newVReserve = vReserve + inputAmount;
     const newTReserve = tReserve - outputAmount;
-    newPrice = Number(formatUnits(newVReserve, 18)) / Number(formatUnits(newTReserve, tokenDecimals));
+    const newTReserveFloat = Number(formatUnits(newTReserve, tokenDecimals));
+    newPrice = newTReserveFloat > 0
+      ? Number(formatUnits(newVReserve, 18)) / newTReserveFloat
+      : currentPrice;
   } else {
     inputAmount = parseUnits(amount, tokenDecimals);
 
@@ -429,11 +437,18 @@ async function getBondingCurveQuote(
 
     const newVReserve = vReserve - outputAmount;
     const newTReserve = tReserve + inputAmount;
-    newPrice = Number(formatUnits(newVReserve, 18)) / Number(formatUnits(newTReserve, tokenDecimals));
+    const newTReserveFloat = Number(formatUnits(newTReserve, tokenDecimals));
+    newPrice = newTReserveFloat > 0
+      ? Number(formatUnits(newVReserve, 18)) / newTReserveFloat
+      : currentPrice;
   }
 
-  const outputAmountMin = (outputAmount * BigInt(10000 - slippageBps)) / 10000n;
-  const priceImpact = Math.abs((newPrice - currentPrice) / currentPrice) * 100;
+  // Clamp slippage to valid range
+  const clampedSlippage = Math.max(0, Math.min(slippageBps, 10000));
+  const outputAmountMin = (outputAmount * BigInt(10000 - clampedSlippage)) / 10000n;
+  const priceImpact = currentPrice > 0
+    ? Math.abs((newPrice - currentPrice) / currentPrice) * 100
+    : 0;
   const outputDecimals = side === 'buy' ? tokenDecimals : 18;
   const inputDecimals = side === 'buy' ? 18 : tokenDecimals;
 

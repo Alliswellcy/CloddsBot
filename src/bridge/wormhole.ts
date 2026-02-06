@@ -380,7 +380,7 @@ export async function wormholeBridge(req: WormholeBridgeRequest) {
       };
     }
 
-    const attestations = await xfer.fetchAttestation(req.attest_timeout_ms ?? 60_000);
+    const attestations = await xfer.fetchAttestation(req.attest_timeout_ms ?? 900_000);
     const destinationTxids = await xfer.completeTransfer(destinationSigner!.signer);
     return {
       protocol,
@@ -426,7 +426,7 @@ export async function wormholeBridge(req: WormholeBridgeRequest) {
     };
   }
 
-  const attestations = await xfer.fetchAttestation(req.attest_timeout_ms ?? 60_000);
+  const attestations = await xfer.fetchAttestation(req.attest_timeout_ms ?? 900_000);
   const destinationTxids = await xfer.completeTransfer(destinationSigner!.signer);
   return {
     protocol,
@@ -456,7 +456,7 @@ export async function wormholeRedeem(req: WormholeRedeemRequest) {
 
   if (protocol === 'cctp') {
     const xfer = await CircleTransfer.from(wh, txid);
-    await xfer.fetchAttestation(req.attest_timeout_ms ?? 60_000);
+    await xfer.fetchAttestation(req.attest_timeout_ms ?? 900_000);
     const destinationTxids = await xfer.completeTransfer(destinationSigner.signer);
     return {
       protocol,
@@ -466,7 +466,7 @@ export async function wormholeRedeem(req: WormholeRedeemRequest) {
   }
 
   const xfer = await TokenTransfer.from(wh, txid);
-  await xfer.fetchAttestation(req.attest_timeout_ms ?? 60_000);
+  await xfer.fetchAttestation(req.attest_timeout_ms ?? 900_000);
   const destinationTxids = await xfer.completeTransfer(destinationSigner.signer);
   return {
     protocol,

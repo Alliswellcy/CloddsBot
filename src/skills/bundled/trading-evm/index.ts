@@ -61,7 +61,7 @@ async function execute(args: string): Promise<string> {
             outputToken: token,
             amount: amount,
             userAddress: wallet.address,
-            privateKey: '', // Will be resolved from env/wallet
+            privateKey: process.env.EVM_PRIVATE_KEY || '',
             maxSlippageBps: 100,
           });
 
@@ -168,7 +168,7 @@ To execute, confirm swap parameters.`;
             chain: chain as any,
             to,
             amount,
-            privateKey: '', // Resolved from env/wallet
+            privateKey: process.env.EVM_PRIVATE_KEY || '',
           });
 
           return `**Transfer ${result.success ? 'Sent' : 'Failed'}**
@@ -183,7 +183,7 @@ Tx: ${result.txHash || 'N/A'}${result.error ? `\nError: ${result.error}` : ''}`;
             chain: chain as any,
             to,
             amount,
-            privateKey: '', // Resolved from env/wallet
+            privateKey: process.env.EVM_PRIVATE_KEY || '',
             tokenAddress: token,
           });
 
@@ -255,7 +255,7 @@ Tx: ${result.txHash || 'N/A'}${result.error ? `\nError: ${result.error}` : ''}`;
           abi: evmMod.COMMON_ABIS.erc20,
           method: 'approve',
           args: [spender, maxUint256],
-          privateKey: '', // Resolved from env/wallet
+          privateKey: process.env.EVM_PRIVATE_KEY || '',
         });
 
         return `**Approval ${result.success ? 'Sent' : 'Failed'}**

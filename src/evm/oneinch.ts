@@ -288,7 +288,8 @@ export async function executeOneInchSwap(
 
       if (allowance < fromAmountWei) {
         logger.info({ token: fromAddress, router: routerAddress }, 'Approving 1inch router');
-        const approveTx = await token.approve(routerAddress, fromAmountWei);
+        const { MaxUint256 } = await import('ethers');
+        const approveTx = await token.approve(routerAddress, MaxUint256);
         await approveTx.wait();
       }
     }

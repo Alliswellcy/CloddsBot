@@ -8,6 +8,47 @@
  * /bridge routes <token> - Show available routes
  */
 
+// Resolve destination address from env (same wallet as source)
+function getDestinationAddress(): string {
+  // For EVM chains, use EVM_PRIVATE_KEY-derived address
+  const evmKey = process.env.EVM_PRIVATE_KEY;
+  if (evmKey) {
+    try {
+      const { Wallet } = require('ethers') as typeof import('ethers');
+      return new Wallet(evmKey).address;
+    } catch { /* fall through */ }
+  }
+  // For Solana, use SOLANA_WALLET_ADDRESS or derive from key
+  const solAddr = process.env.SOLANA_WALLET_ADDRESS;
+  if (solAddr) return solAddr;
+  return '';
+}
+
+// Map common token symbols to wormhole token addresses per chain
+function resolveTokenForBridge(symbol: string, chain: string): string | undefined {
+  const tokens: Record<string, Record<string, string>> = {
+    USDC: {
+      ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+      polygon: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+      base: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      arbitrum: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+      optimism: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+    },
+    USDT: {
+      ethereum: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+      polygon: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+      arbitrum: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+    },
+    WETH: {
+      ethereum: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+      arbitrum: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+      optimism: '0x4200000000000000000000000000000000000006',
+      base: '0x4200000000000000000000000000000000000006',
+    },
+  };
+  return tokens[symbol.toUpperCase()]?.[chain.toLowerCase()];
+}
+
 async function execute(args: string): Promise<string> {
   const parts = args.trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase() || 'help';
@@ -26,10 +67,15 @@ async function execute(args: string): Promise<string> {
         const fromChain = parts[4];
         const toChain = parts[6];
 
+        const destAddr = getDestinationAddress();
+        if (!destAddr) return 'No wallet configured. Set EVM_PRIVATE_KEY or SOLANA_WALLET_ADDRESS.';
+        const tokenAddress = resolveTokenForBridge(token, fromChain);
+
         const quote: any = await wormhole.wormholeQuote({
           source_chain: fromChain,
           destination_chain: toChain,
-          destination_address: '',
+          destination_address: destAddr,
+          token_address: tokenAddress,
           amount: amount.toString(),
           amount_units: 'human',
         });
@@ -51,10 +97,13 @@ async function execute(args: string): Promise<string> {
         const fromChain = parts[3];
         const toChain = parts[5];
 
+        const destAddr = getDestinationAddress();
+        if (!destAddr) return 'No wallet configured. Set EVM_PRIVATE_KEY or SOLANA_WALLET_ADDRESS.';
+
         const quote: any = await wormhole.usdcQuoteAuto({
           source_chain: fromChain,
           destination_chain: toChain,
-          destination_address: '',
+          destination_address: destAddr,
           amount: amount.toString(),
           amount_units: 'human',
         });
@@ -159,11 +208,14 @@ async function execute(args: string): Promise<string> {
           const fromChain = parts[3];
           const toChain = parts[5];
 
+          const destAddr = getDestinationAddress();
+          if (!destAddr) return 'No wallet configured. Set EVM_PRIVATE_KEY or SOLANA_WALLET_ADDRESS.';
+
           if (token === 'USDC') {
             const result: any = await wormhole.usdcBridgeAuto({
               source_chain: fromChain,
               destination_chain: toChain,
-              destination_address: '',
+              destination_address: destAddr,
               amount: amount.toString(),
               amount_units: 'human',
             });
@@ -174,10 +226,12 @@ async function execute(args: string): Promise<string> {
               `TX: \`${result.sourceTxHash || 'pending'}\``;
           }
 
+          const tokenAddress = resolveTokenForBridge(token, fromChain);
           const result: any = await wormhole.wormholeBridge({
             source_chain: fromChain,
             destination_chain: toChain,
-            destination_address: '',
+            destination_address: destAddr,
+            token_address: tokenAddress,
             amount: amount.toString(),
             amount_units: 'human',
           });
