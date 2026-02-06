@@ -56,6 +56,7 @@ export interface FundingRate {
   fundingRate: number;
   fundingRateTimestamp: number;
   markPrice: number;
+  indexPrice: number;
 }
 
 // =============================================================================
@@ -100,6 +101,7 @@ export async function getFundingRate(config: BybitConfig, symbol: string): Promi
     fundingRate: parseFloat(ticker.fundingRate),
     fundingRateTimestamp: parseInt(ticker.nextFundingTime, 10),
     markPrice: parseFloat(ticker.markPrice),
+    indexPrice: parseFloat((ticker as unknown as Record<string, string>).indexPrice || ticker.markPrice),
   };
 }
 

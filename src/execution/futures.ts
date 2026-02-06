@@ -715,7 +715,7 @@ async function getBybitFundingRate(
       fundingTime: new Date(),
       nextFundingTime: new Date(data.fundingRateTimestamp),
       markPrice: data.markPrice,
-      indexPrice: data.markPrice,
+      indexPrice: data.indexPrice,
     };
   } catch (error) {
     logger.error({ error, symbol }, 'Failed to get Bybit funding rate');
@@ -936,7 +936,7 @@ async function getMexcFundingRate(
       fundingTime: new Date(),
       nextFundingTime: new Date(data.nextSettleTime),
       markPrice: data.markPrice,
-      indexPrice: data.markPrice,
+      indexPrice: data.indexPrice,
     };
   } catch (error) {
     logger.error({ error, symbol }, 'Failed to get MEXC funding rate');
@@ -1065,7 +1065,10 @@ async function getHyperliquidPositions(
   try {
     const walletAddress = getWalletAddress(config.privateKey);
 
-    const state = await hyperliquid.getUserState(walletAddress);
+    const [state, mids] = await Promise.all([
+      hyperliquid.getUserState(walletAddress),
+      hyperliquid.getAllMids(),
+    ]);
 
     return state.assetPositions
       .filter(p => parseFloat(p.position.szi) !== 0)
@@ -1074,6 +1077,10 @@ async function getHyperliquidPositions(
         const size = parseFloat(p.position.szi);
         const entryPrice = parseFloat(p.position.entryPx);
         const unrealizedPnl = parseFloat(p.position.unrealizedPnl);
+        const markPrice = parseFloat(mids[p.position.coin] || '0') || entryPrice;
+        const leverage = p.position.leverage?.value || 10;
+        const isCross = p.position.leverage?.type === 'cross';
+        const margin = parseFloat(p.position.marginUsed || '0') || Math.abs(size * markPrice) / leverage;
 
         return {
           platform: 'hyperliquid' as const,
@@ -1081,13 +1088,13 @@ async function getHyperliquidPositions(
           side: size > 0 ? 'long' as const : 'short' as const,
           size: Math.abs(size),
           entryPrice,
-          markPrice: entryPrice, // Approximate
+          markPrice,
           liquidationPrice: parseFloat(p.position.liquidationPx || '0'),
-          leverage: 10, // Default, actual from activeAssetData
-          marginType: 'cross' as const,
+          leverage,
+          marginType: isCross ? 'cross' as const : 'isolated' as const,
           unrealizedPnl,
-          margin: Math.abs(size * entryPrice) / 10, // Approximate
-          notional: Math.abs(size * entryPrice),
+          margin,
+          notional: Math.abs(size * markPrice),
         };
       });
   } catch (error) {
@@ -1138,13 +1145,16 @@ async function getHyperliquidBalance(
 
     const accountValue = parseFloat(state.marginSummary.accountValue);
     const marginUsed = parseFloat(state.marginSummary.totalMarginUsed);
+    const unrealizedPnl = state.assetPositions.reduce(
+      (sum, p) => sum + parseFloat(p.position.unrealizedPnl || '0'), 0
+    );
 
     return [{
       platform: 'hyperliquid' as const,
       asset: 'USDC',
       balance: accountValue,
       availableBalance: accountValue - marginUsed,
-      unrealizedPnl: 0,
+      unrealizedPnl,
       marginBalance: accountValue,
       maintenanceMargin: marginUsed * 0.5,
       initialMargin: marginUsed,
@@ -1168,6 +1178,9 @@ async function getHyperliquidFundingRate(
     if (!rate) return null;
 
     const midPrice = parseFloat(mids[symbol] || '0');
+    const premium = parseFloat(rate.premium || '0');
+    // HL index (oracle) price derived from mark and premium: index = mark / (1 + premium)
+    const indexPrice = premium !== 0 ? midPrice / (1 + premium) : midPrice;
 
     return {
       platform: 'hyperliquid',
@@ -1176,7 +1189,7 @@ async function getHyperliquidFundingRate(
       fundingTime: new Date(),
       nextFundingTime: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
       markPrice: midPrice,
-      indexPrice: midPrice, // HL uses same mid for both
+      indexPrice,
     };
   } catch (error) {
     logger.error({ error, symbol }, 'Failed to get Hyperliquid funding rate');
@@ -1324,12 +1337,10 @@ async function setHyperliquidMarginType(
       testnet: hlConfig.testnet,
       vaultAddress: hlConfig.vaultAddress,
     };
-    // Get current leverage from user state instead of hardcoding
+    // Get current leverage from user state
     const state = await hyperliquid.getUserState(walletAddress);
     const position = state.assetPositions.find(p => p.position.coin === symbol);
-    const currentLeverage = position
-      ? parseInt((position.position as { leverage?: { value?: string } }).leverage?.value || '10', 10)
-      : 10;
+    const currentLeverage = position?.position.leverage?.value || 10;
     const isCross = marginType === 'cross';
     const result = await hyperliquid.updateLeverage(config, symbol, currentLeverage, isCross);
     return result.success;

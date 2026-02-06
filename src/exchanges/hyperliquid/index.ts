@@ -331,6 +331,8 @@ export async function getUserState(userAddress: string): Promise<{
       entryPx: string;
       unrealizedPnl: string;
       liquidationPx: string;
+      leverage: { type: string; value: number; rawUsd: string };
+      marginUsed: string;
     };
   }>;
 }> {

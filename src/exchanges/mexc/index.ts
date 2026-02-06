@@ -55,6 +55,7 @@ export interface FundingRate {
   fundingRate: number;
   nextSettleTime: number;
   markPrice: number;
+  indexPrice: number;
 }
 
 // =============================================================================
@@ -125,13 +126,15 @@ export async function getFundingRate(config: MexcConfig, symbol: string): Promis
   const data = await request(config, 'GET', '/api/v1/contract/funding_rate', { symbol }) as {
     fundingRate: number;
     nextSettleTime: number;
-    markPrice: number
+    markPrice: number;
+    indexPrice: number;
   };
   return {
     symbol,
     fundingRate: data.fundingRate,
     nextSettleTime: data.nextSettleTime,
     markPrice: data.markPrice,
+    indexPrice: data.indexPrice || data.markPrice,
   };
 }
 
