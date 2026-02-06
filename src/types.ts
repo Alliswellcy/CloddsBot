@@ -1152,6 +1152,21 @@ export interface Config {
       /** API key (optional) */
       apiKey?: string;
     };
+    /** Crypto HFT adapter config */
+    cryptoHft?: {
+      enabled?: boolean;
+      [key: string]: unknown;
+    };
+    /** HFT divergence adapter config */
+    hftDivergence?: {
+      enabled?: boolean;
+      [key: string]: unknown;
+    };
+    /** Market making config */
+    marketMaking?: {
+      enabled?: boolean;
+      [key: string]: unknown;
+    };
   };
   /** Futures/perpetuals trading configuration */
   futures?: {

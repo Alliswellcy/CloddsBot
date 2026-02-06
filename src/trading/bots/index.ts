@@ -147,6 +147,9 @@ export interface BotManager extends EventEmitter {
   /** Get registered strategies */
   getStrategies(): StrategyConfig[];
 
+  /** Get a single registered strategy by ID */
+  getStrategy(strategyId: string): Strategy | null;
+
   /** Update strategy config */
   updateStrategyConfig(strategyId: string, updates: Partial<StrategyConfig>): boolean;
 
@@ -476,6 +479,10 @@ export function createBotManager(db: Database, config: BotManagerConfig = {}): B
 
     getStrategies() {
       return Array.from(strategies.values()).map((s) => s.config);
+    },
+
+    getStrategy(strategyId) {
+      return strategies.get(strategyId) ?? null;
     },
 
     updateStrategyConfig(strategyId, updates) {

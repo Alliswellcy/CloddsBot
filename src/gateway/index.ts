@@ -70,6 +70,10 @@ import { createTradingApiRouter } from './api-routes';
 import { createPositionManager, type PositionManager } from '../execution/position-manager';
 import { createPositionCloseCallback, createPositionBridge, type PositionBridge } from '../trading/position-bridge';
 import { createBacktestEngine, type BacktestEngine } from '../trading/backtest';
+import { createBotManager, createMeanReversionStrategy, createMomentumStrategy, createArbitrageStrategy, type BotManager } from '../trading/bots';
+import { createStrategyBuilder, type StrategyBuilder } from '../trading/builder';
+import { createTradeLogger, type TradeLogger } from '../trading/logger';
+import { createMMStrategy, type MMConfig } from '../trading/market-making';
 
 // =============================================================================
 // TYPES
@@ -719,6 +723,15 @@ export async function createGateway(config: Config): Promise<AppGateway> {
 
   // Feature engineering for computing trading indicators
   let featureEngine: FeatureEngineering | null = null;
+
+  // Bot manager — strategy lifecycle (start/stop/pause/resume)
+  let botManager: BotManager | null = null;
+
+  // Trade logger — records fills and PnL
+  let tradeLogger: TradeLogger | null = null;
+
+  // Strategy builder — template-based + NL strategy creation
+  let strategyBuilder: StrategyBuilder | null = null;
 
   const sendMessage = async (message: OutgoingMessage): Promise<string | null> => {
     if (!channels) {
@@ -2008,6 +2021,29 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   // Set feature engineering for REST API
   httpGateway.setFeatureEngineering(featureEngine);
 
+  // Create bot manager, trade logger, and strategy builder
+  botManager = createBotManager(db);
+  tradeLogger = createTradeLogger(db);
+  strategyBuilder = createStrategyBuilder(db);
+
+  // Register built-in strategies
+  botManager.registerStrategy(createMeanReversionStrategy());
+  botManager.registerStrategy(createMomentumStrategy());
+  botManager.registerStrategy(createArbitrageStrategy());
+
+  // Register MM strategy if configured
+  if (config.trading?.marketMaking?.enabled && executionService) {
+    const mmConfig = config.trading.marketMaking as unknown as MMConfig;
+    const mmStrategy = createMMStrategy(mmConfig, {
+      execution: executionService,
+      feeds,
+    });
+    botManager.registerStrategy(mmStrategy);
+    logger.info('Market making strategy registered');
+  }
+
+  logger.info({ strategies: botManager.getStrategies().length }, 'Bot manager initialized with built-in strategies');
+
   // Wire trading API endpoints (positions, portfolio, orders, signals, orchestrator)
   const backtestEngine: BacktestEngine = createBacktestEngine(db);
   const tradingApiRouter = createTradingApiRouter({
@@ -2016,10 +2052,15 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     orchestrator,
     safety: safetyManager,
     signalRouter,
-    botManager: null, // BotManager lives inside TradingSystem, not gateway scope
-    tradeLogger: null, // TradeLogger lives inside TradingSystem, not gateway scope
+    botManager,
+    tradeLogger,
     tickRecorder,
     backtestEngine,
+    strategyBuilder,
+    signalBus,
+    featureEngine,
+    positionManager,
+    mlPipeline,
   });
   httpGateway.setTradingApiRouter(tradingApiRouter);
 
@@ -2034,6 +2075,13 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       onShutdown(async () => {
         logger.info('Shutting down gateway services');
         if (executionProducer) await executionProducer.close();
+        if (botManager) {
+          for (const s of botManager.getAllBotStatuses()) {
+            if (s.status === 'running' || s.status === 'paused') {
+              await botManager.stopBot(s.id);
+            }
+          }
+        }
         if (whaleTracker) whaleTracker.stop();
         if (copyTrading) copyTrading.stop();
         if (realtimeAlerts) realtimeAlerts.stop();
@@ -2234,6 +2282,18 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         arbitrageExecutor.stop();
         arbitrageExecutor = null;
       }
+
+      // Stop bot manager (stops all running bots)
+      if (botManager) {
+        for (const s of botManager.getAllBotStatuses()) {
+          if (s.status === 'running' || s.status === 'paused') {
+            await botManager.stopBot(s.id);
+          }
+        }
+        botManager = null;
+      }
+      tradeLogger = null;
+      strategyBuilder = null;
 
       // Stop ML pipeline (before signal router, since it subscribes to router events)
       if (mlPipeline) {
