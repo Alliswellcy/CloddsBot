@@ -12,8 +12,10 @@ import { EventEmitter } from 'eventemitter3';
 import type { SignalBus, TradingSignal } from '../gateway/signal-bus.js';
 import type { ExecutionService, OrderResult } from '../execution/index.js';
 import type { SmartRouter } from '../execution/smart-router.js';
+import type { MLSignalModel } from '../trading/ml-signals.js';
 import type { Platform } from '../types.js';
 import { getMarketFeatures } from '../services/feature-engineering/index.js';
+import { combinedToMarketFeatures } from '../ml-pipeline/trainer.js';
 import { logger } from '../utils/logger.js';
 import type { SignalRouterConfig, SignalExecution, SignalRouterStats } from './types.js';
 
@@ -59,6 +61,7 @@ export function createSignalRouter(
   execution: ExecutionService | null,
   config: SignalRouterConfig,
   smartRouter?: SmartRouter | null,
+  mlModel?: MLSignalModel | null,
 ): SignalRouter {
   const emitter = new EventEmitter() as SignalRouter;
   let cfg = { ...DEFAULTS, ...config };
@@ -238,6 +241,41 @@ export function createSignalRouter(
         timestamp: Date.now(),
       });
       return;
+    }
+
+    // ML confidence modulation (before sizing)
+    if (mlModel) {
+      try {
+        const mlFeatures = combinedToMarketFeatures(features);
+        const mlSignal = await mlModel.predict(mlFeatures);
+
+        // ML disagrees strongly → reject
+        const mlAgrees =
+          (signal.direction === 'buy' && mlSignal.direction === 1) ||
+          (signal.direction === 'sell' && mlSignal.direction === -1);
+        if (!mlAgrees && mlSignal.confidence > 0.3) {
+          recordSkip('ml_disagrees');
+          recordExecution({
+            id: `sr-${Date.now()}-${stats.signalsReceived}`,
+            signal,
+            status: 'rejected',
+            reason: `ml_disagrees (conf=${mlSignal.confidence.toFixed(2)}, dir=${mlSignal.direction})`,
+            timestamp: Date.now(),
+          });
+          return;
+        }
+
+        // Modulate strength: at confidence=0 → 50% size, at confidence=1 → 100% size
+        signal.strength *= (0.5 + 0.5 * mlSignal.confidence);
+
+        logger.debug(
+          { mlDir: mlSignal.direction, mlConf: mlSignal.confidence, adjStrength: signal.strength.toFixed(3) },
+          '[signal-router] ML confidence applied',
+        );
+      } catch (error) {
+        // ML failure is non-fatal — proceed without modulation
+        logger.debug({ error }, '[signal-router] ML prediction failed, proceeding without');
+      }
     }
 
     // Position sizing

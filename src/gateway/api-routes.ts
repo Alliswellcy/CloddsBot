@@ -13,9 +13,11 @@ import type { ExecutionService } from '../execution/index.js';
 import type { TradingOrchestrator, OrchestratorStats } from '../trading/orchestrator.js';
 import type { SafetyManager, SafetyState } from '../trading/safety.js';
 import type { SignalRouter } from '../signal-router/index.js';
-import type { BotManager, BotStatus } from '../trading/bots/index.js';
+import type { BotManager, BotStatus, Strategy, StrategyContext, Signal } from '../trading/bots/index.js';
 import type { TradeLogger } from '../trading/logger.js';
 import type { Platform } from '../types.js';
+import type { TickRecorder } from '../services/tick-recorder/types.js';
+import type { BacktestEngine } from '../trading/backtest.js';
 
 // ── Dependencies ────────────────────────────────────────────────────────────
 
@@ -27,13 +29,15 @@ export interface TradingApiDeps {
   signalRouter: SignalRouter | null;
   botManager: BotManager | null;
   tradeLogger: TradeLogger | null;
+  tickRecorder: TickRecorder | null;
+  backtestEngine: BacktestEngine | null;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 export function createTradingApiRouter(deps: TradingApiDeps): Router {
   const router = Router();
-  const { db, execution, orchestrator, safety, signalRouter, botManager, tradeLogger } = deps;
+  const { db, execution, orchestrator, safety, signalRouter, botManager, tradeLogger, tickRecorder, backtestEngine } = deps;
 
   // ── GET /api/positions ──────────────────────────────────────────────────
   // Returns all tracked positions from DB
@@ -367,6 +371,117 @@ export function createTradingApiRouter(deps: TradingApiDeps): Router {
     }
     const resumed = safety.resumeTrading();
     res.json({ success: resumed, tradingEnabled: resumed });
+  });
+
+  // ── POST /api/backtest/tick-replay ──────────────────────────────────────
+  // Run tick-level backtest using historical tick data from tick recorder.
+  // Accepts a strategy config inline or references a registered strategy by ID.
+  router.post('/backtest/tick-replay', async (req: Request, res: Response) => {
+    if (!backtestEngine) {
+      res.status(404).json({ error: 'Backtest engine not available' });
+      return;
+    }
+    if (!tickRecorder) {
+      res.status(404).json({ error: 'Tick recorder not available — no historical tick data' });
+      return;
+    }
+
+    try {
+      const {
+        platform, marketId, outcomeId,
+        startDate, endDate,
+        initialCapital, commissionPct, slippagePct,
+        evalIntervalMs, priceHistorySize,
+        strategyId,
+      } = req.body as {
+        platform?: string;
+        marketId?: string;
+        outcomeId?: string;
+        startDate?: string;
+        endDate?: string;
+        initialCapital?: number;
+        commissionPct?: number;
+        slippagePct?: number;
+        evalIntervalMs?: number;
+        priceHistorySize?: number;
+        strategyId?: string;
+      };
+
+      if (!platform || !marketId || !outcomeId) {
+        res.status(400).json({ error: 'Missing required fields: platform, marketId, outcomeId' });
+        return;
+      }
+
+      // Buy-and-hold baseline strategy for backtest.
+      // For custom strategies, use the backtest engine directly via code.
+      const strategy: Strategy = {
+        config: {
+          id: strategyId || 'buy-and-hold',
+          name: strategyId || 'Buy and Hold',
+          platforms: [platform as Platform],
+          intervalMs: 60_000,
+        },
+        async evaluate(ctx: StrategyContext): Promise<Signal[]> {
+          if (ctx.positions.size === 0 && ctx.availableBalance > 10) {
+            const ph = ctx.priceHistory.values().next().value as number[] | undefined;
+            const price = ph?.[ph.length - 1] ?? 0.5;
+            return [{
+              type: 'buy' as const,
+              platform: platform as Platform,
+              marketId: marketId!,
+              outcome: outcomeId!,
+              price,
+              size: Math.floor(ctx.availableBalance * 0.9 / price),
+              confidence: 1,
+              reason: 'Buy and hold entry',
+            }];
+          }
+          return [];
+        },
+      };
+
+      const start = startDate ? new Date(startDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const end = endDate ? new Date(endDate) : new Date();
+
+      const result = await backtestEngine.runFromTickRecorder(strategy, {
+        platform: platform as Platform,
+        marketId,
+        outcomeId,
+        startDate: start,
+        endDate: end,
+        initialCapital: initialCapital ?? 10_000,
+        commissionPct: commissionPct ?? 0.1,
+        slippagePct: slippagePct ?? 0.05,
+        resolutionMs: 0,
+        riskFreeRate: 5,
+        evalIntervalMs: evalIntervalMs ?? 5_000,
+        priceHistorySize: priceHistorySize ?? 200,
+        includeOrderbook: true,
+      }, tickRecorder);
+
+      res.json({
+        strategyId: result.strategyId,
+        metrics: result.metrics,
+        tradeCount: result.trades.length,
+        trades: result.trades.slice(0, 100).map((t) => ({
+          timestamp: t.timestamp.toISOString(),
+          side: t.side,
+          price: t.price,
+          size: t.size,
+          pnl: t.pnl,
+          commission: t.commission,
+          slippage: t.slippage,
+        })),
+        equityCurve: result.equityCurve.slice(0, 500).map((p) => ({
+          timestamp: p.timestamp.toISOString(),
+          equity: Math.round(p.equity * 100) / 100,
+        })),
+        dailyReturns: result.dailyReturns,
+      });
+    } catch (err: any) {
+      logger.warn({ err }, 'API: Tick-replay backtest failed');
+      res.status(500).json({ error: err?.message || 'Backtest failed' });
+    }
   });
 
   logger.info('Trading API routes initialized');

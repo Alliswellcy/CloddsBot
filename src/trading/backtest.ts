@@ -14,6 +14,7 @@ import { logger } from '../utils/logger';
 import type { Platform } from '../types';
 import type { Strategy, StrategyContext, Signal } from './bots/index';
 import type { Trade } from './logger';
+import type { Tick, OrderbookSnapshot, TickRecorder } from '../services/tick-recorder/types';
 
 // =============================================================================
 // TYPES
@@ -122,6 +123,21 @@ export interface BacktestEngine {
     data: Map<string, PriceBar[]>
   ): Promise<BacktestResult>;
 
+  /** Run tick-level backtest — replay raw ticks through a strategy */
+  runWithTicks(
+    strategy: Strategy,
+    config: TickReplayConfig,
+    ticks: Tick[],
+    orderbooks?: OrderbookSnapshot[],
+  ): Promise<BacktestResult>;
+
+  /** Run tick-level backtest loading data from tick recorder service */
+  runFromTickRecorder(
+    strategy: Strategy,
+    config: TickReplayConfig,
+    tickRecorder: TickRecorder,
+  ): Promise<BacktestResult>;
+
   /** Compare multiple strategies */
   compare(
     strategies: Strategy[],
@@ -141,6 +157,25 @@ export interface BacktestEngine {
     startDate: Date,
     endDate: Date
   ): Promise<PriceBar[]>;
+}
+
+// =============================================================================
+// TICK-REPLAY TYPES
+// =============================================================================
+
+export interface TickReplayConfig extends BacktestConfig {
+  /** Platform to backtest */
+  platform: Platform;
+  /** Market ID */
+  marketId: string;
+  /** Outcome/token ID */
+  outcomeId: string;
+  /** How often to call strategy.evaluate() (ms). 0 = every tick (default: 5000) */
+  evalIntervalMs: number;
+  /** Rolling price history window size (default: 200) */
+  priceHistorySize: number;
+  /** Include orderbook data in strategy context (default: true if orderbooks provided) */
+  includeOrderbook: boolean;
 }
 
 export interface MonteCarloResult {
@@ -173,6 +208,15 @@ const DEFAULT_CONFIG: BacktestConfig = {
   slippagePct: 0.05, // 0.05%
   resolutionMs: 60 * 60 * 1000, // 1 hour
   riskFreeRate: 5, // 5% annual
+};
+
+const DEFAULT_TICK_REPLAY: Omit<TickReplayConfig, keyof BacktestConfig> = {
+  platform: 'polymarket' as Platform,
+  marketId: '',
+  outcomeId: '',
+  evalIntervalMs: 5_000,
+  priceHistorySize: 200,
+  includeOrderbook: true,
 };
 
 export function createBacktestEngine(db: Database): BacktestEngine {
@@ -608,8 +652,316 @@ export function createBacktestEngine(db: Database): BacktestEngine {
       };
     },
 
+    async runWithTicks(strategy, config, ticks, orderbooks) {
+      const cfg: TickReplayConfig = { ...DEFAULT_CONFIG, ...DEFAULT_TICK_REPLAY, ...config };
+
+      if (ticks.length === 0) {
+        return emptyResult(strategy.config.id, cfg);
+      }
+
+      // Sort ticks by time
+      const sortedTicks = [...ticks].sort((a, b) => a.time.getTime() - b.time.getTime());
+
+      // Build orderbook index: timestamp → closest snapshot (for fast lookup)
+      const obIndex: OrderbookSnapshot[] = orderbooks
+        ? [...orderbooks].sort((a, b) => a.time.getTime() - b.time.getTime())
+        : [];
+
+      function findOrderbook(ts: number): OrderbookSnapshot | null {
+        if (obIndex.length === 0) return null;
+        // Binary search for closest snapshot ≤ ts
+        let lo = 0;
+        let hi = obIndex.length - 1;
+        let best = -1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (obIndex[mid].time.getTime() <= ts) {
+            best = mid;
+            lo = mid + 1;
+          } else {
+            hi = mid - 1;
+          }
+        }
+        if (best === -1) return null;
+        // Only use if within 60s
+        if (ts - obIndex[best].time.getTime() > 60_000) return null;
+        return obIndex[best];
+      }
+
+      // Simulation state
+      const trades: BacktestTrade[] = [];
+      const equityCurve: Array<{ timestamp: Date; equity: number }> = [];
+      const positions = new Map<string, { shares: number; avgPrice: number; entryTime: Date }>();
+      const priceHistory: number[] = [];
+
+      let equity = cfg.initialCapital;
+      let cash = cfg.initialCapital;
+      let lastEvalAt = 0;
+
+      const posKey = `${cfg.platform}:${cfg.marketId}:${cfg.outcomeId}`;
+
+      // Initialize strategy
+      if (strategy.init) {
+        const initCtx: StrategyContext = {
+          portfolioValue: equity,
+          availableBalance: cash,
+          positions: new Map(),
+          recentTrades: [],
+          markets: new Map(),
+          priceHistory: new Map(),
+          timestamp: sortedTicks[0].time,
+          isBacktest: true,
+        };
+        await strategy.init(initCtx);
+      }
+
+      // Replay loop
+      for (let i = 0; i < sortedTicks.length; i++) {
+        const tick = sortedTicks[i];
+        const tickTime = tick.time.getTime();
+
+        // Accumulate price history
+        priceHistory.push(tick.price);
+        if (priceHistory.length > cfg.priceHistorySize) {
+          priceHistory.shift();
+        }
+
+        // Update position mark-to-market
+        const pos = positions.get(posKey);
+        if (pos) {
+          const posValue = pos.shares * tick.price;
+          equity = cash + posValue;
+        }
+
+        // Check evaluation interval
+        const sinceLastEval = tickTime - lastEvalAt;
+        if (cfg.evalIntervalMs > 0 && sinceLastEval < cfg.evalIntervalMs) {
+          continue;
+        }
+        lastEvalAt = tickTime;
+
+        // Build strategy context
+        const ob = cfg.includeOrderbook ? findOrderbook(tickTime) : null;
+        const ctx: StrategyContext = {
+          portfolioValue: equity,
+          availableBalance: cash,
+          positions: new Map(
+            Array.from(positions.entries()).map(([k, v]) => [
+              k,
+              { shares: v.shares, avgPrice: v.avgPrice, currentPrice: tick.price },
+            ]),
+          ),
+          recentTrades: trades.slice(-20) as unknown as Trade[],
+          markets: new Map(),
+          priceHistory: new Map([[posKey, [...priceHistory]]]),
+          timestamp: tick.time,
+          isBacktest: true,
+          // Extended fields for tick-level backtest
+          orderbook: ob ? { bids: ob.bids, asks: ob.asks, spread: ob.spread, midPrice: ob.midPrice } : undefined,
+          currentTick: { price: tick.price, prevPrice: tick.prevPrice, timestamp: tickTime },
+        } as StrategyContext & { orderbook?: any; currentTick?: any };
+
+        // Evaluate strategy
+        const signals = await strategy.evaluate(ctx);
+
+        // Execute signals
+        for (const signal of signals) {
+          const fillPrice = tick.price;
+          if (signal.type === 'buy') {
+            const size = signal.size || Math.floor(cash * 0.1 / fillPrice);
+            if (size <= 0) continue;
+
+            const commission = size * fillPrice * (cfg.commissionPct / 100);
+            const slippage = size * fillPrice * (cfg.slippagePct / 100);
+            const cost = size * fillPrice + commission + slippage;
+            if (cost > cash) continue;
+
+            cash -= cost;
+
+            const existing = positions.get(posKey);
+            if (existing) {
+              const totalShares = existing.shares + size;
+              existing.avgPrice = (existing.avgPrice * existing.shares + fillPrice * size) / totalShares;
+              existing.shares = totalShares;
+            } else {
+              positions.set(posKey, { shares: size, avgPrice: fillPrice, entryTime: tick.time });
+            }
+
+            const trade: BacktestTrade = {
+              timestamp: tick.time,
+              platform: cfg.platform,
+              marketId: cfg.marketId,
+              outcome: cfg.outcomeId,
+              side: 'buy',
+              price: fillPrice,
+              size,
+              commission,
+              slippage,
+              signal,
+            };
+            trades.push(trade);
+            if (strategy.onTrade) strategy.onTrade(trade as unknown as Trade);
+          }
+
+          if (signal.type === 'sell') {
+            const position = positions.get(posKey);
+            if (!position || position.shares <= 0) continue;
+
+            const size = signal.size || position.shares;
+            const actualSize = Math.min(size, position.shares);
+            const commission = actualSize * fillPrice * (cfg.commissionPct / 100);
+            const slippage = actualSize * fillPrice * (cfg.slippagePct / 100);
+            const proceeds = actualSize * fillPrice - commission - slippage;
+            const pnl = proceeds - actualSize * position.avgPrice;
+
+            cash += proceeds;
+            position.shares -= actualSize;
+            if (position.shares <= 0) positions.delete(posKey);
+
+            const trade: BacktestTrade = {
+              timestamp: tick.time,
+              platform: cfg.platform,
+              marketId: cfg.marketId,
+              outcome: cfg.outcomeId,
+              side: 'sell',
+              price: fillPrice,
+              size: actualSize,
+              commission,
+              slippage,
+              pnl,
+              signal,
+            };
+            trades.push(trade);
+            if (strategy.onTrade) strategy.onTrade(trade as unknown as Trade);
+          }
+        }
+
+        // Record equity at most once per second to keep curve manageable
+        const lastEquityTs = equityCurve.length > 0
+          ? equityCurve[equityCurve.length - 1].timestamp.getTime()
+          : 0;
+        if (tickTime - lastEquityTs >= 1000) {
+          let posValue = 0;
+          for (const [, p] of positions) posValue += p.shares * tick.price;
+          equity = cash + posValue;
+          equityCurve.push({ timestamp: tick.time, equity });
+        }
+      }
+
+      // Final equity
+      const lastTick = sortedTicks[sortedTicks.length - 1];
+      let posValue = 0;
+      for (const [, p] of positions) posValue += p.shares * lastTick.price;
+      equity = cash + posValue;
+      equityCurve.push({ timestamp: lastTick.time, equity });
+
+      // Cleanup
+      if (strategy.cleanup) await strategy.cleanup();
+
+      // Calculate metrics
+      const metrics = calculateMetrics(trades, equityCurve, cfg);
+
+      // Build daily returns
+      const dailyEquity = new Map<string, number>();
+      for (const point of equityCurve) {
+        dailyEquity.set(point.timestamp.toISOString().slice(0, 10), point.equity);
+      }
+      const dailyReturns: Array<{ date: string; return: number }> = [];
+      let prevEq = cfg.initialCapital;
+      for (const [date, eq] of dailyEquity) {
+        dailyReturns.push({ date, return: (eq - prevEq) / prevEq });
+        prevEq = eq;
+      }
+
+      // Build drawdown series
+      const drawdowns: Array<{ timestamp: Date; drawdownPct: number }> = [];
+      let peak = cfg.initialCapital;
+      for (const point of equityCurve) {
+        if (point.equity > peak) peak = point.equity;
+        drawdowns.push({ timestamp: point.timestamp, drawdownPct: ((peak - point.equity) / peak) * 100 });
+      }
+
+      logger.info(
+        {
+          strategyId: strategy.config.id,
+          mode: 'tick-replay',
+          ticks: sortedTicks.length,
+          totalReturn: `${metrics.totalReturnPct.toFixed(2)}%`,
+          sharpe: metrics.sharpeRatio.toFixed(2),
+          trades: metrics.totalTrades,
+        },
+        'Tick-replay backtest completed',
+      );
+
+      return {
+        strategyId: strategy.config.id,
+        config: cfg,
+        metrics,
+        trades,
+        equityCurve,
+        dailyReturns,
+        drawdowns,
+      };
+    },
+
+    async runFromTickRecorder(strategy, config, tickRecorder) {
+      const cfg: TickReplayConfig = { ...DEFAULT_CONFIG, ...DEFAULT_TICK_REPLAY, ...config };
+
+      // Load ticks from recorder
+      const ticks = await tickRecorder.getTicks({
+        platform: cfg.platform,
+        marketId: cfg.marketId,
+        outcomeId: cfg.outcomeId,
+        startTime: cfg.startDate.getTime(),
+        endTime: cfg.endDate.getTime(),
+      });
+
+      // Optionally load orderbook snapshots
+      let orderbooks: OrderbookSnapshot[] | undefined;
+      if (cfg.includeOrderbook) {
+        orderbooks = await tickRecorder.getOrderbookSnapshots({
+          platform: cfg.platform,
+          marketId: cfg.marketId,
+          outcomeId: cfg.outcomeId,
+          startTime: cfg.startDate.getTime(),
+          endTime: cfg.endDate.getTime(),
+        });
+      }
+
+      logger.info(
+        {
+          platform: cfg.platform,
+          marketId: cfg.marketId,
+          ticks: ticks.length,
+          orderbooks: orderbooks?.length ?? 0,
+          startDate: cfg.startDate.toISOString(),
+          endDate: cfg.endDate.toISOString(),
+        },
+        'Loaded tick data from recorder for backtest',
+      );
+
+      return this.runWithTicks(strategy, cfg, ticks, orderbooks);
+    },
+
     async loadHistoricalData(platform, marketId, startDate, endDate) {
       return loadPricesFromTrades(platform, marketId, startDate, endDate);
     },
+  };
+}
+
+function emptyResult(strategyId: string, config: BacktestConfig): BacktestResult {
+  return {
+    strategyId,
+    config,
+    metrics: {
+      totalReturnPct: 0, annualizedReturnPct: 0, totalTrades: 0,
+      winRate: 0, profitFactor: 0, avgTradePct: 0, avgWinPct: 0, avgLossPct: 0,
+      maxDrawdownPct: 0, maxDrawdownDays: 0, sharpeRatio: 0, sortinoRatio: 0,
+      calmarRatio: 0, totalCommission: 0, totalSlippage: 0, finalEquity: config.initialCapital,
+    },
+    trades: [],
+    equityCurve: [],
+    dailyReturns: [],
+    drawdowns: [],
   };
 }

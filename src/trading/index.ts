@@ -56,6 +56,7 @@ export {
   type BacktestConfig,
   type BacktestResult,
   type BacktestMetrics,
+  type TickReplayConfig,
 } from './backtest';
 export * from './tracking';
 export * from './devtools';

@@ -386,6 +386,7 @@ export interface CloddsConfig {
   meta?: MetaConfig;
   altData?: import('../services/alt-data/types').AltDataConfig;
   signalRouter?: import('../signal-router/types').SignalRouterConfig;
+  mlPipeline?: import('../ml-pipeline/types').MLPipelineConfig;
   bittensor?: Partial<import('../bittensor/types').BittensorConfig>;
 }
 
@@ -622,6 +623,9 @@ export const DEFAULT_CONFIG: CloddsConfig = {
   signalRouter: {
     enabled: false,
     dryRun: true,
+  },
+  mlPipeline: {
+    enabled: false,
   },
   bittensor: {
     enabled: false,
@@ -1116,6 +1120,45 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
     if (!cfg.signalRouter) cfg.signalRouter = {};
     const raw = process.env.SIGNAL_ROUTER_SIGNAL_TYPES;
     if (raw) cfg.signalRouter.signalTypes = raw.split(',').map((s) => s.trim()).filter(Boolean) as any[];
+  },
+  ML_PIPELINE_ENABLED: (cfg) => {
+    if (!cfg.mlPipeline) cfg.mlPipeline = {};
+    const raw = process.env.ML_PIPELINE_ENABLED;
+    if (raw) cfg.mlPipeline.enabled = raw === '1' || raw.toLowerCase() === 'true';
+  },
+  ML_PIPELINE_OUTCOME_HORIZON: (cfg) => {
+    if (!cfg.mlPipeline) cfg.mlPipeline = {};
+    const raw = process.env.ML_PIPELINE_OUTCOME_HORIZON;
+    if (raw && ['1h', '4h', '24h'].includes(raw)) {
+      cfg.mlPipeline.outcomeHorizon = raw as '1h' | '4h' | '24h';
+    }
+  },
+  ML_PIPELINE_TRAIN_INTERVAL_MS: (cfg) => {
+    if (!cfg.mlPipeline) cfg.mlPipeline = {};
+    const raw = process.env.ML_PIPELINE_TRAIN_INTERVAL_MS;
+    if (raw) cfg.mlPipeline.trainIntervalMs = parseInt(raw, 10);
+  },
+  ML_PIPELINE_MIN_SAMPLES: (cfg) => {
+    if (!cfg.mlPipeline) cfg.mlPipeline = {};
+    const raw = process.env.ML_PIPELINE_MIN_SAMPLES;
+    if (raw) cfg.mlPipeline.minTrainingSamples = parseInt(raw, 10);
+  },
+  ML_PIPELINE_MODEL_TYPE: (cfg) => {
+    if (!cfg.mlPipeline) cfg.mlPipeline = {};
+    const raw = process.env.ML_PIPELINE_MODEL_TYPE;
+    if (raw && ['simple', 'xgboost_python'].includes(raw)) {
+      cfg.mlPipeline.modelType = raw as 'simple' | 'xgboost_python';
+    }
+  },
+  ML_PIPELINE_USE_ML_CONFIDENCE: (cfg) => {
+    if (!cfg.mlPipeline) cfg.mlPipeline = {};
+    const raw = process.env.ML_PIPELINE_USE_ML_CONFIDENCE;
+    if (raw) cfg.mlPipeline.useMLConfidence = raw === '1' || raw.toLowerCase() === 'true';
+  },
+  ML_PIPELINE_CLEANUP_DAYS: (cfg) => {
+    if (!cfg.mlPipeline) cfg.mlPipeline = {};
+    const raw = process.env.ML_PIPELINE_CLEANUP_DAYS;
+    if (raw) cfg.mlPipeline.cleanupDays = parseInt(raw, 10);
   },
   CLODDS_GROUP_POLICIES: (cfg) => {
     if (!process.env.CLODDS_GROUP_POLICIES) return;

@@ -1277,6 +1277,8 @@ export interface Config {
   altData?: import('./services/alt-data/types').AltDataConfig;
   /** Signal router — routes signals to execution */
   signalRouter?: import('./signal-router/types').SignalRouterConfig;
+  /** ML training pipeline — learn from signal outcomes */
+  mlPipeline?: import('./ml-pipeline/types').MLPipelineConfig;
   /** Bittensor subnet mining configuration */
   bittensor?: import('./bittensor/types').BittensorConfig;
 }

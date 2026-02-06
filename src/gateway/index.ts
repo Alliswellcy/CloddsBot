@@ -69,6 +69,7 @@ import { createCircuitBreaker } from '../execution/circuit-breaker';
 import { createTradingApiRouter } from './api-routes';
 import { createPositionManager, type PositionManager } from '../execution/position-manager';
 import { createPositionCloseCallback, createPositionBridge, type PositionBridge } from '../trading/position-bridge';
+import { createBacktestEngine, type BacktestEngine } from '../trading/backtest';
 
 // =============================================================================
 // TYPES
@@ -2008,15 +2009,17 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   httpGateway.setFeatureEngineering(featureEngine);
 
   // Wire trading API endpoints (positions, portfolio, orders, signals, orchestrator)
+  const backtestEngine: BacktestEngine = createBacktestEngine(db);
   const tradingApiRouter = createTradingApiRouter({
     db,
     execution: executionService,
     orchestrator,
     safety: safetyManager,
     signalRouter,
-    mlPipeline,
     botManager: null, // BotManager lives inside TradingSystem, not gateway scope
     tradeLogger: null, // TradeLogger lives inside TradingSystem, not gateway scope
+    tickRecorder,
+    backtestEngine,
   });
   httpGateway.setTradingApiRouter(tradingApiRouter);
 
