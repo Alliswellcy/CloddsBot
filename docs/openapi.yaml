@@ -80,6 +80,9 @@ paths:
                             subnetId: { type: integer }
                             type: { type: string }
                             running: { type: boolean }
+                            uid: { type: integer, nullable: true }
+                            emission: { type: number, nullable: true }
+                            rank: { type: integer, nullable: true }
 
   /api/bittensor/wallet:
     get:
@@ -149,8 +152,11 @@ paths:
                         hotkey: { type: string }
                         taoEarned: { type: number }
                         usdEarned: { type: number }
+                        apiCost: { type: number }
+                        infraCost: { type: number }
                         netProfit: { type: number }
                         period: { type: string }
+                        createdAt: { type: string, format: date-time }
 
   /api/bittensor/miners:
     get:
@@ -180,6 +186,7 @@ paths:
                         emission: { type: number }
                         rank: { type: integer }
                         active: { type: boolean }
+                        updatedAt: { type: string, format: date-time }
 
   /api/bittensor/subnets:
     get:
@@ -204,7 +211,10 @@ paths:
                         netuid: { type: integer }
                         name: { type: string }
                         minerCount: { type: integer }
+                        validatorCount: { type: integer }
+                        emissionPct: { type: number }
                         registrationCost: { type: number }
+                        immunityPeriodBlocks: { type: integer }
 
   /api/bittensor/register:
     post:

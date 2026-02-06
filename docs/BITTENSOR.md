@@ -41,6 +41,7 @@ BITTENSOR_COLDKEY_PASSWORD=        # optional, for encrypted coldkeys
 BITTENSOR_PYTHON_PATH=python3      # optional, auto-detected
 BITTENSOR_SUBTENSOR_URL=           # optional, uses default Finney endpoint
 BITTENSOR_EARNINGS_POLL_INTERVAL_MS=300000  # optional, default 5 min
+BITTENSOR_TAO_PRICE_USD=                   # optional, override CoinGecko price
 ```
 
 Or in `~/.clodds/clodds.json`:

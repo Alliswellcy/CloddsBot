@@ -990,24 +990,33 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   },
   BITTENSOR_SUBTENSOR_URL: (cfg) => {
     if (!cfg.bittensor) cfg.bittensor = {};
-    cfg.bittensor.subtensorUrl = process.env.BITTENSOR_SUBTENSOR_URL;
+    const raw = process.env.BITTENSOR_SUBTENSOR_URL;
+    if (raw) cfg.bittensor.subtensorUrl = raw;
   },
   BITTENSOR_COLDKEY_PATH: (cfg) => {
     if (!cfg.bittensor) cfg.bittensor = {};
-    cfg.bittensor.coldkeyPath = process.env.BITTENSOR_COLDKEY_PATH;
+    const raw = process.env.BITTENSOR_COLDKEY_PATH;
+    if (raw) cfg.bittensor.coldkeyPath = raw;
   },
   BITTENSOR_COLDKEY_PASSWORD: (cfg) => {
     if (!cfg.bittensor) cfg.bittensor = {};
-    cfg.bittensor.coldkeyPassword = process.env.BITTENSOR_COLDKEY_PASSWORD;
+    const raw = process.env.BITTENSOR_COLDKEY_PASSWORD;
+    if (raw) cfg.bittensor.coldkeyPassword = raw;
   },
   BITTENSOR_PYTHON_PATH: (cfg) => {
     if (!cfg.bittensor) cfg.bittensor = {};
-    cfg.bittensor.pythonPath = process.env.BITTENSOR_PYTHON_PATH;
+    const raw = process.env.BITTENSOR_PYTHON_PATH;
+    if (raw) cfg.bittensor.pythonPath = raw;
   },
   BITTENSOR_EARNINGS_POLL_INTERVAL_MS: (cfg) => {
     if (!cfg.bittensor) cfg.bittensor = {};
     const raw = process.env.BITTENSOR_EARNINGS_POLL_INTERVAL_MS;
     if (raw) cfg.bittensor.earningsPollIntervalMs = Number.parseInt(raw, 10);
+  },
+  BITTENSOR_TAO_PRICE_USD: (cfg) => {
+    if (!cfg.bittensor) cfg.bittensor = {};
+    const raw = process.env.BITTENSOR_TAO_PRICE_USD;
+    if (raw) cfg.bittensor.taoPriceUsd = Number.parseFloat(raw);
   },
   CLODDS_GROUP_POLICIES: (cfg) => {
     if (!process.env.CLODDS_GROUP_POLICIES) return;

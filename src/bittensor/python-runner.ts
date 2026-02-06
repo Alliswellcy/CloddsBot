@@ -6,11 +6,17 @@
 
 import { spawn as nodeSpawn, execFile } from 'node:child_process';
 import type { PythonRunner, PythonExecResult, PythonProcess } from './types';
+import { logger } from '../utils/logger';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+const DANGEROUS_CHARS = /[;&|`$(){}[\]<>!#~]/g;
 
 function sanitizeArg(arg: string): string {
-  return arg.replace(/[;&|`$(){}[\]<>!#~]/g, '');
+  const cleaned = arg.replace(DANGEROUS_CHARS, '');
+  if (cleaned !== arg) {
+    logger.warn(`[python-runner] Stripped dangerous characters from argument: "${arg}" → "${cleaned}"`);
+  }
+  return cleaned;
 }
 
 export function createPythonRunner(pythonPath: string = 'python3'): PythonRunner {
@@ -22,7 +28,7 @@ export function createPythonRunner(pythonPath: string = 'python3'): PythonRunner
         resolve({
           stdout: stdout ?? '',
           stderr: stderr ?? '',
-          exitCode: error ? (error as NodeJS.ErrnoException & { code?: number }).code ?? 1 : 0,
+          exitCode: error ? (typeof (error as any).code === 'number' ? (error as any).code : 1) : 0,
           success: !error,
         });
       });
