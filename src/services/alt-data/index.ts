@@ -48,6 +48,7 @@ export interface FeedManagerLike {
     tags?: string[];
   }>;
   on?(event: string, listener: (...args: unknown[]) => void): void;
+  removeListener?(event: string, listener: (...args: unknown[]) => void): void;
 }
 
 // ── Factory ────────────────────────────────────────────────────────────────
@@ -86,6 +87,14 @@ export function createAltDataService(opts: AltDataServiceOptions): AltDataServic
   let fearGreedFeed: FearGreedFeed | null = null;
   let fundingRatesFeed: FundingRatesFeed | null = null;
   let redditFeed: RedditFeed | null = null;
+
+  // News bridge listener (stored for cleanup on stop)
+  let newsListener: ((...args: unknown[]) => void) | null = null;
+
+  // Serial event processing queue (prevents unbounded async fan-out)
+  const eventQueue: AltDataEvent[] = [];
+  const MAX_QUEUE = 100;
+  let draining = false;
 
   // ── Cache eviction ─────────────────────────────────────────────────────
 
@@ -152,9 +161,6 @@ export function createAltDataService(opts: AltDataServiceOptions): AltDataServic
         entry.confidences.shift();
       }
 
-      // Evict stale cache entries if over limit
-      evictStaleCacheEntries();
-
       // Skip neutral signals — no actionable direction
       const direction = sentiment.score > 0 ? 'buy' as const : sentiment.score < 0 ? 'sell' as const : null;
       if (!direction) continue;
@@ -188,15 +194,31 @@ export function createAltDataService(opts: AltDataServiceOptions): AltDataServic
         '[alt-data] Signal emitted',
       );
     }
+
+    // Evict stale cache entries once per event (not per market match)
+    evictStaleCacheEntries();
   }
 
   function onFeedEvent(event: AltDataEvent): void {
     if (stopped) return;
     // Check age — skip stale events
     if (Date.now() - event.timestamp > cfg.maxAgeMs) return;
-    processEvent(event).catch((error) => {
-      logger.warn({ error, source: event.source }, '[alt-data] Event processing failed');
-    });
+    // Enqueue and drain serially (prevents unbounded concurrent embeds)
+    if (eventQueue.length >= MAX_QUEUE) return; // back-pressure: drop if full
+    eventQueue.push(event);
+    drainQueue();
+  }
+
+  async function drainQueue(): Promise<void> {
+    if (draining) return;
+    draining = true;
+    while (eventQueue.length > 0 && !stopped) {
+      const event = eventQueue.shift()!;
+      await processEvent(event).catch((error) => {
+        logger.warn({ error, source: event.source }, '[alt-data] Event processing failed');
+      });
+    }
+    draining = false;
   }
 
   // ── Service lifecycle ──────────────────────────────────────────────────
@@ -204,8 +226,10 @@ export function createAltDataService(opts: AltDataServiceOptions): AltDataServic
   async function start(): Promise<void> {
     stopped = false;
 
-    // Refresh market embeddings cache
-    await matcher.refreshMarkets();
+    // Pre-warm market embeddings in background (don't block gateway startup)
+    matcher.refreshMarkets().catch((err) =>
+      logger.warn({ error: err }, '[alt-data] Background market refresh failed'),
+    );
 
     // Start enabled feeds
     if (cfg.fearGreedEnabled) {
@@ -225,7 +249,7 @@ export function createAltDataService(opts: AltDataServiceOptions): AltDataServic
 
     // Bridge existing news events if FeedManager is available
     if (opts.feeds?.on) {
-      opts.feeds.on('news', (item: unknown) => {
+      newsListener = (item: unknown) => {
         const newsItem = item as { id?: string; title?: string; content?: string; url?: string; author?: string; source?: string };
         if (!newsItem?.title) return;
 
@@ -242,7 +266,8 @@ export function createAltDataService(opts: AltDataServiceOptions): AltDataServic
         };
 
         onFeedEvent(event);
-      });
+      };
+      opts.feeds.on('news', newsListener);
     }
 
     const activeFeeds = getActiveFeeds();
@@ -251,12 +276,19 @@ export function createAltDataService(opts: AltDataServiceOptions): AltDataServic
 
   function stop(): void {
     stopped = true;
+    // Remove news bridge listener to prevent leak on reload
+    if (newsListener && opts.feeds?.removeListener) {
+      opts.feeds.removeListener('news', newsListener);
+    }
+    newsListener = null;
     fearGreedFeed?.stop();
     fundingRatesFeed?.stop();
     redditFeed?.stop();
     fearGreedFeed = null;
     fundingRatesFeed = null;
     redditFeed = null;
+    // Clear pending queue
+    eventQueue.length = 0;
     logger.info({ eventsProcessed, signalsEmitted }, '[alt-data] Service stopped');
   }
 
