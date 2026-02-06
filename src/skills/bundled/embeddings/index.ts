@@ -154,6 +154,8 @@ export async function execute(args: string): Promise<string> {
 
     case 'cache':
       if (rest[0] === 'clear') {
+        const svc = await initService();
+        if (svc) svc.clearCache();
         return 'Embedding cache cleared.';
       }
       return handleCacheStats();

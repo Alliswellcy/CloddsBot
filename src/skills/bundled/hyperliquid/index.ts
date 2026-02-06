@@ -77,11 +77,16 @@ async function logFunding(funding: Omit<HyperliquidFunding, 'userId'>): Promise<
 // =============================================================================
 
 async function handleStats(): Promise<string> {
-  const [hlpStats, funding, meta] = await Promise.all([
-    hl.getHlpStats(),
-    hl.getFundingRates(),
-    hl.getPerpMeta(),
-  ]);
+  let hlpStats, funding, meta;
+  try {
+    [hlpStats, funding, meta] = await Promise.all([
+      hl.getHlpStats(),
+      hl.getFundingRates(),
+      hl.getPerpMeta(),
+    ]);
+  } catch (error) {
+    return `Failed to fetch Hyperliquid stats: ${error instanceof Error ? error.message : String(error)}`;
+  }
 
   const lines = [
     '**Hyperliquid Stats**',
@@ -109,11 +114,16 @@ async function handleStats(): Promise<string> {
 }
 
 async function handleMarkets(query?: string): Promise<string> {
-  const [perpMeta, spotMeta, mids] = await Promise.all([
-    hl.getPerpMeta(),
-    hl.getSpotMeta(),
-    hl.getAllMids(),
-  ]);
+  let perpMeta, spotMeta, mids;
+  try {
+    [perpMeta, spotMeta, mids] = await Promise.all([
+      hl.getPerpMeta(),
+      hl.getSpotMeta(),
+      hl.getAllMids(),
+    ]);
+  } catch (error) {
+    return `Failed to fetch markets: ${error instanceof Error ? error.message : String(error)}`;
+  }
 
   const lines = ['**Hyperliquid Markets**', ''];
 
@@ -152,10 +162,15 @@ async function handleMarkets(query?: string): Promise<string> {
 }
 
 async function handlePrice(coin: string): Promise<string> {
-  const [mids, meta] = await Promise.all([
-    hl.getAllMids(),
-    hl.getPerpMeta(),
-  ]);
+  let mids, meta;
+  try {
+    [mids, meta] = await Promise.all([
+      hl.getAllMids(),
+      hl.getPerpMeta(),
+    ]);
+  } catch (error) {
+    return `Failed to fetch price: ${error instanceof Error ? error.message : String(error)}`;
+  }
 
   const coinUpper = coin.toUpperCase();
   const price = mids[coinUpper];
@@ -258,10 +273,15 @@ async function handleFunding(coin?: string): Promise<string> {
   }
 
   // Show predicted funding
-  const [funding, predicted] = await Promise.all([
-    hl.getFundingRates(),
-    hl.getPredictedFundings(),
-  ]);
+  let funding, predicted;
+  try {
+    [funding, predicted] = await Promise.all([
+      hl.getFundingRates(),
+      hl.getPredictedFundings(),
+    ]);
+  } catch (error) {
+    return `Failed to fetch funding rates: ${error instanceof Error ? error.message : String(error)}`;
+  }
 
   const lines = [
     '**Current Funding Rates**',
@@ -295,11 +315,16 @@ async function handleBalance(): Promise<string> {
     return 'Set HYPERLIQUID_WALLET and HYPERLIQUID_PRIVATE_KEY';
   }
 
-  const [state, spotBalances, points] = await Promise.all([
-    hl.getUserState(config.walletAddress),
-    hl.getSpotBalances(config.walletAddress),
-    hl.getUserPoints(config.walletAddress),
-  ]);
+  let state, spotBalances, points;
+  try {
+    [state, spotBalances, points] = await Promise.all([
+      hl.getUserState(config.walletAddress),
+      hl.getSpotBalances(config.walletAddress),
+      hl.getUserPoints(config.walletAddress),
+    ]);
+  } catch (error) {
+    return `Failed to fetch account data: ${error instanceof Error ? error.message : String(error)}`;
+  }
 
   const margin = state.marginSummary;
   const total = parseFloat(margin.accountValue);
@@ -988,10 +1013,15 @@ async function handleFees(): Promise<string> {
     return 'Set HYPERLIQUID_WALLET and HYPERLIQUID_PRIVATE_KEY';
   }
 
-  const [fees, rateLimit] = await Promise.all([
-    hl.getUserFees(config.walletAddress),
-    hl.getUserRateLimit(config.walletAddress),
-  ]);
+  let fees, rateLimit;
+  try {
+    [fees, rateLimit] = await Promise.all([
+      hl.getUserFees(config.walletAddress),
+      hl.getUserRateLimit(config.walletAddress),
+    ]);
+  } catch (error) {
+    return `Failed to fetch fees/limits: ${error instanceof Error ? error.message : String(error)}`;
+  }
 
   return [
     '**Fees & Limits**',

@@ -52,7 +52,7 @@ let copyTraderInstance: SwarmCopyTrader | null = null;
 function getCopyTrader(): SwarmCopyTrader {
   if (!copyTraderInstance) {
     const swarm = getSwarm();
-    const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const rpcUrl = process.env.SOLANA_RPC_URL || process.env.RPC_URL || 'https://api.mainnet-beta.solana.com';
     const connection = new Connection(rpcUrl, 'confirmed');
     copyTraderInstance = getSwarmCopyTrader(connection, swarm);
   }

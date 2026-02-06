@@ -224,7 +224,12 @@ export async function createKalshiFeed(config?: {
     if (value === null || value === undefined) return null;
     const numeric = typeof value === 'number' ? value : Number.parseFloat(String(value));
     if (!Number.isFinite(numeric)) return null;
-    return numeric > 1.5 ? numeric / 100 : numeric;
+    // Kalshi prices are in cents (1-99) or decimals (0.01-0.99)
+    // Values >= 2 are definitely cents; values <= 1 are already decimal
+    if (numeric >= 2) return numeric / 100;
+    if (numeric <= 1) return numeric;
+    // Ambiguous range 1-2: assume cents (Kalshi doesn't have prices > $1)
+    return numeric / 100;
   }
 
   function normalizeCents(value: unknown): number | null {
@@ -346,7 +351,8 @@ export async function createKalshiFeed(config?: {
 
   function scheduleWsReconnect(): void {
     if (wsReconnectTimer) return;
-    const delay = Math.min(30000, 2000 + wsReconnectAttempt * 2000);
+    const jitter = Math.random() * 1000;
+    const delay = Math.min(30000, 1000 * Math.pow(2, wsReconnectAttempt) + jitter);
     wsReconnectAttempt += 1;
     wsReconnectTimer = setTimeout(() => {
       wsReconnectTimer = null;

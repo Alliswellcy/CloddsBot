@@ -199,8 +199,8 @@ async function handleBack(marketId: string, selectionId: string, odds: string, s
     const oddsNum = parseFloat(odds);
     const stakeNum = parseFloat(stake);
 
-    if (isNaN(oddsNum) || isNaN(stakeNum)) {
-      return 'Invalid odds or stake.';
+    if (isNaN(oddsNum) || isNaN(stakeNum) || oddsNum <= 0) {
+      return 'Invalid odds or stake. Odds must be > 0.';
     }
 
     // Circuit breaker pre-trade check
@@ -263,8 +263,8 @@ async function handleLay(marketId: string, selectionId: string, odds: string, st
     const oddsNum = parseFloat(odds);
     const stakeNum = parseFloat(stake);
 
-    if (isNaN(oddsNum) || isNaN(stakeNum)) {
-      return 'Invalid odds or stake.';
+    if (isNaN(oddsNum) || isNaN(stakeNum) || oddsNum <= 0) {
+      return 'Invalid odds or stake. Odds must be > 0.';
     }
 
     // Circuit breaker pre-trade check

@@ -196,7 +196,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       description: market.description,
       outcomes,
       volume24h: outcomes.reduce((sum, o) => sum + o.volume24h, 0),
-      liquidity: 0, // Would need separate calculation
+      liquidity: outcomes.reduce((sum, o) => sum + (o.volume24h || 0), 0) * 0.1, // Estimate: ~10% of daily volume as liquidity
       endDate: event.end_datetime ? new Date(event.end_datetime) : undefined,
       resolved: market.state === 'settled',
       tags: [event.type.domain, event.type.name].filter(Boolean),

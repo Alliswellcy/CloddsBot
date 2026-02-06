@@ -496,8 +496,8 @@ export async function getPolymarketOrderbookCached(tokenId: string): Promise<Ord
       .map((a) => [parseFloat(a.price), parseFloat(a.size)] as [number, number])
       .sort((a, b) => a[0] - b[0]); // Lowest ask first
 
-    const bestBid = bids[0]?.[0] || 0;
-    const bestAsk = asks[0]?.[0] || 1;
+    const bestBid = bids[0]?.[0] ?? 0;
+    const bestAsk = asks[0]?.[0] ?? 0.99;
     const midPrice = (bestBid + bestAsk) / 2;
 
     const orderbook: OrderbookData = { bids, asks, midPrice };
@@ -768,8 +768,8 @@ export function calculateOrderbookImbalance(
   let filteredAsks = asks.slice(0, depthLevels);
 
   if (depthDollars !== undefined && depthDollars > 0) {
-    const bestBid = bids[0]?.[0] || 0;
-    const bestAsk = asks[0]?.[0] || 1;
+    const bestBid = bids[0]?.[0] ?? 0;
+    const bestAsk = asks[0]?.[0] ?? 0.99;
 
     filteredBids = bids.filter(([price]) => bestBid - price <= depthDollars);
     filteredAsks = asks.filter(([price]) => price - bestAsk <= depthDollars);
@@ -798,8 +798,8 @@ export function calculateOrderbookImbalance(
     : 0;
 
   // Best prices and spread
-  const bestBid = bids[0]?.[0] || 0;
-  const bestAsk = asks[0]?.[0] || 1;
+  const bestBid = bids[0]?.[0] ?? 0;
+  const bestAsk = asks[0]?.[0] ?? 0.99;
   const spread = bestAsk - bestBid;
   const spreadPct = midPrice > 0 ? spread / midPrice : 0;
 
@@ -890,8 +890,8 @@ async function fetchPolymarketOrderbook(tokenId: string): Promise<OrderbookData 
       .map(a => [parseFloat(a.price), parseFloat(a.size)] as [number, number])
       .sort((a, b) => a[0] - b[0]); // Sort asks ascending by price
 
-    const bestBid = bids[0]?.[0] || 0;
-    const bestAsk = asks[0]?.[0] || 1;
+    const bestBid = bids[0]?.[0] ?? 0;
+    const bestAsk = asks[0]?.[0] ?? 0.99;
     const midPrice = (bestBid + bestAsk) / 2;
 
     return { bids, asks, midPrice };
@@ -932,8 +932,8 @@ async function fetchKalshiOrderbook(marketId: string): Promise<OrderbookData | n
       .map(([priceCents, size]) => [1 - priceCents / 100, size] as [number, number])
       .sort((a, b) => a[0] - b[0]);
 
-    const bestBid = bids[0]?.[0] || 0;
-    const bestAsk = asks[0]?.[0] || 1;
+    const bestBid = bids[0]?.[0] ?? 0;
+    const bestAsk = asks[0]?.[0] ?? 0.99;
     const midPrice = (bestBid + bestAsk) / 2;
 
     return { bids, asks, midPrice };
@@ -1467,6 +1467,8 @@ interface KalshiOrderResponse {
     order_id: string;
     status: string;
     filled_count?: number;
+    yes_price?: number;
+    no_price?: number;
   };
   error?: { message: string };
 }
@@ -1582,6 +1584,8 @@ async function placeKalshiOrder(
       orderId: data.order?.order_id,
       status: data.order?.status as OrderStatus || 'open',
       filledSize: data.order?.filled_count,
+      avgFillPrice: data.order?.yes_price != null ? data.order.yes_price / 100 :
+                    data.order?.no_price != null ? data.order.no_price / 100 : undefined,
     };
   } catch (error) {
     logger.error({ error }, 'Error placing Kalshi order after retries');
@@ -1880,11 +1884,11 @@ async function placeOpinionOrder(
   }
 
   const config = toOpinionConfig(auth);
-  // Opinion SDK needs a marketId (number) — we extract it from context or use 0
-  // The tokenId is what the SDK actually uses for order matching
+  // Extract marketId from tokenId (Opinion tokens use format: marketId-outcomeIndex)
+  const marketId = parseInt(tokenId.split('-')[0], 10) || 0;
   const result = await opinion.placeOrder(
     config,
-    0, // marketId not available at this level — SDK uses tokenId for matching
+    marketId,
     tokenId,
     side === 'buy' ? 'BUY' : 'SELL',
     price,
@@ -2129,8 +2133,8 @@ async function fetchPredictFunOrderbook(
       .filter(([price, size]) => !isNaN(price) && !isNaN(size))
       .sort((a, b) => a[0] - b[0]);
 
-    const bestBid = bids[0]?.[0] || 0;
-    const bestAsk = asks[0]?.[0] || 1;
+    const bestBid = bids[0]?.[0] ?? 0;
+    const bestAsk = asks[0]?.[0] ?? 0.99;
     const midPrice = (bestBid + bestAsk) / 2;
 
     return { bids, asks, midPrice };
@@ -2169,8 +2173,8 @@ async function fetchOpinionOrderbook(tokenId: string): Promise<OrderbookData | n
       .filter(([price, size]) => !isNaN(price) && !isNaN(size))
       .sort((a, b) => a[0] - b[0]);
 
-    const bestBid = bids[0]?.[0] || 0;
-    const bestAsk = asks[0]?.[0] || 1;
+    const bestBid = bids[0]?.[0] ?? 0;
+    const bestAsk = asks[0]?.[0] ?? 0.99;
     const midPrice = (bestBid + bestAsk) / 2;
 
     return { bids, asks, midPrice };
@@ -2246,25 +2250,24 @@ async function approvePolymarketUSDC(
   spender: string,
   amount: number = Number.MAX_SAFE_INTEGER
 ): Promise<{ success: boolean; txHash?: string; error?: string }> {
-  // Note: Full ERC20 approval requires web3/ethers and RPC connection
-  // This is a placeholder that documents the required flow
   try {
-    // In a full implementation, this would:
-    // 1. Create web3/ethers instance with Polygon RPC
-    // 2. Create USDC contract instance
-    // 3. Call approve(spender, amount) and sign with privateKey
-    // 4. Wait for transaction confirmation
+    const { Wallet, Contract, JsonRpcProvider, MaxUint256 } = await import('ethers');
+    const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+    const provider = new JsonRpcProvider(rpcUrl);
+    const wallet = new Wallet(privateKey, provider);
 
-    logger.warn(
-      { spender, amount },
-      'USDC approval requires full web3 implementation. Use Polymarket UI for initial approval.'
-    );
+    // USDC on Polygon
+    const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+    const ERC20_ABI = ['function approve(address spender, uint256 amount) returns (bool)'];
+    const usdc = new Contract(USDC_ADDRESS, ERC20_ABI, wallet);
 
-    return {
-      success: false,
-      error: 'USDC approval requires web3 integration. Please approve via Polymarket UI for now.',
-    };
+    const tx = await usdc.approve(spender, MaxUint256);
+    const receipt = await tx.wait();
+
+    logger.info({ txHash: receipt.hash, spender }, 'USDC approval confirmed');
+    return { success: true, txHash: receipt.hash };
   } catch (error) {
+    logger.error({ error, spender }, 'USDC approval failed');
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Approval failed',
@@ -2346,8 +2349,8 @@ async function getPolymarketOrderbooksBatch(
           .map((a) => [parseFloat(a.price), parseFloat(a.size)] as [number, number])
           .sort((a, b) => a[0] - b[0]);
 
-        const bestBid = bids[0]?.[0] || 0;
-        const bestAsk = asks[0]?.[0] || 1;
+        const bestBid = bids[0]?.[0] ?? 0;
+        const bestAsk = asks[0]?.[0] ?? 0.99;
         const midPrice = (bestBid + bestAsk) / 2;
 
         results.set(tokenId, { bids, asks, midPrice });

@@ -302,8 +302,9 @@ async function searchHandler(toolInput: ToolInput, context: HandlerContext): Pro
   if (!kalshiCreds) return errorResult('No Kalshi credentials set up. Use setup_kalshi_credentials first.');
   const query = toolInput.query as string | undefined;
   const tradingDir = getTradingDir();
-  const cmd = query
-    ? `cd ${tradingDir} && python3 kalshi.py search "${query}"`
+  const sanitizedQuery = query ? query.replace(/[^a-zA-Z0-9\s_\-.,]/g, '') : '';
+  const cmd = sanitizedQuery
+    ? `cd ${tradingDir} && python3 kalshi.py search "${sanitizedQuery}"`
     : `cd ${tradingDir} && python3 kalshi.py search`;
   const userEnv = buildKalshiEnv(kalshiCreds.data);
   return execKalshiPython(cmd, userEnv);

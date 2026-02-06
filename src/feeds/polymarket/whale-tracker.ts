@@ -271,10 +271,10 @@ export function detectMarketCategory(question: string): MarketCategory {
   return 'other';
 }
 
-// Known whale addresses (can be extended)
-const KNOWN_WHALES = new Set<string>([
-  // Add known whale addresses here
-]);
+// Known whale addresses (notable Polymarket traders)
+const KNOWN_WHALES = new Set<string>(
+  (process.env.POLYMARKET_WHALE_ADDRESSES || '').split(',').filter(Boolean)
+);
 
 // =============================================================================
 // IMPLEMENTATION
@@ -594,7 +594,8 @@ export function createWhaleTracker(config: WhaleConfig = {}): WhaleTracker {
       if (totalTrades < 5) continue; // Need at least 5 trades for reliability
 
       const winRate = stats ? stats.wins / totalTrades : 0;
-      if (winRate < 0.55) continue; // Need at least 55% win rate
+      const minWinRate = parseFloat(process.env.WHALE_MIN_WIN_RATE || '0.55');
+      if (winRate < minWinRate) continue;
 
       // Determine if this is a buy or sell for copy trading
       const isBuyer = trade.taker === address && trade.side === 'BUY';

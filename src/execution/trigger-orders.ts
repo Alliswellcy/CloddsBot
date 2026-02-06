@@ -142,11 +142,13 @@ export function createTriggerOrderManager(
         }
       }
 
-      case 'spread_below':
-        // Spread checking requires orderbook data — for price-only feeds,
-        // we approximate by checking if the price is near the condition threshold
-        // A proper implementation would fetch the orderbook here
-        return false;
+      case 'spread_below': {
+        // Approximate spread from price movement — if price is stable near mid,
+        // spread is likely tight. Use price volatility as a proxy.
+        if (previousPrice === undefined) return false;
+        const priceSpread = Math.abs(currentPrice - previousPrice);
+        return priceSpread <= condition.maxSpread;
+      }
 
       default:
         return false;

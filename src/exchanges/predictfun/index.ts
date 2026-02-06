@@ -326,7 +326,7 @@ export async function createOrder(
       tokenId: params.tokenId,
       makerAmount,
       takerAmount,
-      nonce: 0n,
+      nonce: BigInt(Date.now()),
       feeRateBps: params.feeRateBps || 0,
     });
 

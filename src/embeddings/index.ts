@@ -109,6 +109,9 @@ export interface EmbeddingsService {
   /** Get cached embedding by content hash */
   getCached(contentHash: string): EmbeddingVector | null;
 
+  /** Clear all cached embeddings */
+  clearCache(): void;
+
   /** Cache an embedding */
   cache(contentHash: string, content: string, vector: EmbeddingVector): void;
 }
@@ -491,6 +494,12 @@ export function createEmbeddingsService(
       } catch {
         return null;
       }
+    },
+
+    clearCache(): void {
+      memoryCache.clear();
+      db.run('DELETE FROM embeddings_cache');
+      logger.info('Embedding cache cleared');
     },
 
     cache(contentHash: string, content: string, vector: EmbeddingVector): void {

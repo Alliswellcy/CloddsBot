@@ -25,8 +25,8 @@ import { getGlobalFreshnessTracker, type FreshnessTracker } from '../freshness';
 
 const BASE_URL = 'https://proxy.opinion.trade:8443/openapi';
 
-// API rate limit: 15 req/sec
-const RATE_LIMIT_DELAY_MS = 70; // ~14 req/sec to stay safe
+// API rate limit: 15 req/sec (configurable via env)
+const RATE_LIMIT_DELAY_MS = parseInt(process.env.OPINION_RATE_LIMIT_MS || '70', 10); // ~14 req/sec to stay safe
 
 interface OpinionMarket {
   id: number;
