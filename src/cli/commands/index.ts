@@ -3702,14 +3702,21 @@ export function createOnboardCommand(program: Command): void {
       const figlet = await import('figlet');
       const banner = figlet.default.textSync('Clodds', { font: 'ANSI Shadow' });
       console.log('');
-      console.log(`                       \uD83D\uDD2E`);
+      console.log(`              ${cyan('\u2584\u2584\u2588\u2588\u2588\u2588\u2588\u2588\u2584\u2584')}`);
+      console.log(`            ${cyan('\u2584\u2588\u2588')}${magenta('\u2580')}      ${magenta('\u2580')}${cyan('\u2588\u2588\u2584')}`);
+      console.log(`           ${cyan('\u2588\u2588\u2588')}  ${magenta('\u2726')}    ${magenta('\u2726')}  ${cyan('\u2588\u2588\u2588')}`);
+      console.log(`           ${cyan('\u2588\u2588\u2588')}    ${magenta('\u25c8')}     ${cyan('\u2588\u2588\u2588')}`);
+      console.log(`            ${cyan('\u2580\u2588\u2588')}${magenta('\u2584')}      ${magenta('\u2584')}${cyan('\u2588\u2588\u2580')}`);
+      console.log(`              ${cyan('\u2580\u2580\u2588\u2588\u2588\u2588\u2588\u2588\u2580\u2580')}`);
+      console.log(`              ${yellow('\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557')}`);
+      console.log(`              ${yellow('\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D')}`);
       console.log('');
       for (const line of banner.split('\n')) {
         if (line.trim()) console.log(`  ${magenta(line)}`);
       }
       console.log('');
-      console.log(`  \u2728 ${bold('AI Trading Terminal')} ${dim('for prediction markets, crypto & futures')}`);
-      console.log(`  ${dim('   10 markets  \u00b7  22 channels  \u00b7  103 skills')}`);
+      console.log(`  ${bold('AI Trading Terminal')} ${dim('for prediction markets, crypto & futures')}`);
+      console.log(`  ${dim('10 markets  \u00b7  22 channels  \u00b7  103 skills')}`);
       console.log('');
       console.log(`  ${dim('='.repeat(56))}`);
       console.log('');
