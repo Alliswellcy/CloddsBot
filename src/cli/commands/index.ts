@@ -3776,18 +3776,13 @@ export function createOnboardCommand(program: Command): void {
             'x-api-key': apiKey,
             'anthropic-version': '2023-06-01',
           },
-          body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001',
-            max_tokens: 1,
-            messages: [{ role: 'user', content: 'hi' }],
-          }),
+          body: '{}',
         });
-        if (r.ok || r.status === 429) {
-          console.log(`\r  ${green('Valid')}                `);
-        } else if (r.status === 401) {
-          console.log(`\r  ${yellow('Invalid key (401)')} — continuing anyway   `);
+        // 401 = bad key. Anything else (400, 429, etc.) = key authenticated fine.
+        if (r.status === 401) {
+          console.log(`\r  ${yellow('Invalid key')} — continuing anyway          `);
         } else {
-          console.log(`\r  ${yellow(`HTTP ${r.status}`)} — continuing anyway          `);
+          console.log(`\r  ${green('Valid')}                              `);
         }
       } catch {
         console.log(`\r  ${yellow('Offline')} — skipped validation        `);
