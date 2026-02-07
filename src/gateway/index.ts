@@ -20,7 +20,7 @@ import { RateLimiter, type RateLimitConfig } from '../security';
 import type { Config, IncomingMessage, OutgoingMessage, ReactionMessage, PollMessage, Platform } from '../types';
 import { createServer as createHttpGatewayServer } from './server';
 import { createX402Client, type X402Client } from '../payments/x402';
-import { createDatabase } from '../db';
+import { createDatabase, initDatabase } from '../db';
 import { createMigrationRunner } from '../db/migrations';
 import { initACP } from '../acp';
 import { initOrderPersistence } from '../execution/order-persistence';
@@ -421,7 +421,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   let currentConfig = config;
   configureHttpClient(currentConfig.http);
   const configPath = process.env.CLODDS_CONFIG_PATH || CONFIG_FILE;
-  const db = createDatabase();
+  const db = await initDatabase();
   try {
     const runner = createMigrationRunner(db);
     runner.migrate();
@@ -526,6 +526,18 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     const bittensorRouter = createBittensorRouter(bittensorService);
     httpGateway.setBittensorRouter(bittensorRouter);
     logger.info({ network: btConfig.network }, 'Bittensor service created');
+  }
+
+  // Create Percolator on-chain perps service if enabled
+  let percolatorService: {
+    feed: import('../percolator').PercolatorFeed;
+    execution: import('../percolator').PercolatorExecutionService;
+    keeper: import('../percolator').PercolatorKeeper | null;
+  } | null = null;
+  if (config.feeds?.percolator?.enabled) {
+    const { createPercolatorService } = await import('../percolator/index.js');
+    percolatorService = createPercolatorService(config.feeds.percolator);
+    logger.info({ slab: config.feeds.percolator.slabAddress }, 'Percolator service created');
   }
 
   // Create alt-data sentiment pipeline if enabled
@@ -1279,6 +1291,13 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         altDataService = null;
       }
 
+      // Stop percolator before rebuild (recreated after if still enabled)
+      if (percolatorService) {
+        if (percolatorService.keeper) percolatorService.keeper.stop();
+        percolatorService.feed.disconnect();
+        percolatorService = null;
+      }
+
       try {
         await oldFeeds.stop();
       } catch (error) {
@@ -1344,6 +1363,14 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       await channels.start();
       await startCronService();
       startMonitoring();
+
+      // Recreate percolator service if still enabled
+      if (currentConfig.feeds?.percolator?.enabled) {
+        const { createPercolatorService } = await import('../percolator/index.js');
+        percolatorService = createPercolatorService(currentConfig.feeds.percolator);
+        await percolatorService.feed.connect();
+        if (percolatorService.keeper) percolatorService.keeper.start();
+      }
 
       // Recreate alt-data service with fresh feeds
       const rebuildAltDataCfg = currentConfig.altData;
@@ -2252,6 +2279,15 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         logger.info('Tick recorder started');
       }
 
+      // Start Percolator feed + keeper if enabled
+      if (percolatorService) {
+        await percolatorService.feed.connect();
+        if (percolatorService.keeper) {
+          percolatorService.keeper.start();
+        }
+        logger.info('Percolator service started');
+      }
+
       // Start Bittensor mining service if enabled
       if (bittensorService) {
         await bittensorService.start();
@@ -2352,6 +2388,13 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       providerHealth?.stop();
       monitoring?.stop();
       monitoring = null;
+
+      // Stop Percolator service
+      if (percolatorService) {
+        if (percolatorService.keeper) percolatorService.keeper.stop();
+        percolatorService.feed.disconnect();
+        percolatorService = null;
+      }
 
       // Stop Bittensor mining service
       if (bittensorService) {
