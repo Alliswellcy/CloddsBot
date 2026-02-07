@@ -209,6 +209,8 @@ export interface AgentManager {
   reloadSkills: () => void;
   /** Notify the agent that config changed */
   reloadConfig: (config: Config) => void;
+  /** Get enabled skill names + descriptions for command palette */
+  getSkillCommands: () => Array<{ name: string; description: string }>;
 }
 
 const SYSTEM_PROMPT = `You are Clodds, an AI assistant for prediction markets. Claude + Odds.
@@ -1476,31 +1478,34 @@ function buildTools(): ToolDefinition[] {
     // ========== MARKET DISCOVERY ==========
     {
       name: 'polymarket_markets',
-      description: 'Get all active markets from the CLOB (paginated).',
+      description: 'Get active markets (returns 25 per page, use next_cursor to paginate).',
       input_schema: {
         type: 'object',
         properties: {
           next_cursor: { type: 'string', description: 'Pagination cursor for next page' },
+          limit: { type: 'number', description: 'Results per page (default 25, max 100)' },
         },
       },
     },
     {
       name: 'polymarket_simplified_markets',
-      description: 'Get simplified market list with less detail.',
+      description: 'Get simplified market list (returns 25 per page, use next_cursor to paginate).',
       input_schema: {
         type: 'object',
         properties: {
           next_cursor: { type: 'string', description: 'Pagination cursor' },
+          limit: { type: 'number', description: 'Results per page (default 25, max 100)' },
         },
       },
     },
     {
       name: 'polymarket_sampling_markets',
-      description: 'Get featured/sampling markets.',
+      description: 'Get featured/trending markets (returns 25 per page, use next_cursor to paginate).',
       input_schema: {
         type: 'object',
         properties: {
           next_cursor: { type: 'string', description: 'Pagination cursor' },
+          limit: { type: 'number', description: 'Results per page (default 25, max 100)' },
         },
       },
     },
@@ -10706,13 +10711,27 @@ async function executeTool(
       // ========== MARKET DISCOVERY HANDLERS ==========
       case 'polymarket_markets': {
         const nextCursor = toolInput.next_cursor as string | undefined;
+        const limit = Math.min((toolInput.limit as number) || 25, 100);
         try {
           const url = nextCursor
             ? `https://clob.polymarket.com/markets?next_cursor=${nextCursor}`
             : 'https://clob.polymarket.com/markets';
           const response = await fetch(url);
-          const data = await response.json() as ApiResponse;
-          return JSON.stringify(data);
+          const data = await response.json() as { data?: Array<Record<string, unknown>>; next_cursor?: string; count?: number };
+          const allItems = data.data || [];
+          const markets = allItems.slice(0, limit).map((m: Record<string, unknown>) => ({
+            condition_id: m.condition_id,
+            question: m.question,
+            description: typeof m.description === 'string' ? m.description.slice(0, 200) : undefined,
+            tokens: (m.tokens as Array<{ outcome: string; price: number }> || []).map(t => ({
+              outcome: t.outcome,
+              price: t.price,
+            })),
+            active: m.active,
+            end_date: m.end_date_iso,
+            slug: m.market_slug,
+          }));
+          return JSON.stringify({ markets, showing: markets.length, total: allItems.length, next_cursor: data.next_cursor });
         } catch (err: unknown) {
           return JSON.stringify({ error: (err as Error).message });
         }
@@ -10720,13 +10739,26 @@ async function executeTool(
 
       case 'polymarket_simplified_markets': {
         const nextCursor = toolInput.next_cursor as string | undefined;
+        const limit = Math.min((toolInput.limit as number) || 25, 100);
         try {
           const url = nextCursor
             ? `https://clob.polymarket.com/simplified-markets?next_cursor=${nextCursor}`
             : 'https://clob.polymarket.com/simplified-markets';
           const response = await fetch(url);
-          const data = await response.json() as ApiResponse;
-          return JSON.stringify(data);
+          const data = await response.json() as { data?: Array<Record<string, unknown>>; next_cursor?: string; count?: number };
+          const allItems = data.data || [];
+          const markets = allItems.slice(0, limit).map((m: Record<string, unknown>) => ({
+            condition_id: m.condition_id,
+            question: m.question,
+            tokens: (m.tokens as Array<{ outcome: string; price: number }> || []).map(t => ({
+              outcome: t.outcome,
+              price: t.price,
+            })),
+            active: m.active,
+            end_date: m.end_date_iso,
+            slug: m.market_slug,
+          }));
+          return JSON.stringify({ markets, showing: markets.length, total: allItems.length, next_cursor: data.next_cursor });
         } catch (err: unknown) {
           return JSON.stringify({ error: (err as Error).message });
         }
@@ -10734,13 +10766,26 @@ async function executeTool(
 
       case 'polymarket_sampling_markets': {
         const nextCursor = toolInput.next_cursor as string | undefined;
+        const limit = Math.min((toolInput.limit as number) || 25, 100);
         try {
           const url = nextCursor
             ? `https://clob.polymarket.com/sampling-markets?next_cursor=${nextCursor}`
             : 'https://clob.polymarket.com/sampling-markets';
           const response = await fetch(url);
-          const data = await response.json() as ApiResponse;
-          return JSON.stringify(data);
+          const data = await response.json() as { data?: Array<Record<string, unknown>>; next_cursor?: string; count?: number };
+          const allItems = data.data || [];
+          const markets = allItems.slice(0, limit).map((m: Record<string, unknown>) => ({
+            condition_id: m.condition_id,
+            question: m.question,
+            tokens: (m.tokens as Array<{ outcome: string; price: number }> || []).map(t => ({
+              outcome: t.outcome,
+              price: t.price,
+            })),
+            active: m.active,
+            end_date: m.end_date_iso,
+            slug: m.market_slug,
+          }));
+          return JSON.stringify({ markets, showing: markets.length, total: allItems.length, next_cursor: data.next_cursor });
         } catch (err: unknown) {
           return JSON.stringify({ error: (err as Error).message });
         }
@@ -17113,8 +17158,20 @@ export async function createAgentManager(
       // =========================================================================
       // CONTEXT MANAGEMENT - Check token usage and compact if needed
       // =========================================================================
+      // Model context window sizes (input limit)
+      const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+        'claude-opus-4-6': 200000,
+        'claude-opus-4-5-20250514': 200000,
+        'claude-sonnet-4-5-20250929': 200000,
+        'claude-sonnet-4-20250514': 200000,
+        'claude-haiku-4-5-20251001': 200000,
+        'claude-haiku-3-5-20250514': 200000,
+        'claude-3-5-sonnet-20241022': 200000,
+        'claude-3-opus-20240229': 200000,
+      };
+      const modelContextWindow = MODEL_CONTEXT_WINDOWS[modelId] || 200000;
       const contextConfig: ContextConfig = {
-        maxTokens: 128000,
+        maxTokens: modelContextWindow,
         reserveTokens: 4096,
         compactThreshold: 0.85,
         minMessagesAfterCompact: 6,
@@ -17480,6 +17537,12 @@ export async function createAgentManager(
     },
     reloadSkills() {
       skills.reload();
+    },
+    getSkillCommands() {
+      return skills.getEnabledSkills().map(s => ({
+        name: s.name,
+        description: s.description,
+      }));
     },
     reloadConfig(nextConfig: Config) {
       // This method acts as a signal hook; most config is read lazily via getConfig().

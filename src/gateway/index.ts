@@ -465,9 +465,6 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     db
   );
 
-  // Wire command palette for webchat
-  httpGateway.setCommandListHandler(() => commands.listAll());
-
   let channels: Awaited<ReturnType<typeof createChannelManager>> | null = null;
   const watchers: FSWatcher[] = [];
   let started = false;
@@ -1207,6 +1204,20 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     () => webhookTool,
     queuedExecutionRef ?? executionService
   );
+
+  // Wire command palette for webchat — merges registry commands + skill commands
+  httpGateway.setCommandListHandler(() => {
+    const registryCommands = commands.listAll();
+    const registryNames = new Set(registryCommands.map(c => c.name));
+    const skillCommands = agents.getSkillCommands()
+      .filter(s => !registryNames.has(`/${s.name}`))
+      .map(s => ({
+        name: `/${s.name}`,
+        description: s.description,
+        category: 'Skills',
+      }));
+    return [...registryCommands, ...skillCommands];
+  });
 
   webhookTool = createWebhookTool({
     manager: webhookManager,
