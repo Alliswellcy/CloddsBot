@@ -1210,11 +1210,16 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     const registryCommands = commands.listAll();
     const registryNames = new Set(registryCommands.map(c => c.name));
     const skillCommands = agents.getSkillCommands()
-      .filter(s => !registryNames.has(`/${s.name}`))
+      .map(s => {
+        // Normalize: lowercase, no spaces, strip leading slash
+        const normalized = s.name.toLowerCase().replace(/\s+/g, '-');
+        return { ...s, normalized };
+      })
+      .filter(s => !registryNames.has(`/${s.normalized}`))
       .map(s => ({
-        name: `/${s.name}`,
+        name: `/${s.normalized}`,
         description: s.description,
-        category: COMMAND_CATEGORIES[s.name] || 'Other',
+        category: COMMAND_CATEGORIES[s.name] || COMMAND_CATEGORIES[s.normalized] || 'Other',
       }));
     return [...registryCommands, ...skillCommands]
       .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));

@@ -94,7 +94,7 @@ export const COMMAND_CATEGORIES: Record<string, string> = {
 
   // ── Portfolio ──
   portfolio: 'Portfolio', pnl: 'Portfolio', positions: 'Portfolio',
-  'portfolio-sync': 'Portfolio', bags: 'Portfolio', history: 'Portfolio',
+  'portfolio-sync': 'Portfolio', history: 'Portfolio', ledger: 'Portfolio',
 
   // ── Strategy ──
   strategy: 'Strategy', backtest: 'Strategy', abtest: 'Strategy',
@@ -110,7 +110,7 @@ export const COMMAND_CATEGORIES: Record<string, string> = {
   pumpfun: 'DeFi', 'pump-swarm': 'DeFi',
   clanker: 'DeFi', endaoment: 'DeFi', onchainkit: 'DeFi',
   erc8004: 'DeFi', ens: 'DeFi', qrcoin: 'DeFi',
-  'trading-solana': 'DeFi', ledger: 'DeFi', yoink: 'DeFi',
+  'trading-solana': 'DeFi', bags: 'DeFi', yoink: 'DeFi',
   bankr: 'DeFi', acp: 'DeFi',
 
   // ── AI Agents ──
@@ -136,7 +136,7 @@ export const COMMAND_CATEGORIES: Record<string, string> = {
   // ── Tools & Infra ──
   sandbox: 'Tools', remote: 'Tools', tailscale: 'Tools', mcp: 'Tools',
   identity: 'Tools', verify: 'Tools', presence: 'Tools',
-  percolator: 'Tools', qmd: 'Tools', devtools: 'Tools',
+  percolator: 'DeFi', qmd: 'Tools', devtools: 'Tools',
 
   // ── Media & Social ──
   tts: 'Media', voice: 'Media', streaming: 'Media',
@@ -148,6 +148,9 @@ export const COMMAND_CATEGORIES: Record<string, string> = {
   // ── Analytics ──
   'whale-tracking': 'Analytics', weather: 'Analytics',
   stream: 'Analytics',
+
+  // ── Skills with non-standard casing in their name field ──
+  'Features': 'Markets', 'Tick Data': 'Markets',
 };
 
 export interface CommandRegistry {
