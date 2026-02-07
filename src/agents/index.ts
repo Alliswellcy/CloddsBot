@@ -210,7 +210,7 @@ export interface AgentManager {
   /** Notify the agent that config changed */
   reloadConfig: (config: Config) => void;
   /** Get enabled skill names + descriptions for command palette */
-  getSkillCommands: () => Array<{ name: string; description: string }>;
+  getSkillCommands: () => Array<{ name: string; description: string; subcommands?: Array<{ name: string; description: string }> }>;
 }
 
 const SYSTEM_PROMPT = `You are Clodds, an AI assistant for prediction markets. Claude + Odds.
@@ -17542,6 +17542,7 @@ export async function createAgentManager(
       return skills.getEnabledSkills().map(s => ({
         name: s.name,
         description: s.description,
+        subcommands: s.subcommands || [],
       }));
     },
     reloadConfig(nextConfig: Config) {

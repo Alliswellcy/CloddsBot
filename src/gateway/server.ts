@@ -40,7 +40,7 @@ export interface GatewayServer {
   setCommandListHandler(handler: CommandListHandler | null): void;
 }
 
-export type CommandListHandler = () => Array<{ name: string; description: string; category: string }>;
+export type CommandListHandler = () => Array<{ name: string; description: string; category: string; subcommands?: Array<{ name: string; description: string }> }>;
 
 export type ChannelWebhookHandler = (
   platform: string,
@@ -764,6 +764,17 @@ export function createServer(
       font-size: 10px;
       margin: 0 1px;
     }
+    .cmd-back {
+      padding: 8px 16px;
+      font-size: 11px;
+      color: var(--text-dim);
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cmd-back:hover { color: var(--accent); }
     .cmd-category {
       border-bottom: 1px solid rgba(45,39,85,0.5);
     }
@@ -987,8 +998,67 @@ export function createServer(
       'Analytics': '\uD83D\uDD2C', 'Other': '\uD83D\uDCE6',
     };
 
+    let subcommandMode = false;
+
     function showPalette(filter) {
-      const query = filter.slice(1).toLowerCase();
+      const text = filter.slice(1); // strip leading /
+      const spaceIdx = text.indexOf(' ');
+
+      if (spaceIdx > 0) {
+        // SUBCOMMAND MODE: "/hl lo" → show /hl's subcommands filtered by "lo"
+        const parentCmd = '/' + text.slice(0, spaceIdx);
+        const subQuery = text.slice(spaceIdx + 1).toLowerCase();
+        const parent = allCommands.find(c => c.name === parentCmd);
+        if (!parent || !parent.subcommands || !parent.subcommands.length) { hidePalette(); return; }
+
+        const subs = subQuery
+          ? parent.subcommands.filter(s => s.name.toLowerCase().includes(subQuery) || s.description.toLowerCase().includes(subQuery))
+          : parent.subcommands;
+
+        if (!subs.length) { hidePalette(); return; }
+        filteredCommands = subs.map(s => ({ name: s.name, description: s.description, fullName: parentCmd + ' ' + s.name }));
+        subcommandMode = true;
+
+        let html = '<div class="cmd-palette-header">'
+          + '<span>' + parentCmd + ' subcommands</span>'
+          + '<span class="cmd-palette-hint"><kbd>\u2191\u2193</kbd> navigate <kbd>Tab</kbd> select <kbd>Esc</kbd> close</span>'
+          + '</div>';
+        html += '<div class="cmd-back" data-action="back">\u2190 All commands</div>';
+
+        let idx = 0;
+        for (const cmd of filteredCommands) {
+          html += '<div class="cmd-item' + (idx === activeIndex ? ' active' : '') + '" data-index="' + idx + '" data-name="' + cmd.fullName + '">'
+            + '<span class="cmd-item-name">' + cmd.name + '</span>'
+            + '<span class="cmd-item-desc">' + cmd.description + '</span></div>';
+          idx++;
+        }
+
+        palette.innerHTML = html;
+        palette.classList.add('visible');
+        paletteVisible = true;
+
+        palette.querySelectorAll('.cmd-item').forEach(item => {
+          item.addEventListener('click', () => {
+            input.value = '/' + item.dataset.name + ' ';
+            hidePalette();
+            input.focus();
+            sendBtn.classList.add('active');
+          });
+        });
+        const backBtn = palette.querySelector('.cmd-back');
+        if (backBtn) {
+          backBtn.addEventListener('click', () => {
+            input.value = '/';
+            showPalette('/');
+            input.focus();
+          });
+        }
+        return;
+      }
+
+      // TOP-LEVEL MODE (existing behavior)
+      subcommandMode = false;
+      const query = text.toLowerCase();
       filteredCommands = query
         ? allCommands.filter(c =>
             c.name.toLowerCase().includes(query) ||
@@ -1022,9 +1092,10 @@ export function createServer(
           + '<span class="cmd-category-count">' + cmds.length + '</span>'
           + '</div>';
         for (const cmd of cmds) {
+          const hasSubs = cmd.subcommands && cmd.subcommands.length > 0;
           html += '<div class="cmd-item' + (idx === activeIndex ? ' active' : '') + '" data-index="' + idx + '" data-name="' + cmd.name + '">'
             + '<span class="cmd-item-name">' + cmd.name + '</span>'
-            + '<span class="cmd-item-desc">' + cmd.description + '</span></div>';
+            + '<span class="cmd-item-desc">' + cmd.description + (hasSubs ? ' \u203A' : '') + '</span></div>';
           idx++;
         }
         html += '</div>';
@@ -1053,8 +1124,23 @@ export function createServer(
     // Send button active state + palette trigger
     input.addEventListener('input', () => {
       const text = input.value;
-      if (text.startsWith('/') && text.indexOf(' ') === -1) {
-        showPalette(text);
+      if (text.startsWith('/')) {
+        const afterSlash = text.slice(1);
+        const spaceIdx = afterSlash.indexOf(' ');
+        if (spaceIdx === -1) {
+          // Top-level: "/hl" — filter commands
+          showPalette(text);
+        } else {
+          // Subcommand: "/hl " or "/hl lo" — show subcommands
+          const parentCmd = '/' + afterSlash.slice(0, spaceIdx);
+          const parent = allCommands.find(c => c.name === parentCmd);
+          if (parent && parent.subcommands && parent.subcommands.length > 0) {
+            activeIndex = -1;
+            showPalette(text);
+          } else {
+            hidePalette();
+          }
+        }
       } else {
         hidePalette();
       }
@@ -1240,14 +1326,32 @@ export function createServer(
         } else if (e.key === 'Tab') {
           e.preventDefault();
           if (activeIndex >= 0 && activeIndex < filteredCommands.length) {
-            input.value = filteredCommands[activeIndex].name + ' ';
+            const sel = filteredCommands[activeIndex];
+            if (subcommandMode) {
+              input.value = '/' + sel.fullName + ' ';
+            } else {
+              input.value = sel.name + ' ';
+              // If the selected command has subcommands, re-show palette
+              const parent = allCommands.find(c => c.name === sel.name);
+              if (parent && parent.subcommands && parent.subcommands.length > 0) {
+                activeIndex = -1;
+                showPalette(input.value);
+                sendBtn.classList.add('active');
+                return;
+              }
+            }
             hidePalette();
             sendBtn.classList.add('active');
           }
         } else if (e.key === 'Enter' && !e.shiftKey) {
           if (activeIndex >= 0 && activeIndex < filteredCommands.length) {
             e.preventDefault();
-            input.value = filteredCommands[activeIndex].name + ' ';
+            const sel = filteredCommands[activeIndex];
+            if (subcommandMode) {
+              input.value = '/' + sel.fullName + ' ';
+            } else {
+              input.value = sel.name + ' ';
+            }
             hidePalette();
             sendBtn.classList.add('active');
             return;

@@ -24,7 +24,8 @@ export type Platform =
   | 'hyperliquid'
   | 'binance'
   | 'bybit'
-  | 'mexc';
+  | 'mexc'
+  | 'percolator';
 
 // =============================================================================
 // MARKETS
@@ -665,6 +666,7 @@ export interface Skill {
   path: string;
   content: string;
   enabled: boolean;
+  subcommands?: Array<{ name: string; description: string }>;
 }
 
 // =============================================================================
@@ -1080,6 +1082,7 @@ export interface Config {
         requestTimeoutMs?: number;
       };
     };
+    percolator?: import('./percolator/types').PercolatorConfig;
   };
   solana?: {
     rpcUrl?: string;

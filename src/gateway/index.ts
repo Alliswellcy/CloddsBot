@@ -1220,6 +1220,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         name: `/${s.normalized}`,
         description: s.description,
         category: COMMAND_CATEGORIES[s.name] || COMMAND_CATEGORIES[s.normalized] || 'Other',
+        subcommands: s.subcommands || [],
       }));
     return [...registryCommands, ...skillCommands]
       .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));

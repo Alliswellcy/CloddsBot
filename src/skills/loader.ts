@@ -75,6 +75,49 @@ function checkGates(gates?: SkillFrontmatter['gates']): boolean {
 }
 
 /**
+ * Parse subcommands from SKILL.md content.
+ * Supports two patterns:
+ *   A) Markdown tables:  | `/hl balance` | Description |
+ *   B) Code block lines: /hl balance     # Description
+ */
+function parseSubcommands(skillName: string, content: string): Array<{ name: string; description: string }> {
+  const seen = new Set<string>();
+  const result: Array<{ name: string; description: string }> = [];
+  const normalized = skillName.toLowerCase().replace(/\s+/g, '-');
+
+  // Pattern A: Markdown table rows with backtick-quoted commands
+  // e.g. | `/hl balance` | Positions, balances, margin |
+  const tableRegex = /^\|\s*`\/?[\w-]+\s+([\w-]+)(?:\s[^`]*)?\`\s*\|\s*([^|]+)\|/gm;
+  let m: RegExpExecArray | null;
+  while ((m = tableRegex.exec(content)) !== null) {
+    const sub = m[1].toLowerCase();
+    const desc = m[2].trim();
+    if (!seen.has(sub)) {
+      seen.add(sub);
+      result.push({ name: sub, description: desc });
+    }
+  }
+
+  // Pattern B: Code block lines starting with /skillname subcmd
+  // e.g. /copy follow <address>     # Start following a wallet
+  //      /drift long <market> <size>   Open long position
+  const lineRegex = new RegExp(
+    `^\\s*\\/?${normalized}\\s+(\\w[\\w-]*)(?:\\s[^#\\n]*)?(?:#\\s*(.+))?$`,
+    'gm'
+  );
+  while ((m = lineRegex.exec(content)) !== null) {
+    const sub = m[1].toLowerCase();
+    const desc = (m[2] || '').trim();
+    if (!seen.has(sub)) {
+      seen.add(sub);
+      result.push({ name: sub, description: desc });
+    }
+  }
+
+  return result;
+}
+
+/**
  * Load a single skill from a SKILL.md file
  */
 export function loadSkill(skillPath: string): Skill | null {
@@ -90,6 +133,7 @@ export function loadSkill(skillPath: string): Skill | null {
       path: skillPath,
       content: body,
       enabled,
+      subcommands: parseSubcommands(frontmatter.name, body),
     };
   } catch (error) {
     logger.error(`Failed to load skill from ${skillPath}:`, error);
@@ -127,12 +171,14 @@ export function loadSkillsFromDir(dir: string): Skill[] {
             const def = mod.default || mod;
             if (def && def.name) {
               const cmds = (def.commands || []) as string[];
+              const fallbackContent = cmds.length > 0 ? `Commands: ${cmds.join(', ')}` : '';
               skills.push({
                 name: def.name,
                 description: def.description || '',
                 path: indexPath,
-                content: cmds.length > 0 ? `Commands: ${cmds.join(', ')}` : '',
+                content: fallbackContent,
                 enabled: true,
+                subcommands: parseSubcommands(def.name, fallbackContent),
               });
             }
           } catch {
