@@ -65,32 +65,63 @@ export const COMMAND_CATEGORIES: Record<string, string> = {
   // ── Core ──
   help: 'Core', new: 'Core', reset: 'Core', status: 'Core', model: 'Core',
   context: 'Core', resume: 'Core', sessions: 'Core', doctor: 'Core',
-
-  // ── Memory ──
   remember: 'Core', memory: 'Core', forget: 'Core', embeddings: 'Core',
 
-  // ── Markets & Data ──
-  markets: 'Markets', compare: 'Markets', trending: 'Markets',
-  opportunity: 'Markets', edge: 'Markets', 'market-index': 'Markets',
-  news: 'Markets', research: 'Markets', analytics: 'Markets',
-  ticks: 'Markets', features: 'Markets',
+  // ── Market Data ──
+  markets: 'Market Data', compare: 'Market Data', trending: 'Market Data',
+  opportunity: 'Market Data', edge: 'Market Data', 'market-index': 'Market Data',
+  news: 'Market Data', research: 'Market Data', analytics: 'Market Data',
+  ticks: 'Market Data', features: 'Market Data',
+  'whale-tracking': 'Market Data', weather: 'Market Data', stream: 'Market Data',
 
-  // ── Prediction Platforms ──
-  'trading-polymarket': 'Prediction Markets', 'trading-kalshi': 'Prediction Markets',
-  'trading-manifold': 'Prediction Markets', betfair: 'Prediction Markets',
-  smarkets: 'Prediction Markets', opinion: 'Prediction Markets',
+  // ── Polymarket ──
+  'trading-polymarket': 'Polymarket', 'copy-trading': 'Polymarket',
+  track: 'Polymarket',
+
+  // ── Kalshi ──
+  'trading-kalshi': 'Kalshi',
+
+  // ── Hyperliquid ──
+  hyperliquid: 'Hyperliquid',
+
+  // ── CEX Futures ──
+  'binance-futures': 'CEX Futures', 'bybit-futures': 'CEX Futures',
+  'mexc-futures': 'CEX Futures', 'trading-futures': 'CEX Futures',
+
+  // ── Sportsbooks ──
+  betfair: 'Sportsbooks', smarkets: 'Sportsbooks',
+
+  // ── Other Prediction Markets ──
+  'trading-manifold': 'Prediction Markets', opinion: 'Prediction Markets',
   predictit: 'Prediction Markets', predictfun: 'Prediction Markets',
   metaculus: 'Prediction Markets', veil: 'Prediction Markets',
   agentbets: 'Prediction Markets',
 
-  // ── Trading ──
-  arbitrage: 'Trading', bot: 'Trading', track: 'Trading', trades: 'Trading',
-  execution: 'Trading', 'trading-system': 'Trading',
-  'copy-trading': 'Trading', 'copy-trading-solana': 'Trading',
-  'crypto-hft': 'Trading', mm: 'Trading', slippage: 'Trading',
-  'trading-futures': 'Trading', 'binance-futures': 'Trading',
-  'bybit-futures': 'Trading', 'mexc-futures': 'Trading',
-  hyperliquid: 'Trading', mev: 'Trading',
+  // ── Solana DeFi ──
+  drift: 'Solana DeFi', 'drift-sdk': 'Solana DeFi',
+  meteora: 'Solana DeFi', 'meteora-dbc': 'Solana DeFi', orca: 'Solana DeFi',
+  jupiter: 'Solana DeFi', raydium: 'Solana DeFi', kamino: 'Solana DeFi',
+  pumpfun: 'Solana DeFi', 'pump-swarm': 'Solana DeFi',
+  'trading-solana': 'Solana DeFi', bags: 'Solana DeFi', yoink: 'Solana DeFi',
+  'copy-trading-solana': 'Solana DeFi',
+
+  // ── EVM DeFi ──
+  swap: 'EVM DeFi', bridge: 'EVM DeFi', 'trading-evm': 'EVM DeFi',
+  router: 'EVM DeFi', routing: 'EVM DeFi', mev: 'EVM DeFi',
+  clanker: 'EVM DeFi', endaoment: 'EVM DeFi', onchainkit: 'EVM DeFi',
+  erc8004: 'EVM DeFi', ens: 'EVM DeFi', qrcoin: 'EVM DeFi',
+  percolator: 'EVM DeFi', bankr: 'EVM DeFi', acp: 'EVM DeFi',
+
+  // ── Virtuals & Agents ──
+  virtuals: 'Virtuals & Agents', agents: 'Virtuals & Agents', agent: 'Virtuals & Agents',
+  'trending-agents': 'Virtuals & Agents', 'new-agents': 'Virtuals & Agents',
+  'agent-quote': 'Virtuals & Agents', 'virtual-balance': 'Virtuals & Agents',
+
+  // ── Bots & Execution ──
+  bot: 'Bots & Execution', arbitrage: 'Bots & Execution',
+  'crypto-hft': 'Bots & Execution', mm: 'Bots & Execution',
+  execution: 'Bots & Execution', 'trading-system': 'Bots & Execution',
+  slippage: 'Bots & Execution', trades: 'Bots & Execution',
 
   // ── Portfolio ──
   portfolio: 'Portfolio', pnl: 'Portfolio', positions: 'Portfolio',
@@ -99,58 +130,35 @@ export const COMMAND_CATEGORIES: Record<string, string> = {
   // ── Strategy ──
   strategy: 'Strategy', backtest: 'Strategy', abtest: 'Strategy',
   'ai-strategy': 'Strategy', signals: 'Strategy', divergence: 'Strategy',
-  sizing: 'Strategy', 'trading-evm': 'Strategy',
+  sizing: 'Strategy', risk: 'Strategy', safety: 'Strategy',
 
-  // ── DeFi & Onchain ──
-  wallet: 'DeFi', swap: 'DeFi', send: 'DeFi', chains: 'DeFi',
-  bridge: 'DeFi', router: 'DeFi', routing: 'DeFi',
-  meteora: 'DeFi', 'meteora-dbc': 'DeFi', orca: 'DeFi',
-  jupiter: 'DeFi', raydium: 'DeFi', kamino: 'DeFi',
-  drift: 'DeFi', 'drift-sdk': 'DeFi',
-  pumpfun: 'DeFi', 'pump-swarm': 'DeFi',
-  clanker: 'DeFi', endaoment: 'DeFi', onchainkit: 'DeFi',
-  erc8004: 'DeFi', ens: 'DeFi', qrcoin: 'DeFi',
-  'trading-solana': 'DeFi', bags: 'DeFi', yoink: 'DeFi',
-  bankr: 'DeFi', acp: 'DeFi',
-
-  // ── AI Agents ──
-  agents: 'AI Agents', agent: 'AI Agents', 'trending-agents': 'AI Agents',
-  'new-agents': 'AI Agents', 'agent-quote': 'AI Agents', 'virtual-balance': 'AI Agents',
-  virtuals: 'AI Agents',
+  // ── Wallet & Accounts ──
+  wallet: 'Wallet', send: 'Wallet', chains: 'Wallet',
+  account: 'Wallet', credentials: 'Wallet',
 
   // ── Automation ──
   alerts: 'Automation', triggers: 'Automation', automation: 'Automation',
   webhooks: 'Automation', 'auto-reply': 'Automation', monitoring: 'Automation',
   processes: 'Automation',
 
-  // ── Risk & Safety ──
-  risk: 'Risk & Safety', safety: 'Risk & Safety', permissions: 'Risk & Safety',
-  harden: 'Risk & Safety',
+  // ── Config ──
+  feeds: 'Config', plugins: 'Config', integrations: 'Config',
+  'search-config': 'Config', pairing: 'Config', usage: 'Config',
+  metrics: 'Config', digest: 'Config', permissions: 'Config', harden: 'Config',
+  approvals: 'Config', approve: 'Config', deny: 'Config',
 
-  // ── Config & Admin ──
-  account: 'Config', credentials: 'Config', feeds: 'Config',
-  plugins: 'Config', integrations: 'Config', 'search-config': 'Config',
-  pairing: 'Config', usage: 'Config', metrics: 'Config',
-  digest: 'Config', approvals: 'Config', approve: 'Config', deny: 'Config',
-
-  // ── Tools & Infra ──
+  // ── Tools ──
   sandbox: 'Tools', remote: 'Tools', tailscale: 'Tools', mcp: 'Tools',
   identity: 'Tools', verify: 'Tools', presence: 'Tools',
-  percolator: 'DeFi', qmd: 'Tools', devtools: 'Tools',
-
-  // ── Media & Social ──
-  tts: 'Media', voice: 'Media', streaming: 'Media',
-  farcaster: 'Social', botchan: 'Social', 'tweet-ideas': 'Social',
+  qmd: 'Tools', devtools: 'Tools',
+  tts: 'Tools', voice: 'Tools', streaming: 'Tools',
+  farcaster: 'Tools', botchan: 'Tools', 'tweet-ideas': 'Tools',
 
   // ── Bittensor ──
   tao: 'Bittensor',
 
-  // ── Analytics ──
-  'whale-tracking': 'Analytics', weather: 'Analytics',
-  stream: 'Analytics',
-
   // ── Skills with non-standard casing in their name field ──
-  'Features': 'Markets', 'Tick Data': 'Markets',
+  'Features': 'Market Data', 'Tick Data': 'Market Data',
 };
 
 export interface CommandRegistry {

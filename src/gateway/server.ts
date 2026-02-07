@@ -990,12 +990,26 @@ export function createServer(
       .catch(() => {});
 
     const CAT_ICONS = {
-      'Core': '\u2699', 'Markets': '\uD83D\uDCCA', 'Prediction Markets': '\uD83C\uDFB2',
-      'Trading': '\uD83D\uDCC8', 'Portfolio': '\uD83D\uDCBC', 'Strategy': '\uD83C\uDFAF',
-      'DeFi': '\uD83D\uDD17', 'AI Agents': '\uD83E\uDD16', 'Automation': '\u26A1',
-      'Risk & Safety': '\uD83D\uDEE1', 'Config': '\uD83D\uDD27', 'Tools': '\uD83E\uDDF0',
-      'Media': '\uD83C\uDFA4', 'Social': '\uD83D\uDCAC', 'Bittensor': '\u26A0',
-      'Analytics': '\uD83D\uDD2C', 'Other': '\uD83D\uDCE6',
+      'Core': '\u2699',
+      'Market Data': '\uD83D\uDCCA',
+      'Polymarket': '\uD83D\uDFE3',
+      'Kalshi': '\uD83C\uDFAF',
+      'Hyperliquid': '\uD83D\uDFE2',
+      'CEX Futures': '\uD83D\uDCC8',
+      'Sportsbooks': '\u26BD',
+      'Prediction Markets': '\uD83C\uDFB2',
+      'Solana DeFi': '\uD83D\uDFE1',
+      'EVM DeFi': '\uD83D\uDD37',
+      'Virtuals & Agents': '\uD83E\uDD16',
+      'Bots & Execution': '\u26A1',
+      'Portfolio': '\uD83D\uDCBC',
+      'Strategy': '\uD83E\uDDE0',
+      'Wallet': '\uD83D\uDC5B',
+      'Automation': '\uD83D\uDD04',
+      'Config': '\uD83D\uDD27',
+      'Tools': '\uD83E\uDDF0',
+      'Bittensor': '\uD83E\uDDE0',
+      'Other': '\uD83D\uDCE6',
     };
 
     let subcommandMode = false;
