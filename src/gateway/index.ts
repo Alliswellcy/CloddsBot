@@ -32,7 +32,7 @@ import { createPairingService } from '../pairing';
 import { createMemoryService } from '../memory';
 import { createCronService, type CronService } from '../cron';
 import { createCredentialsManager } from '../credentials';
-import { createCommandRegistry, createDefaultCommands } from '../commands/registry';
+import { createCommandRegistry, createDefaultCommands, COMMAND_CATEGORIES } from '../commands/registry';
 import { createWebhookManager } from '../automation';
 import { createWebhookTool, WebhookTool } from '../tools/webhooks';
 import { createProviders, createProviderHealthMonitor, ProviderHealthMonitor } from '../providers';
@@ -1214,9 +1214,10 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       .map(s => ({
         name: `/${s.name}`,
         description: s.description,
-        category: 'Skills',
+        category: COMMAND_CATEGORIES[s.name] || 'Other',
       }));
-    return [...registryCommands, ...skillCommands];
+    return [...registryCommands, ...skillCommands]
+      .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
   });
 
   webhookTool = createWebhookTool({

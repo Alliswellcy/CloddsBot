@@ -717,57 +717,102 @@ export function createServer(
       position: absolute;
       bottom: 100%;
       left: 0; right: 0;
-      max-height: 320px;
+      max-height: 380px;
       overflow-y: auto;
-      background: var(--bg-secondary);
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-bottom: none;
       border-radius: var(--radius) var(--radius) 0 0;
       z-index: 100;
-      box-shadow: 0 -8px 32px rgba(0,0,0,0.4);
+      box-shadow: 0 -12px 48px rgba(0,0,0,0.5);
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
     }
+    .cmd-palette::-webkit-scrollbar { width: 6px; }
+    .cmd-palette::-webkit-scrollbar-track { background: transparent; }
+    .cmd-palette::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     .cmd-palette.visible { display: block; }
     .cmd-palette-header {
-      padding: 10px 16px;
+      padding: 12px 16px;
       font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.8px;
       color: var(--text-dim);
       border-bottom: 1px solid var(--border);
       position: sticky;
       top: 0;
-      background: var(--bg-secondary);
+      background: var(--bg-primary);
       display: flex;
       align-items: center;
       justify-content: space-between;
+      z-index: 1;
+      backdrop-filter: blur(8px);
     }
-    .cmd-category-label {
-      padding: 6px 16px 4px;
+    .cmd-palette-hint {
       font-size: 10px;
-      font-weight: 600;
+      color: var(--text-dim);
+      font-weight: 400;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .cmd-palette-hint kbd {
+      background: rgba(255,255,255,0.06);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: inherit;
+      font-size: 10px;
+      margin: 0 1px;
+    }
+    .cmd-category {
+      border-bottom: 1px solid rgba(45,39,85,0.5);
+    }
+    .cmd-category:last-child { border-bottom: none; }
+    .cmd-category-label {
+      padding: 10px 16px 4px;
+      font-size: 10px;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--accent);
-      margin-top: 4px;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cmd-category-icon {
+      font-size: 12px;
+      opacity: 0.7;
+    }
+    .cmd-category-count {
+      margin-left: auto;
+      font-size: 9px;
+      font-weight: 500;
+      color: var(--text-dim);
+      background: rgba(255,255,255,0.04);
+      padding: 1px 6px;
+      border-radius: 8px;
     }
     .cmd-item {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 8px 16px;
+      gap: 10px;
+      padding: 7px 16px 7px 28px;
       cursor: pointer;
       transition: background 0.1s;
     }
     .cmd-item:hover, .cmd-item.active {
       background: var(--accent-glow);
     }
+    .cmd-item.active {
+      border-left: 2px solid var(--accent);
+      padding-left: 26px;
+    }
     .cmd-item-name {
-      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
       font-size: 13px;
       font-weight: 600;
       color: var(--accent-bright);
-      min-width: 120px;
+      min-width: 140px;
       flex-shrink: 0;
     }
     .cmd-item-desc {
@@ -776,10 +821,14 @@ export function createServer(
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      flex: 1;
     }
     .cmd-count {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--text-dim);
+      background: rgba(255,255,255,0.04);
+      padding: 2px 8px;
+      border-radius: 8px;
     }
 
     /* ── Welcome ── */
@@ -929,6 +978,15 @@ export function createServer(
       .then(data => { allCommands = data.commands || []; })
       .catch(() => {});
 
+    const CAT_ICONS = {
+      'Core': '\u2699', 'Markets': '\uD83D\uDCCA', 'Prediction Markets': '\uD83C\uDFB2',
+      'Trading': '\uD83D\uDCC8', 'Portfolio': '\uD83D\uDCBC', 'Strategy': '\uD83C\uDFAF',
+      'DeFi': '\uD83D\uDD17', 'AI Agents': '\uD83E\uDD16', 'Automation': '\u26A1',
+      'Risk & Safety': '\uD83D\uDEE1', 'Config': '\uD83D\uDD27', 'Tools': '\uD83E\uDDF0',
+      'Media': '\uD83C\uDFA4', 'Social': '\uD83D\uDCAC', 'Bittensor': '\u26A0',
+      'Analytics': '\uD83D\uDD2C', 'Other': '\uD83D\uDCE6',
+    };
+
     function showPalette(filter) {
       const query = filter.slice(1).toLowerCase();
       filteredCommands = query
@@ -943,21 +1001,33 @@ export function createServer(
         return;
       }
 
+      // Group by category, preserve order
       const groups = {};
       for (const cmd of filteredCommands) {
         (groups[cmd.category] = groups[cmd.category] || []).push(cmd);
       }
 
-      let html = '<div class="cmd-palette-header"><span>Commands</span><span class="cmd-count">' + filteredCommands.length + ' available</span></div>';
+      let html = '<div class="cmd-palette-header">'
+        + '<span>Commands</span>'
+        + '<span class="cmd-palette-hint"><kbd>\u2191\u2193</kbd> navigate <kbd>Tab</kbd> select <kbd>Esc</kbd> close</span>'
+        + '</div>';
+
       let idx = 0;
       for (const [category, cmds] of Object.entries(groups)) {
-        html += '<div class="cmd-category-label">' + category + '</div>';
+        const icon = CAT_ICONS[category] || '\uD83D\uDCE6';
+        html += '<div class="cmd-category">'
+          + '<div class="cmd-category-label">'
+          + '<span class="cmd-category-icon">' + icon + '</span>'
+          + '<span>' + category + '</span>'
+          + '<span class="cmd-category-count">' + cmds.length + '</span>'
+          + '</div>';
         for (const cmd of cmds) {
           html += '<div class="cmd-item' + (idx === activeIndex ? ' active' : '') + '" data-index="' + idx + '" data-name="' + cmd.name + '">'
             + '<span class="cmd-item-name">' + cmd.name + '</span>'
             + '<span class="cmd-item-desc">' + cmd.description + '</span></div>';
           idx++;
         }
+        html += '</div>';
       }
 
       palette.innerHTML = html;

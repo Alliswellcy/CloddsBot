@@ -60,20 +60,94 @@ export interface CommandListEntry {
   category: string;
 }
 
-const COMMAND_CATEGORIES: Record<string, string> = {
+/** Category mapping for all known commands and skills */
+export const COMMAND_CATEGORIES: Record<string, string> = {
+  // ── Core ──
   help: 'Core', new: 'Core', reset: 'Core', status: 'Core', model: 'Core',
-  context: 'Core', resume: 'Core', remember: 'Core', memory: 'Core', forget: 'Core',
-  markets: 'Markets', compare: 'Markets', trending: 'Markets', opportunity: 'Markets',
+  context: 'Core', resume: 'Core', sessions: 'Core', doctor: 'Core',
+
+  // ── Memory ──
+  remember: 'Core', memory: 'Core', forget: 'Core', embeddings: 'Core',
+
+  // ── Markets & Data ──
+  markets: 'Markets', compare: 'Markets', trending: 'Markets',
+  opportunity: 'Markets', edge: 'Markets', 'market-index': 'Markets',
+  news: 'Markets', research: 'Markets', analytics: 'Markets',
+  ticks: 'Markets', features: 'Markets',
+
+  // ── Prediction Platforms ──
+  'trading-polymarket': 'Prediction Markets', 'trading-kalshi': 'Prediction Markets',
+  'trading-manifold': 'Prediction Markets', betfair: 'Prediction Markets',
+  smarkets: 'Prediction Markets', opinion: 'Prediction Markets',
+  predictit: 'Prediction Markets', predictfun: 'Prediction Markets',
+  metaculus: 'Prediction Markets', veil: 'Prediction Markets',
+  agentbets: 'Prediction Markets',
+
+  // ── Trading ──
   arbitrage: 'Trading', bot: 'Trading', track: 'Trading', trades: 'Trading',
-  portfolio: 'Portfolio', pnl: 'Portfolio',
-  risk: 'Risk & Safety', safety: 'Risk & Safety',
+  execution: 'Trading', 'trading-system': 'Trading',
+  'copy-trading': 'Trading', 'copy-trading-solana': 'Trading',
+  'crypto-hft': 'Trading', mm: 'Trading', slippage: 'Trading',
+  'trading-futures': 'Trading', 'binance-futures': 'Trading',
+  'bybit-futures': 'Trading', 'mexc-futures': 'Trading',
+  hyperliquid: 'Trading', mev: 'Trading',
+
+  // ── Portfolio ──
+  portfolio: 'Portfolio', pnl: 'Portfolio', positions: 'Portfolio',
+  'portfolio-sync': 'Portfolio', bags: 'Portfolio', history: 'Portfolio',
+
+  // ── Strategy ──
   strategy: 'Strategy', backtest: 'Strategy', abtest: 'Strategy',
-  account: 'Accounts', stream: 'Streaming', devtools: 'Dev Tools',
+  'ai-strategy': 'Strategy', signals: 'Strategy', divergence: 'Strategy',
+  sizing: 'Strategy', 'trading-evm': 'Strategy',
+
+  // ── DeFi & Onchain ──
+  wallet: 'DeFi', swap: 'DeFi', send: 'DeFi', chains: 'DeFi',
+  bridge: 'DeFi', router: 'DeFi', routing: 'DeFi',
+  meteora: 'DeFi', 'meteora-dbc': 'DeFi', orca: 'DeFi',
+  jupiter: 'DeFi', raydium: 'DeFi', kamino: 'DeFi',
+  drift: 'DeFi', 'drift-sdk': 'DeFi',
+  pumpfun: 'DeFi', 'pump-swarm': 'DeFi',
+  clanker: 'DeFi', endaoment: 'DeFi', onchainkit: 'DeFi',
+  erc8004: 'DeFi', ens: 'DeFi', qrcoin: 'DeFi',
+  'trading-solana': 'DeFi', ledger: 'DeFi', yoink: 'DeFi',
+  bankr: 'DeFi', acp: 'DeFi',
+
+  // ── AI Agents ──
   agents: 'AI Agents', agent: 'AI Agents', 'trending-agents': 'AI Agents',
   'new-agents': 'AI Agents', 'agent-quote': 'AI Agents', 'virtual-balance': 'AI Agents',
-  wallet: 'Wallet & DeFi', swap: 'Wallet & DeFi', send: 'Wallet & DeFi', chains: 'Wallet & DeFi',
+  virtuals: 'AI Agents',
+
+  // ── Automation ──
+  alerts: 'Automation', triggers: 'Automation', automation: 'Automation',
+  webhooks: 'Automation', 'auto-reply': 'Automation', monitoring: 'Automation',
+  processes: 'Automation',
+
+  // ── Risk & Safety ──
+  risk: 'Risk & Safety', safety: 'Risk & Safety', permissions: 'Risk & Safety',
+  harden: 'Risk & Safety',
+
+  // ── Config & Admin ──
+  account: 'Config', credentials: 'Config', feeds: 'Config',
+  plugins: 'Config', integrations: 'Config', 'search-config': 'Config',
+  pairing: 'Config', usage: 'Config', metrics: 'Config',
+  digest: 'Config', approvals: 'Config', approve: 'Config', deny: 'Config',
+
+  // ── Tools & Infra ──
+  sandbox: 'Tools', remote: 'Tools', tailscale: 'Tools', mcp: 'Tools',
+  identity: 'Tools', verify: 'Tools', presence: 'Tools',
+  percolator: 'Tools', qmd: 'Tools', devtools: 'Tools',
+
+  // ── Media & Social ──
+  tts: 'Media', voice: 'Media', streaming: 'Media',
+  farcaster: 'Social', botchan: 'Social', 'tweet-ideas': 'Social',
+
+  // ── Bittensor ──
   tao: 'Bittensor',
-  digest: 'Notifications', approvals: 'Admin', approve: 'Admin', deny: 'Admin',
+
+  // ── Analytics ──
+  'whale-tracking': 'Analytics', weather: 'Analytics',
+  stream: 'Analytics',
 };
 
 export interface CommandRegistry {
