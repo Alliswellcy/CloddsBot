@@ -50,7 +50,7 @@ const DEFAULT_CONFIG: Config = {
   agents: {
     defaults: {
       workspace: resolveWorkspaceDir(),
-      model: { primary: 'anthropic/claude-sonnet-4' },
+      model: { primary: 'anthropic/claude-opus-4-6' },
     },
   },
   session: {
@@ -421,6 +421,23 @@ export async function loadConfig(customPath?: string): Promise<Config> {
       ...config.trading.hftDivergence,
       enabled: envBool(process.env.HFT_DIVERGENCE_ENABLED),
     };
+  }
+
+  // Apply Percolator env var overrides
+  if (process.env.PERCOLATOR_ENABLED || process.env.PERCOLATOR_SLAB) {
+    if (!config.feeds) (config as any).feeds = {};
+    const pc = (config.feeds as any).percolator ?? {};
+    if (process.env.PERCOLATOR_ENABLED) pc.enabled = envBool(process.env.PERCOLATOR_ENABLED);
+    if (process.env.PERCOLATOR_RPC_URL) pc.rpcUrl = process.env.PERCOLATOR_RPC_URL;
+    if (process.env.PERCOLATOR_PROGRAM_ID) pc.programId = process.env.PERCOLATOR_PROGRAM_ID;
+    if (process.env.PERCOLATOR_SLAB) pc.slabAddress = process.env.PERCOLATOR_SLAB;
+    if (process.env.PERCOLATOR_MATCHER_PROGRAM) pc.matcherProgram = process.env.PERCOLATOR_MATCHER_PROGRAM;
+    if (process.env.PERCOLATOR_MATCHER_CONTEXT) pc.matcherContext = process.env.PERCOLATOR_MATCHER_CONTEXT;
+    if (process.env.PERCOLATOR_ORACLE) pc.oracleAddress = process.env.PERCOLATOR_ORACLE;
+    if (process.env.PERCOLATOR_LP_INDEX) pc.lpIndex = parseInt(process.env.PERCOLATOR_LP_INDEX, 10);
+    if (process.env.PERCOLATOR_KEEPER_ENABLED) pc.keeperEnabled = envBool(process.env.PERCOLATOR_KEEPER_ENABLED);
+    if (process.env.PERCOLATOR_DRY_RUN) pc.dryRun = envBool(process.env.PERCOLATOR_DRY_RUN);
+    (config.feeds as any).percolator = pc;
   }
 
   // Apply group policies from env JSON

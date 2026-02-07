@@ -217,10 +217,10 @@ export function createModelFailover(configInput: FailoverConfig): ModelFailover 
 
 /** Default failover chain for Claude models */
 export const DEFAULT_CLAUDE_FAILOVER: FailoverConfig = {
-  primary: 'claude-sonnet-4-20250514',
+  primary: 'claude-opus-4-6',
   fallbacks: [
-    'claude-haiku-3-5-20250514',
     'claude-opus-4-5-20250514',
+    'claude-sonnet-4-5-20250929',
   ],
   failureThreshold: 3,
   cooldownMs: 60000,

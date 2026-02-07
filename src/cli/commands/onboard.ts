@@ -121,7 +121,7 @@ export async function runOnboard(): Promise<void> {
     agents: {
       defaults: {
         workspace: process.cwd(),
-        model: { primary: 'anthropic/claude-sonnet-4' },
+        model: { primary: 'anthropic/claude-opus-4-6' },
       },
     },
     channels: {},

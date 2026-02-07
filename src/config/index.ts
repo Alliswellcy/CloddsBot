@@ -501,7 +501,7 @@ export interface SolanaConfig {
 
 export const DEFAULT_CONFIG: CloddsConfig = {
   agent: {
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-opus-4-6',
     maxTokens: 4096,
     temperature: 0.7,
     thinkingLevel: 'medium',

@@ -84,12 +84,16 @@ const NATIVE_COMMANDS: CommandInfo[] = [
 
 /** Available models with shortcuts */
 const MODEL_ALIASES: Record<string, string> = {
-  'sonnet': 'claude-sonnet-4-20250514',
-  'opus': 'claude-opus-4-20250514',
-  'haiku': 'claude-haiku-3-20240307',
-  'claude-sonnet-4': 'claude-sonnet-4-20250514',
-  'claude-opus-4': 'claude-opus-4-20250514',
-  'claude-haiku-3': 'claude-haiku-3-20240307',
+  'opus': 'claude-opus-4-6',
+  'opus4.6': 'claude-opus-4-6',
+  'opus4.5': 'claude-opus-4-5-20250514',
+  'sonnet': 'claude-sonnet-4-5-20250929',
+  'sonnet4.5': 'claude-sonnet-4-5-20250929',
+  'haiku': 'claude-haiku-4-5-20251001',
+  'haiku4.5': 'claude-haiku-4-5-20251001',
+  'claude-opus-4': 'claude-opus-4-6',
+  'claude-sonnet-4': 'claude-sonnet-4-5-20250929',
+  'claude-haiku-4': 'claude-haiku-4-5-20251001',
 };
 
 const DEFAULT_CONFIG: CommandConfig = {
@@ -223,7 +227,7 @@ export function createCommandsService(
         }
 
         case '/model': {
-          const defaultModel = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+          const defaultModel = process.env.ANTHROPIC_MODEL || 'claude-opus-4-6';
           const currentModel = session.context.modelOverride || defaultModel;
 
           // If no argument, show current model

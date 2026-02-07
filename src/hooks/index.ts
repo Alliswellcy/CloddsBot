@@ -777,11 +777,8 @@ export function createHooksService(): HooksService {
     return { ctx, runId, controller };
   }
 
-  function finalizeRun(runId: string, controller: AbortController): void {
+  function finalizeRun(runId: string, _controller: AbortController): void {
     activeRuns.delete(runId);
-    if (!controller.signal.aborted) {
-      controller.abort();
-    }
   }
 
   function recordTrace(

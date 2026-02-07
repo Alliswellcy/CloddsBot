@@ -19,13 +19,17 @@ interface ModelMeta {
 // Heuristic metadata for known Anthropic models.
 // Scores are relative (higher is better for the given dimension).
 const MODEL_META: Record<string, ModelMeta> = {
-  'claude-haiku-3-5-20250514': { costScore: 10, speedScore: 10, qualityScore: 6 },
-  'claude-sonnet-4-20250514': { costScore: 6, speedScore: 7, qualityScore: 9 },
+  // Latest models
+  'claude-opus-4-6': { costScore: 1, speedScore: 3, qualityScore: 10 },
   'claude-opus-4-5-20250514': { costScore: 2, speedScore: 4, qualityScore: 10 },
-  // Discovery-era IDs (kept for compatibility)
+  'claude-sonnet-4-5-20250929': { costScore: 5, speedScore: 7, qualityScore: 9 },
+  'claude-sonnet-4-20250514': { costScore: 6, speedScore: 7, qualityScore: 8 },
+  'claude-haiku-4-5-20251001': { costScore: 9, speedScore: 10, qualityScore: 7 },
+  'claude-haiku-3-5-20250514': { costScore: 10, speedScore: 10, qualityScore: 6 },
+  // Legacy IDs (kept for compatibility)
   'claude-3-5-haiku-20241022': { costScore: 10, speedScore: 10, qualityScore: 6 },
-  'claude-3-5-sonnet-20241022': { costScore: 6, speedScore: 7, qualityScore: 9 },
-  'claude-3-opus-20240229': { costScore: 2, speedScore: 4, qualityScore: 10 },
+  'claude-3-5-sonnet-20241022': { costScore: 6, speedScore: 7, qualityScore: 8 },
+  'claude-3-opus-20240229': { costScore: 2, speedScore: 4, qualityScore: 9 },
 };
 
 const DEFAULT_STRATEGY: ModelStrategy = 'quality';
