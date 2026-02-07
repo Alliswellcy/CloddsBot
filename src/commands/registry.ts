@@ -54,10 +54,34 @@ export interface CommandInfo {
   register: boolean;
 }
 
+export interface CommandListEntry {
+  name: string;
+  description: string;
+  category: string;
+}
+
+const COMMAND_CATEGORIES: Record<string, string> = {
+  help: 'Core', new: 'Core', reset: 'Core', status: 'Core', model: 'Core',
+  context: 'Core', resume: 'Core', remember: 'Core', memory: 'Core', forget: 'Core',
+  markets: 'Markets', compare: 'Markets', trending: 'Markets', opportunity: 'Markets',
+  arbitrage: 'Trading', bot: 'Trading', track: 'Trading', trades: 'Trading',
+  portfolio: 'Portfolio', pnl: 'Portfolio',
+  risk: 'Risk & Safety', safety: 'Risk & Safety',
+  strategy: 'Strategy', backtest: 'Strategy', abtest: 'Strategy',
+  account: 'Accounts', stream: 'Streaming', devtools: 'Dev Tools',
+  agents: 'AI Agents', agent: 'AI Agents', 'trending-agents': 'AI Agents',
+  'new-agents': 'AI Agents', 'agent-quote': 'AI Agents', 'virtual-balance': 'AI Agents',
+  wallet: 'Wallet & DeFi', swap: 'Wallet & DeFi', send: 'Wallet & DeFi', chains: 'Wallet & DeFi',
+  tao: 'Bittensor',
+  digest: 'Notifications', approvals: 'Admin', approve: 'Admin', deny: 'Admin',
+};
+
 export interface CommandRegistry {
   register(command: CommandDefinition): void;
   registerMany(commands: CommandDefinition[]): void;
   list(): CommandInfo[];
+  /** Return all commands with category labels for UI display */
+  listAll(): CommandListEntry[];
   /**
    * Handle a command message. Returns null when not handled.
    */
@@ -581,6 +605,16 @@ export function createCommandRegistry(): CommandRegistry {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  function listAll(): CommandListEntry[] {
+    return Array.from(commands.values())
+      .map((c) => ({
+        name: `/${c.name}`,
+        description: c.description,
+        category: COMMAND_CATEGORIES[c.name] || 'Other',
+      }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+  }
+
   async function handle(
     message: IncomingMessage,
     ctx: Omit<CommandContext, 'message' | 'commands'>
@@ -616,6 +650,7 @@ export function createCommandRegistry(): CommandRegistry {
     register,
     registerMany,
     list,
+    listAll,
     handle,
   };
 

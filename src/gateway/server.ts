@@ -37,7 +37,10 @@ export interface GatewayServer {
   setFeatureEngineering(service: FeatureEngineering | null): void;
   setBittensorRouter(router: Router | null): void;
   setTradingApiRouter(router: Router | null): void;
+  setCommandListHandler(handler: CommandListHandler | null): void;
 }
+
+export type CommandListHandler = () => Array<{ name: string; description: string; category: string }>;
 
 export type ChannelWebhookHandler = (
   platform: string,
@@ -180,6 +183,7 @@ export function createServer(
   let tickRecorderStatsHandler: TickRecorderStatsHandler | null = null;
   let tickStreamer: TickStreamer | null = null;
   let featureEngineering: FeatureEngineering | null = null;
+  let commandListHandler: CommandListHandler | null = null;
 
   // Auth middleware for sensitive endpoints
   const authToken = process.env.CLODDS_TOKEN;
@@ -418,6 +422,15 @@ export function createServer(
         featuresStats: '/api/features/stats',
       },
     });
+  });
+
+  // Command list for slash command palette
+  app.get('/api/commands', (_req, res) => {
+    if (!commandListHandler) {
+      res.json({ commands: [] });
+      return;
+    }
+    res.json({ commands: commandListHandler() });
   });
 
   // Serve simple WebChat HTML client
@@ -698,6 +711,77 @@ export function createServer(
       font-size: 11px;
     }
 
+    /* ── Command Palette ── */
+    .cmd-palette {
+      display: none;
+      position: absolute;
+      bottom: 100%;
+      left: 0; right: 0;
+      max-height: 320px;
+      overflow-y: auto;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-bottom: none;
+      border-radius: var(--radius) var(--radius) 0 0;
+      z-index: 100;
+      box-shadow: 0 -8px 32px rgba(0,0,0,0.4);
+    }
+    .cmd-palette.visible { display: block; }
+    .cmd-palette-header {
+      padding: 10px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--bg-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .cmd-category-label {
+      padding: 6px 16px 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--accent);
+      margin-top: 4px;
+    }
+    .cmd-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .cmd-item:hover, .cmd-item.active {
+      background: var(--accent-glow);
+    }
+    .cmd-item-name {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-bright);
+      min-width: 120px;
+      flex-shrink: 0;
+    }
+    .cmd-item-desc {
+      font-size: 12px;
+      color: var(--text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .cmd-count {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
     /* ── Welcome ── */
     .welcome {
       display: flex;
@@ -790,9 +874,10 @@ export function createServer(
     <div class="typing-dots"><span></span><span></span><span></span></div>
   </div>
 
-  <div class="input-area">
+  <div class="input-area" style="position:relative">
+    <div class="cmd-palette" id="cmd-palette"></div>
     <div class="input-wrap">
-      <input type="text" id="input" placeholder="Ask anything..." autocomplete="off" />
+      <input type="text" id="input" placeholder="Ask anything... (type / for commands)" autocomplete="off" />
       <button id="send-btn" onclick="send()" title="Send">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -832,9 +917,82 @@ export function createServer(
       });
     });
 
-    // Send button active state
+    // ── Command Palette ──
+    let allCommands = [];
+    let filteredCommands = [];
+    let activeIndex = -1;
+    let paletteVisible = false;
+    const palette = document.getElementById('cmd-palette');
+
+    fetch('/api/commands')
+      .then(r => r.json())
+      .then(data => { allCommands = data.commands || []; })
+      .catch(() => {});
+
+    function showPalette(filter) {
+      const query = filter.slice(1).toLowerCase();
+      filteredCommands = query
+        ? allCommands.filter(c =>
+            c.name.toLowerCase().includes(query) ||
+            c.description.toLowerCase().includes(query) ||
+            c.category.toLowerCase().includes(query))
+        : allCommands;
+
+      if (filteredCommands.length === 0) {
+        hidePalette();
+        return;
+      }
+
+      const groups = {};
+      for (const cmd of filteredCommands) {
+        (groups[cmd.category] = groups[cmd.category] || []).push(cmd);
+      }
+
+      let html = '<div class="cmd-palette-header"><span>Commands</span><span class="cmd-count">' + filteredCommands.length + ' available</span></div>';
+      let idx = 0;
+      for (const [category, cmds] of Object.entries(groups)) {
+        html += '<div class="cmd-category-label">' + category + '</div>';
+        for (const cmd of cmds) {
+          html += '<div class="cmd-item' + (idx === activeIndex ? ' active' : '') + '" data-index="' + idx + '" data-name="' + cmd.name + '">'
+            + '<span class="cmd-item-name">' + cmd.name + '</span>'
+            + '<span class="cmd-item-desc">' + cmd.description + '</span></div>';
+          idx++;
+        }
+      }
+
+      palette.innerHTML = html;
+      palette.classList.add('visible');
+      paletteVisible = true;
+
+      palette.querySelectorAll('.cmd-item').forEach(item => {
+        item.addEventListener('click', () => {
+          input.value = item.dataset.name + ' ';
+          hidePalette();
+          input.focus();
+          sendBtn.classList.add('active');
+        });
+      });
+    }
+
+    function hidePalette() {
+      palette.classList.remove('visible');
+      paletteVisible = false;
+      activeIndex = -1;
+    }
+
+    // Send button active state + palette trigger
     input.addEventListener('input', () => {
-      sendBtn.classList.toggle('active', input.value.trim().length > 0);
+      const text = input.value;
+      if (text.startsWith('/') && text.indexOf(' ') === -1) {
+        showPalette(text);
+      } else {
+        hidePalette();
+      }
+      sendBtn.classList.toggle('active', text.trim().length > 0);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!palette.contains(e.target) && e.target !== input) hidePalette();
     });
 
     function addMsg(text, cls, messageId) {
@@ -995,7 +1153,46 @@ export function createServer(
       }
     }
 
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+    input.addEventListener('keydown', (e) => {
+      if (paletteVisible) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          activeIndex = Math.min(activeIndex + 1, filteredCommands.length - 1);
+          showPalette(input.value);
+          const active = palette.querySelector('.cmd-item.active');
+          if (active) active.scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          activeIndex = Math.max(activeIndex - 1, 0);
+          showPalette(input.value);
+          const active = palette.querySelector('.cmd-item.active');
+          if (active) active.scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Tab') {
+          e.preventDefault();
+          if (activeIndex >= 0 && activeIndex < filteredCommands.length) {
+            input.value = filteredCommands[activeIndex].name + ' ';
+            hidePalette();
+            sendBtn.classList.add('active');
+          }
+        } else if (e.key === 'Enter' && !e.shiftKey) {
+          if (activeIndex >= 0 && activeIndex < filteredCommands.length) {
+            e.preventDefault();
+            input.value = filteredCommands[activeIndex].name + ' ';
+            hidePalette();
+            sendBtn.classList.add('active');
+            return;
+          }
+          e.preventDefault();
+          hidePalette();
+          send();
+        } else if (e.key === 'Escape') {
+          hidePalette();
+        }
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    });
     input.focus();
   </script>
 </body>
@@ -1849,6 +2046,9 @@ export function createServer(
       if (router) {
         app.use('/api', requireAuth, router);
       }
+    },
+    setCommandListHandler(handler: CommandListHandler | null): void {
+      commandListHandler = handler;
     },
   };
 }

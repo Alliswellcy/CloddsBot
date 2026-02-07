@@ -465,6 +465,9 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     db
   );
 
+  // Wire command palette for webchat
+  httpGateway.setCommandListHandler(() => commands.listAll());
+
   let channels: Awaited<ReturnType<typeof createChannelManager>> | null = null;
   const watchers: FSWatcher[] = [];
   let started = false;
