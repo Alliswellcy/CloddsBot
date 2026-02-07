@@ -3655,9 +3655,18 @@ export function createOnboardCommand(program: Command): void {
     .option('--channel <name>', 'Channel to configure (telegram, discord, slack, webchat)')
     .option('--no-start', 'Skip the "start now?" prompt')
     .action(async (options: { apiKey?: string; channel?: string; start?: boolean }) => {
-      // Mute all pino logs during the wizard so they don't pollute the UI
-      const { logger } = await import('../../utils/logger.js');
-      (logger as any).level = 'silent';
+      // Mute pino-pretty output during the wizard. The logger is already
+      // constructed (imported at top-level), so we intercept stdout writes
+      // and filter out pino-pretty formatted lines (timestamped log lines).
+      const _origWrite = process.stdout.write.bind(process.stdout);
+      const pinoLineRe = /^\[?\d{4}-\d{2}-\d{2}[T ]/;
+      let muteLogLines = true;
+      process.stdout.write = function (chunk: any, ...args: any[]) {
+        if (muteLogLines && typeof chunk === 'string' && pinoLineRe.test(chunk)) {
+          return true; // swallow pino log lines
+        }
+        return (_origWrite as any)(chunk, ...args);
+      } as any;
 
       const { createInterface } = await import('readline');
       const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -3768,7 +3777,7 @@ export function createOnboardCommand(program: Command): void {
             'anthropic-version': '2023-06-01',
           },
           body: JSON.stringify({
-            model: 'claude-3-haiku-20240307',
+            model: 'claude-haiku-4-5-20251001',
             max_tokens: 1,
             messages: [{ role: 'user', content: 'hi' }],
           }),
@@ -3964,8 +3973,8 @@ export function createOnboardCommand(program: Command): void {
           const gateway = await createGateway(config);
           await gateway.start();
 
-          // Restore logging for normal operation
-          (logger as any).level = 'info';
+          // Stop filtering pino lines from stdout
+          muteLogLines = false;
 
           console.log(`\r  ${green(bold('Clodds is running'))}                `);
           console.log('');
