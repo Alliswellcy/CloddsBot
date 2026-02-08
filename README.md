@@ -126,11 +126,11 @@ See [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) for all commands.
 | **Token Security** | GoPlus-powered audits — honeypot detection, rug-pull analysis, holder concentration, risk scoring |
 | **Security Shield** | Code scanning (75 rules), scam DB (70+ addresses), multi-chain address checking, pre-trade tx validation |
 | **Trading** | Order execution on 16+ platforms (prediction markets, futures, Solana DEXs, EVM DEXs), portfolio tracking, P&L, DCA |
-| **MCP Server** | Expose all 116 skills as MCP tools for Claude Desktop and Claude Code |
+| **MCP Server** | Expose all 118 skills as MCP tools for Claude Desktop and Claude Code |
 | **Arbitrage** | Cross-platform detection, combinatorial analysis, semantic matching, real-time scanning |
 | **AI** | 8 LLM providers, 4 specialized agents, semantic memory, 18 tools |
 | **i18n** | 10 languages (EN, ZH, ES, JA, KO, DE, FR, PT, RU, AR) |
-| **Solana DeFi** | Jupiter, Raydium, Orca, Meteora, Kamino, Pump.fun, Bags.fm, AgentBets |
+| **Solana DeFi** | Jupiter, Raydium, Orca, Meteora, Kamino, MarginFi, Solend, Pump.fun, Bags.fm, AgentBets |
 | **EVM DeFi** | Uniswap V3, 1inch, PancakeSwap, Virtuals Protocol, Clanker, Veil, ENS (ETH, ARB, OP, Base, Polygon) |
 | **Smart Trading** | Whale tracking, copy trading, smart routing, MEV protection |
 | **Trade Ledger** | Decision audit trail with confidence calibration, SHA-256 integrity hashing, statistics |
@@ -172,7 +172,7 @@ Supports limit/market orders, maker rebates, real-time orderbooks, P&L tracking,
 
 ## Crypto & DeFi
 
-**Solana:** Jupiter, Raydium, Orca, Meteora, Kamino, Pump.fun, Bags.fm — with Jito MEV protection
+**Solana:** Jupiter, Raydium, Orca, Meteora, Kamino, MarginFi, Solend, Pump.fun, Bags.fm — with Jito MEV protection
 
 **EVM (5 chains):** Uniswap V3, 1inch, PancakeSwap, Virtuals Protocol on Ethereum, Arbitrum, Optimism, Base, Polygon — with Flashbots MEV protection
 
@@ -315,7 +315,7 @@ Enable: `clodds config set ledger.enabled true`
 
 ## Skills & Extensions
 
-**116 bundled skills** across trading, data, automation, and infrastructure — lazy-loaded on first use so missing dependencies don't crash the app. Run `/skills` to see status.
+**118 bundled skills** across trading, data, automation, and infrastructure — lazy-loaded on first use so missing dependencies don't crash the app. Run `/skills` to see status.
 
 | Category | Skills |
 |----------|--------|
@@ -348,7 +348,7 @@ Enable: `clodds config set ledger.enabled true`
 │ Slack         │         │ Alerts        │         │ Manifold      │
 │ Teams         │         │               │         │ Crypto (10)   │
 │ Matrix        │         │ Tools (18)    │         │               │
-│ Signal        │         │ Skills (116)  │         │ Arbitrage     │
+│ Signal        │         │ Skills (118)  │         │ Arbitrage     │
 │ +14 more      │         │ Memory        │         │ Detector      │
 └───────────────┘         └───────────────┘         └───────────────┘
         │                         │                         │
@@ -447,9 +447,9 @@ docker compose up --build
 | Prediction Markets | **10** |
 | Futures Exchanges | **7** |
 | AI Tools | **18** |
-| Skills | **116** |
+| Skills | **118** |
 | LLM Providers | **8** |
-| Solana DEX Protocols | **7** |
+| Solana DeFi Protocols | **9** |
 | Trading Strategies | **4** |
 | Extensions | **9** |
 

@@ -1,7 +1,7 @@
 /**
  * Standardized Help System for Skills
  *
- * Provides consistent help output format across all 116 skills.
+ * Provides consistent help output format across all 118 skills.
  * Skills call formatHelp() in their default/help case.
  */
 

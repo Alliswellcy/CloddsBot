@@ -17,7 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New `src/evm/pancakeswap.ts` module with V3 smart router integration
   - Skill: `/pancakeswap swap`, `/pancakeswap quote`, `/pancakeswap pairs`
 - Futures exchanges count: 6 → 7 (added Lighter)
-- Skill count: 113 → 116
+- Skill count: 113 → 118
+
+#### Solana Lending Protocols
+- **MarginFi**: Solana lending and borrowing — deposit, withdraw, borrow, repay, health monitoring
+  - New `src/solana/marginfi.ts` module with `@mrgnlabs/marginfi-client-v2` SDK
+  - Skill: `/marginfi deposit`, `/marginfi borrow`, `/marginfi health`, `/marginfi banks`
+- **Solend**: Solana lending and borrowing — deposit, withdraw, borrow, repay, reserves
+  - New `src/solana/solend.ts` module with `@solendprotocol/solend-sdk`
+  - Skill: `/solend deposit`, `/solend borrow`, `/solend health`, `/solend reserves`
 
 #### UX Improvements
 - **Setup wizard**: Added `/setup` onboarding skill for guided configuration of API keys, channels, and trading platforms

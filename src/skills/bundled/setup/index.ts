@@ -212,6 +212,8 @@ const CATEGORIES: Record<string, SetupCategory> = {
       { name: 'meteora', command: '/meteora', description: 'Meteora DLMM' },
       { name: 'pumpfun', command: '/pumpfun', description: 'Pump.fun tokens' },
       { name: 'kamino', command: '/kamino', description: 'Kamino Finance' },
+      { name: 'marginfi', command: '/marginfi', description: 'MarginFi lending' },
+      { name: 'solend', command: '/solend', description: 'Solend lending' },
       { name: 'trading-solana', command: '/trading-solana', description: 'Solana trading' },
     ],
     quickStart: [

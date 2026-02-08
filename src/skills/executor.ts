@@ -1,5 +1,5 @@
 /**
- * Skill Executor - Central registry for all 116 bundled CLI skill handlers.
+ * Skill Executor - Central registry for all 118 bundled CLI skill handlers.
  *
  * ARCHITECTURE:
  * - Each skill lives in src/skills/bundled/<name>/index.ts
@@ -77,6 +77,7 @@ const SKILL_MANIFEST: string[] = [
   'kamino',
   'ledger',
   'lighter',
+  'marginfi',
   'market-index',
   'markets',
   'mcp',
@@ -123,6 +124,7 @@ const SKILL_MANIFEST: string[] = [
   'sizing',
   'slippage',
   'smarkets',
+  'solend',
   'strategy',
   'streaming',
   'tailscale',
@@ -217,8 +219,10 @@ const SKILL_CATEGORIES: Record<string, SkillCategory> = {
   'pumpfun': 'Solana DeFi',
   'pump-swarm': 'Solana DeFi',
   'kamino': 'Solana DeFi',
+  'marginfi': 'Solana DeFi',
   'trading-solana': 'Solana DeFi',
   'copy-trading-solana': 'Solana DeFi',
+  'solend': 'Solana DeFi',
 
   // Portfolio & Risk
   'portfolio': 'Portfolio & Risk',
@@ -344,6 +348,7 @@ const COMMAND_ALIASES: Record<string, string> = {
   '/config': '/setup',
   '/onboard': '/setup',
   '/start': '/setup',
+  '/mrg': '/marginfi',
 };
 
 // =============================================================================
@@ -452,7 +457,8 @@ const SKILL_RELATIONS: Record<string, string[]> = {
   'trading-polymarket': ['betfair', 'trading-kalshi', 'predictfun', 'feeds', 'arbitrage'],
   'betfair': ['trading-polymarket', 'smarkets', 'trading-kalshi', 'arbitrage'],
   'trading-kalshi': ['trading-polymarket', 'betfair', 'predictit'],
-  'jupiter': ['raydium', 'orca', 'trading-solana', 'bags'],
+  'jupiter': ['raydium', 'orca', 'trading-solana', 'bags', 'kamino', 'marginfi', 'solend'],
+  'marginfi': ['kamino', 'solend', 'jupiter', 'bags'],
   'raydium': ['jupiter', 'orca', 'meteora', 'pumpfun'],
   'portfolio': ['positions', 'bags', 'history', 'risk'],
   'positions': ['portfolio', 'bags', 'risk', 'history'],
@@ -471,6 +477,8 @@ const SKILL_RELATIONS: Record<string, string[]> = {
   'setup': ['credentials', 'doctor'],
   'token-security': ['shield', 'verify'],
   'shield': ['token-security', 'harden'],
+  'solend': ['kamino', 'marginfi', 'jupiter', 'bags'],
+  'kamino': ['marginfi', 'solend', 'jupiter', 'bags'],
 };
 
 // =============================================================================
