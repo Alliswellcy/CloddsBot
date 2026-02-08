@@ -72,4 +72,35 @@ CLAWDBOT_ARCHITECTURE.md
 # Temp files
 *.bak
 *~
-src/api/server.ts
+
+# =============================================================================
+# PRIVATE SERVER INFRASTRUCTURE - Never push to public GitHub
+# Deploy to hostkey only via rsync
+# =============================================================================
+
+# Compute API server & gateway
+src/api/
+
+# Gateway HTTP server & all API route handlers
+src/gateway/
+
+# Payment processing (x402, on-chain verification)
+src/payments/
+
+# Credential encryption/management
+src/credentials/
+src/trading/secrets.ts
+
+# Bittensor server
+src/bittensor/server.ts
+
+# Internal API docs (public docs are on cloddsbot.com)
+docs/API.md
+docs/API_REFERENCE.md
+docs/openapi.yaml
+
+# API tests (reference private internals)
+tests/unit/api/
+tests/integration/market-index-endpoints.test.ts
+tests/integration/webhook-http.test.ts
+tests/http-rate-limit.test.ts
