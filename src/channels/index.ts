@@ -311,7 +311,7 @@ export async function createChannelManager(
         ...formatOutgoingMessage(message),
         messageId: message.messageId,
       };
-      const channel = channels.get(formatted.platform);
+      const channel = formatted.platform === 'webchat' ? webchat : channels.get(formatted.platform);
       if (channel?.editMessage) {
         await channel.editMessage(formatted);
       } else {
@@ -324,7 +324,7 @@ export async function createChannelManager(
         ...formatOutgoingMessage(message),
         messageId: message.messageId,
       };
-      const channel = channels.get(formatted.platform);
+      const channel = formatted.platform === 'webchat' ? webchat : channels.get(formatted.platform);
       if (channel?.deleteMessage) {
         await channel.deleteMessage(formatted);
       } else {

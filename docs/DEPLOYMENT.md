@@ -226,18 +226,11 @@ OTEL_SAMPLE_RATE=1.0
 ### 1. npm Install (Recommended)
 
 ```bash
-# Configure npm for @alsk1992 scope (one-time)
-echo "@alsk1992:registry=https://npm.pkg.github.com" >> ~/.npmrc
-
-# Install globally
-npm install -g @alsk1992/clodds
-
-# Set environment
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Run
-clodds start
+npm install -g clodds
+clodds onboard
 ```
+
+The `onboard` wizard handles API key setup, channel selection, and config generation. After setup, start anytime with `clodds start`.
 
 ### 2. From Source
 

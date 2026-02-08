@@ -59,11 +59,23 @@ export function createWebChatChannel(
   }
 
   function handleConnection(ws: WebSocket, sessionId: string): void {
-    // Evict any existing connection using this sessionId
+    // Replace any existing connection using this sessionId (silently close old socket)
     const existing = sessions.get(sessionId);
-    if (existing && existing.ws !== ws && existing.ws.readyState === WebSocket.OPEN) {
-      logger.info({ sessionId }, 'WebChat: Evicting existing connection');
-      existing.ws.close(4001, 'Session taken by another connection');
+    if (existing && existing.ws !== ws) {
+      logger.info({ sessionId, oldState: existing.ws.readyState }, 'WebChat: Replacing old connection (silent)');
+      // Detach old socket handlers so it can't interfere
+      existing.ws.removeAllListeners();
+      // Do NOT close the old socket — let it die naturally.
+      // Sending close(4001) triggers the client's onclose → reconnect → eviction loop.
+
+      // Clean up old session's user socket tracking
+      const oldUserSessions = userSockets.get(existing.userId);
+      if (oldUserSessions) {
+        oldUserSessions.delete(sessionId);
+        if (oldUserSessions.size === 0) {
+          userSockets.delete(existing.userId);
+        }
+      }
     }
 
     const session: ChatSession = {
@@ -114,7 +126,7 @@ export function createWebChatChannel(
                 userId: session.userId,
               }));
 
-              logger.info({ sessionId, userId: session.userId }, 'WebChat: Authenticated');
+              logger.info({ sessionId, userId: session.userId, wsVersion: message._wsVersion || 0, totalSessions: sessions.size }, 'WebChat: Authenticated');
             } else {
               ws.send(JSON.stringify({
                 type: 'error',
@@ -224,12 +236,11 @@ export function createWebChatChannel(
 
               const newSessionId = message.sessionId;
 
-              // Evict any existing connection at the target session
+              // Silently replace any existing connection at the target session
               const existingAtNew = sessions.get(newSessionId);
               if (existingAtNew && existingAtNew.ws !== ws) {
-                if (existingAtNew.ws.readyState === WebSocket.OPEN) {
-                  existingAtNew.ws.close(4001, 'Session taken by another connection');
-                }
+                existingAtNew.ws.removeAllListeners();
+                // Don't close — let it die naturally to avoid reconnect loops
                 sessions.delete(newSessionId);
               }
 

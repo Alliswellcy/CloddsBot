@@ -47,8 +47,402 @@ tags:
     description: Admin operations (protected)
   - name: Bittensor
     description: Bittensor subnet mining (requires CLODDS_TOKEN auth)
+  - name: Percolator
+    description: On-chain Solana perpetual futures (requires PERCOLATOR_ENABLED)
+  - name: Shield
+    description: Security scanning — code, addresses, transactions
+  - name: Audit
+    description: Token security auditing via GoPlus
+  - name: DCA
+    description: Dollar-cost averaging across 16 platforms
 
 paths:
+  /api/percolator/status:
+    get:
+      tags: [Percolator]
+      summary: Get market state
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Market state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  oraclePrice: { type: number }
+                  totalOpenInterest: { type: number }
+                  vault: { type: number }
+                  fundingRate: { type: number }
+                  bestBid: { type: object, nullable: true }
+                  bestAsk: { type: object, nullable: true }
+                  spreadBps: { type: number }
+                  lastCrankSlot: { type: integer }
+
+  /api/percolator/positions:
+    get:
+      tags: [Percolator]
+      summary: Get user positions
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Open positions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  positions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        accountIndex: { type: integer }
+                        side: { type: string, enum: [LONG, SHORT] }
+                        size: { type: number }
+                        entryPrice: { type: number }
+                        capital: { type: number }
+                        pnl: { type: number }
+
+  /api/percolator/trade:
+    post:
+      tags: [Percolator]
+      summary: Execute long/short trade
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [direction, size]
+              properties:
+                direction: { type: string, enum: [long, short] }
+                size: { type: number, description: Size in USD }
+      responses:
+        '200':
+          description: Trade result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  signature: { type: string }
+                  slot: { type: integer }
+                  error: { type: string }
+
+  /api/percolator/deposit:
+    post:
+      tags: [Percolator]
+      summary: Deposit USDC collateral
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { type: number }
+      responses:
+        '200':
+          description: Deposit result
+
+  /api/percolator/withdraw:
+    post:
+      tags: [Percolator]
+      summary: Withdraw USDC collateral
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { type: number }
+      responses:
+        '200':
+          description: Withdraw result
+
+  /api/shield/scan:
+    post:
+      tags: [Shield]
+      summary: Scan code for malicious patterns
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200':
+          description: Scan results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  riskScore: { type: integer, minimum: 0, maximum: 100 }
+                  findings:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        category: { type: string }
+                        severity: { type: string }
+                        pattern: { type: string }
+                  entropy: { type: number }
+
+  /api/shield/check:
+    post:
+      tags: [Shield]
+      summary: Check address safety
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address: { type: string }
+                chain: { type: string }
+      responses:
+        '200':
+          description: Address safety result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  safe: { type: boolean }
+                  chain: { type: string }
+                  flags: { type: array, items: { type: string } }
+                  riskLevel: { type: string, enum: [safe, low, medium, high, critical] }
+
+  /api/shield/validate:
+    post:
+      tags: [Shield]
+      summary: Pre-flight transaction validation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination, amount]
+              properties:
+                destination: { type: string }
+                amount: { type: number }
+                token: { type: string }
+      responses:
+        '200':
+          description: Transaction validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  allowed: { type: boolean }
+                  warnings: { type: array, items: { type: string } }
+                  riskLevel: { type: string }
+
+  /api/shield/stats:
+    get:
+      tags: [Shield]
+      summary: Scanner statistics
+      responses:
+        '200':
+          description: Security scanner stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  codeScans: { type: integer }
+                  addressChecks: { type: integer }
+                  txValidations: { type: integer }
+                  threatsBlocked: { type: integer }
+                  scamDbSize: { type: integer }
+
+  /api/audit/{address}:
+    get:
+      tags: [Audit]
+      summary: Token security audit
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: chain
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Token audit result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  chain: { type: string }
+                  riskScore: { type: integer }
+                  riskLevel: { type: string, enum: [safe, low, medium, high, critical] }
+                  riskFlags: { type: array, items: { type: string } }
+                  isHoneypot: { type: boolean }
+                  totalLiquidity: { type: number }
+                  holderCount: { type: integer }
+
+  /api/audit/{address}/safe:
+    get:
+      tags: [Audit]
+      summary: Quick boolean safety check
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: chain
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Safety boolean
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  chain: { type: string }
+                  safe: { type: boolean }
+
+  /api/dca/orders:
+    get:
+      tags: [DCA]
+      summary: List active DCA orders
+      responses:
+        '200':
+          description: DCA orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        platform: { type: string }
+                        status: { type: string, enum: [active, paused, completed, cancelled] }
+                        totalAmount: { type: number }
+                        amountPerCycle: { type: number }
+                        cyclesCompleted: { type: integer }
+                        cyclesRemaining: { type: integer }
+
+  /api/dca/create:
+    post:
+      tags: [DCA]
+      summary: Create DCA order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, totalAmount, amountPerCycle, intervalSec]
+              properties:
+                platform: { type: string }
+                marketId: { type: string }
+                tokenId: { type: string }
+                totalAmount: { type: number }
+                amountPerCycle: { type: number }
+                intervalSec: { type: integer, description: Cycle interval in seconds }
+                side: { type: string, enum: [buy, sell] }
+                price: { type: number }
+      responses:
+        '200':
+          description: DCA order created
+
+  /api/dca/{id}:
+    get:
+      tags: [DCA]
+      summary: Get DCA order by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: DCA order details
+        '404':
+          description: Order not found
+    delete:
+      tags: [DCA]
+      summary: Cancel and delete a DCA order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Order deleted
+        '404':
+          description: Order not found
+
+  /api/dca/{id}/pause:
+    post:
+      tags: [DCA]
+      summary: Pause a running DCA order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Order paused
+        '400':
+          description: Cannot pause (wrong status)
+        '404':
+          description: Order not found
+
+  /api/dca/{id}/resume:
+    post:
+      tags: [DCA]
+      summary: Resume a paused DCA order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Order resumed
+        '400':
+          description: Cannot resume (wrong status)
+        '404':
+          description: Order not found
+
   /api/bittensor/status:
     get:
       tags: [Bittensor]
@@ -774,7 +1168,7 @@ components:
   schemas:
     ComputeService:
       type: string
-      enum: [llm, code, web, data, storage, trade]
+      enum: [llm, code, web, data, storage, trade, gpu, ml, security]
 
     Priority:
       type: string

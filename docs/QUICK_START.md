@@ -1,114 +1,81 @@
-# Quick Start Guide
+# Quick Start
 
-Get Clodds running in under 5 minutes.
+Get Clodds running in 2 commands.
 
-## 1. Get Your API Key
+## Install & Setup
 
-You need an Anthropic API key:
-1. Go to https://console.anthropic.com
-2. Create an account or sign in
-3. Generate an API key
-
-## 2. Install
-
-**Option A: npm (recommended)**
 ```bash
-# One-time: configure npm for @alsk1992 scope
-echo "@alsk1992:registry=https://npm.pkg.github.com" >> ~/.npmrc
-
-# Install globally
-npm install -g @alsk1992/clodds
+npm install -g clodds
+clodds onboard
 ```
 
-**Option B: From source**
+The setup wizard will:
+1. Ask for your [Anthropic API key](https://console.anthropic.com)
+2. Let you pick a messaging channel (WebChat, Telegram, Discord, or Slack)
+3. Write your config to `~/.clodds/`
+4. Offer to start the gateway immediately
+
+Once running, open **http://localhost:18789/webchat** in your browser.
+
+## Try It Out
+
+Ask anything:
+- "What markets are trending on Polymarket?"
+- "Show me my portfolio"
+- "Find arbitrage opportunities"
+
+## Verify Setup
+
+```bash
+clodds doctor       # Full system diagnostics
+clodds creds test   # Check credentials are working
+```
+
+## From Source (Alternative)
+
+If you prefer to build from source:
+
 ```bash
 git clone https://github.com/alsk1992/CloddsBot.git
 cd CloddsBot
 npm install
 cp .env.example .env
-```
-
-## 3. Run
-
-```bash
-# Set your API key
-export ANTHROPIC_API_KEY=sk-ant-your-key-here
-
-# Start
-clodds start
-# Or if from source: npm start
-```
-
-## 4. Try It Out
-
-Open http://localhost:18789/webchat in your browser.
-
-Try asking:
-- "What markets are trending on Polymarket?"
-- "Show me my portfolio"
-- "Find arbitrage opportunities"
-
-## 5. Add a Messaging Channel (Optional)
-
-### Telegram (Recommended)
-1. Message @BotFather on Telegram
-2. Send `/newbot` and follow prompts
-3. Add to .env: `TELEGRAM_BOT_TOKEN=your-token`
-4. Restart: `npm start`
-
-### Discord
-1. Go to https://discord.com/developers/applications
-2. Create app → Bot → Copy token
-3. Add to .env: `DISCORD_BOT_TOKEN=your-token`
-4. Restart: `npm start`
-
-## 6. Verify Setup
-
-```bash
-# Check credentials are working
-npx clodds creds test
-
-# Full system diagnostics
-npx clodds doctor
+# Add ANTHROPIC_API_KEY to .env
+npm run build
+npm start
 ```
 
 ## Common Issues
 
 ### "ANTHROPIC_API_KEY not set"
-Make sure your .env file is in the project root and has:
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
+Run `clodds onboard` again — it will prompt for your key and save it to `~/.clodds/.env`.
 
 ### "Port 18789 is in use"
 Another instance is running. Kill it or change the port:
 ```bash
-# Find and kill existing process
 lsof -i :18789 | grep LISTEN | awk '{print $2}' | xargs kill
 
-# Or change port in config
-npx clodds config set gateway.port 18790
+# Or change port
+clodds config set gateway.port 18790
 ```
 
 ### Telegram bot not responding
 1. Make sure you're messaging your bot directly (not a group)
-2. Check the DM policy: `npx clodds doctor`
-3. If using pairing mode, you may need to approve access
+2. Run `clodds doctor` to check connectivity
+3. If using pairing mode, approve access first
 
 ## Next Steps
 
+- **Add channels**: Run `clodds onboard` again to add more messaging platforms
 - **Trading**: See [TRADING.md](TRADING.md) to connect trading accounts
 - **Arbitrage**: See [OPPORTUNITY_FINDER.md](OPPORTUNITY_FINDER.md) for cross-platform arbitrage
-- **Customization**: See [USER_GUIDE.md](USER_GUIDE.md) for full configuration options
+- **All commands**: See [USER_GUIDE.md](USER_GUIDE.md) for the full CLI and chat reference
 
 ## Need Help?
 
 ```bash
-# Full diagnostics
-npx clodds doctor
-
-# Test specific credentials
-npx clodds creds test polymarket
+clodds doctor                  # Full diagnostics
+clodds creds test polymarket   # Test specific credentials
 ```
 
-Report issues: https://github.com/your-repo/clodds/issues
+Report issues: https://github.com/alsk1992/CloddsBot/issues

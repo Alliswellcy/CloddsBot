@@ -2,7 +2,7 @@
  * Main controller — wires sidebar, chat, WS, commands
  */
 import { Storage } from './storage.js';
-import { WSClient } from './ws.js';
+import { WSClient } from './ws.js?v=4';
 import { Sidebar } from './sidebar.js';
 import { Chat } from './chat.js';
 import { CommandPalette } from './commands.js';

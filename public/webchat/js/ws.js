@@ -6,7 +6,7 @@ export class WSClient {
     this.ws = null;
     this.handlers = { message: [], open: [], close: [], error: [] };
     this.reconnectDelay = 1000;
-    this.maxReconnectDelay = 30000;
+    this.maxReconnectDelay = 5000;
     this.currentDelay = this.reconnectDelay;
     this.shouldReconnect = true;
     this.sessionId = null;
@@ -34,7 +34,6 @@ export class WSClient {
       this._pingTimer = null;
     }
     if (this.ws) {
-      // Detach handlers to prevent reconnect cycle
       this.ws.onopen = null;
       this.ws.onmessage = null;
       this.ws.onclose = null;
@@ -48,43 +47,69 @@ export class WSClient {
   }
 
   _doConnect() {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let url = `${proto}//${location.host}/chat`;
-    if (this.sessionId) url += `?sessionId=${encodeURIComponent(this.sessionId)}`;
+    // Clean up any leftover socket
+    if (this.ws) {
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close();
+      }
+      this.ws = null;
+    }
 
-    this.ws = new WebSocket(url);
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    // Never include sessionId in URL — avoids server-side eviction loops.
+    // We send a 'switch' message after auth to set the desired session.
+    const url = `${proto}//${location.host}/chat`;
+
+    const ws = new WebSocket(url);
+    this.ws = ws;
     this.authenticated = false;
 
-    this.ws.onopen = () => {
-      this.ws.send(JSON.stringify({
+    ws.onopen = () => {
+      if (this.ws !== ws) return;
+      ws.send(JSON.stringify({
         type: 'auth',
         token: this._token || '',
         userId: this._userId || 'web-' + Date.now(),
+        _wsVersion: 4,
       }));
       this._emit('open');
     };
 
-    this.ws.onmessage = (e) => {
+    ws.onmessage = (e) => {
+      if (this.ws !== ws) return;
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === 'authenticated') {
           this.authenticated = true;
           this.currentDelay = this.reconnectDelay;
-          // Start keepalive pings (every 2 min, server idle timeout is 5 min)
           clearInterval(this._pingTimer);
           this._pingTimer = setInterval(() => {
-            if (this.ws?.readyState === WebSocket.OPEN) {
-              this.ws.send(JSON.stringify({ type: 'ping' }));
+            if (this.ws === ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'ping' }));
+            } else {
+              clearInterval(this._pingTimer);
+              this._pingTimer = null;
             }
-          }, 120000);
+          }, 25000);
+          // After auth, switch to desired session (if any)
+          if (this.sessionId && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'switch', sessionId: this.sessionId }));
+          }
         }
-        if (msg.type === 'pong') return; // silent keepalive reply
+        if (msg.type === 'pong') return;
         this._emit('message', msg);
       } catch { /* ignore malformed */ }
     };
 
-    this.ws.onclose = () => {
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
       this.authenticated = false;
+      clearInterval(this._pingTimer);
+      this._pingTimer = null;
       this._emit('close');
       if (this.shouldReconnect) {
         this._reconnectTimer = setTimeout(() => this._doConnect(), this.currentDelay);
@@ -92,7 +117,8 @@ export class WSClient {
       }
     };
 
-    this.ws.onerror = () => {
+    ws.onerror = () => {
+      if (this.ws !== ws) return;
       this._emit('error');
     };
   }

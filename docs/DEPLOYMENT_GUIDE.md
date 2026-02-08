@@ -5,7 +5,7 @@ Docker, or a systemd service.
 
 ## Prerequisites
 
-- Node.js 20+ (for non-Docker installs)
+- Node.js 22+ (for non-Docker installs)
 - Python 3 (required for trading scripts)
 - A configured `.env` with your API keys
 
@@ -36,16 +36,11 @@ You can control paths for config and workspace with:
 ### 1) npm install (recommended)
 
 ```bash
-# One-time: configure npm for @alsk1992 scope
-echo "@alsk1992:registry=https://npm.pkg.github.com" >> ~/.npmrc
-
-# Install globally
-npm install -g @alsk1992/clodds
-
-# Run
-export ANTHROPIC_API_KEY=sk-ant-...
-clodds start
+npm install -g clodds
+clodds onboard
 ```
+
+The `onboard` wizard handles API key setup, channel selection, and config generation. After setup, start anytime with `clodds start`.
 
 ### 2) Node.js (from source)
 
