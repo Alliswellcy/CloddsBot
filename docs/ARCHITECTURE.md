@@ -208,24 +208,24 @@ src/agents/
 | `calendar` | Calendar events |
 | `cron` | Scheduled tasks |
 
-**Skills (103 Bundled):**
-Skills extend agent capabilities via a plugin system. They are lazy-loaded via
-dynamic `import()` on first use, with each skill isolated in its own try/catch
-so a missing dependency (e.g., `viem`, `@solana/web3.js`) only disables that
-skill without crashing others.
+**Skills (110+ Bundled):**
+Skills extend agent capabilities via two complementary systems:
 
-```typescript
-interface SkillHandler {
-  name: string;
-  description: string;
-  commands: string[] | Array<{ name: string; description: string; usage: string }>;
-  handle?: (args: string) => Promise<string>;
-  handler?: (args: string) => Promise<string>;
-  requires?: { env?: string[] };  // Pre-flight env var checks
-}
-```
+1. **SKILL.md (Prompt Skills)** — Markdown files with YAML frontmatter injected into the AI system prompt. Loaded by `src/skills/loader.ts`.
+2. **TypeScript Handlers** — Code modules with `handle(args)` functions. Loaded lazily by `src/skills/executor.ts` via dynamic `import()`.
 
-The `SKILL_MANIFEST` array in `src/skills/executor.ts` lists all 103 skill
+Both systems are backwards-compatible with OpenClaw-format SKILL.md files. See **[docs/SKILLS.md](SKILLS.md)** for the full guide including frontmatter reference, OpenClaw compatibility, and how to create new skills.
+
+Key features:
+- Dependency gating (env vars, binaries, OS, config keys)
+- `bins/` directory auto-added to PATH
+- Environment injection via `skill.json`
+- Snapshot caching (SHA-256 hash of directory structure)
+- Hot-reload via file watching
+- Skill whitelisting
+- Command dispatch (bypass LLM, route `/command` directly to a tool)
+
+The `SKILL_MANIFEST` array in `src/skills/executor.ts` lists all bundled TypeScript handler
 directory names. On first command invocation, `initializeSkills()` loads them
 in parallel via `Promise.allSettled`. Use `/skills` to see loaded/failed/needs-config status.
 
@@ -615,26 +615,37 @@ export const myTool: Tool = {
 
 ### Custom Skills
 
+The easiest way to add a skill is via a SKILL.md file. See **[docs/SKILLS.md](SKILLS.md)** for the complete guide.
+
+**Quick example — prompt-only skill:**
+```
+.clodds/skills/my-skill/SKILL.md
+```
+```markdown
+---
+name: my-skill
+description: "Does something useful"
+emoji: "🔧"
+gates:
+  envs:
+    - MY_API_KEY
+---
+
+# My Skill
+
+Instructions for the AI agent on how to use this skill.
+```
+
+**TypeScript handler skill:**
 ```typescript
-// src/skills/custom/my-skill.ts
-import { Skill, SkillContext, SkillResult } from '../types';
-
-export const mySkill: Skill = {
-  name: 'my_skill',
+// src/skills/bundled/my-skill/index.ts
+export default {
+  name: 'my-skill',
   description: 'Custom skill description',
-  triggers: ['/mycommand', 'my skill'],
-
-  async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { message, user, agent } = ctx;
-
-    // Skill logic
-    const response = await processMessage(message);
-
-    return {
-      reply: response,
-      handled: true
-    };
-  }
+  commands: ['/my-skill'],
+  async handle(args: string): Promise<string> {
+    return `Result: ${args}`;
+  },
 };
 ```
 
