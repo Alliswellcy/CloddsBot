@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
   <title>Clodds</title>
   <link rel="icon" href="https://cloddsbot.com/logo.png" type="image/png">
   <link rel="stylesheet" href="css/app.css">
@@ -10,7 +10,7 @@
 <body>
   <div class="app">
     <!-- Sidebar -->
-    <aside class="sidebar">
+    <aside class="sidebar" aria-label="Chat history">
       <div class="sidebar-header">
         <img class="sidebar-header-logo" src="https://cloddsbot.com/logo.png" alt="C" onerror="this.style.display='none'" />
         <span class="sidebar-header-title">Clodds</span>
@@ -21,31 +21,58 @@
         </button>
       </div>
       <div class="sidebar-search">
-        <input class="sidebar-search-input" type="text" placeholder="Search chats..." />
+        <input class="sidebar-search-input" type="text" placeholder="Search chats..." aria-label="Search conversations" />
       </div>
-      <div class="session-list"></div>
+      <div class="session-list" role="list" aria-label="Conversations"></div>
     </aside>
 
     <div class="sidebar-backdrop"></div>
 
     <!-- Main -->
-    <main class="main">
+    <main class="main" aria-label="Chat">
       <div class="chat-header">
         <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle sidebar">&#9776;</button>
         <div class="chat-header-title" id="header-title">Clodds</div>
         <div class="status-dot" id="status-dot" title="Connecting..."></div>
       </div>
+      <div class="reconnect-banner" id="reconnect-banner">
+        <span class="reconnect-spinner"></span> Connection lost. Reconnecting...
+      </div>
 
-      <div id="messages">
+      <div id="messages" role="log" aria-label="Messages" aria-live="polite">
         <div class="welcome" id="welcome">
           <img class="welcome-logo" src="https://cloddsbot.com/logo.png" alt="" onerror="this.style.display='none'" />
           <h2>What can I help you with?</h2>
-          <p>I can trade prediction markets, analyze odds, track positions, and more.</p>
-          <div class="welcome-chips">
-            <div class="welcome-chip" data-msg="What markets are trending right now?">Trending markets</div>
-            <div class="welcome-chip" data-msg="Show my current positions">My positions</div>
-            <div class="welcome-chip" data-msg="What skills do you have?">Your skills</div>
-            <div class="welcome-chip" data-msg="Help me get started">Get started</div>
+          <p>Trade prediction markets, analyze crypto, manage positions across 700+ markets on Polymarket, Kalshi, Hyperliquid and more.</p>
+          <div class="welcome-grid">
+            <div class="welcome-card" data-msg="What markets are trending right now? Show me the top movers.">
+              <span class="welcome-card-icon">&#x1F4CA;</span>
+              <div class="welcome-card-text">
+                <span class="welcome-card-title">Trending markets</span>
+                <span class="welcome-card-desc">Top movers across Polymarket, Kalshi &amp; more</span>
+              </div>
+            </div>
+            <div class="welcome-card" data-msg="/positions">
+              <span class="welcome-card-icon">&#x1F4BC;</span>
+              <div class="welcome-card-text">
+                <span class="welcome-card-title">My positions</span>
+                <span class="welcome-card-desc">View open trades, P&amp;L, and exit signals</span>
+              </div>
+            </div>
+            <div class="welcome-card" data-msg="Find me high-conviction arbitrage opportunities right now">
+              <span class="welcome-card-icon">&#x26A1;</span>
+              <div class="welcome-card-text">
+                <span class="welcome-card-title">Find arbitrage</span>
+                <span class="welcome-card-desc">Cross-platform price gaps and mispriced odds</span>
+              </div>
+            </div>
+            <div class="welcome-card" data-msg="/help">
+              <span class="welcome-card-icon">&#x1F680;</span>
+              <div class="welcome-card-text">
+                <span class="welcome-card-title">Get started</span>
+                <span class="welcome-card-desc">See all commands, skills, and what I can do</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -65,6 +92,11 @@
 
       <div class="input-area">
         <div class="cmd-palette" id="cmd-palette"></div>
+        <div class="file-preview" id="file-preview" style="display:none">
+          <span class="file-preview-icon"></span>
+          <span class="file-preview-name"></span>
+          <button class="file-preview-remove" title="Remove">&times;</button>
+        </div>
         <div class="input-wrap">
           <button class="attach-btn" id="attach-btn" title="Attach file">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -72,7 +104,7 @@
             </svg>
           </button>
           <input type="file" id="file-input" hidden accept="image/*,.pdf,.txt,.csv,.json" />
-          <textarea id="input" placeholder="Ask anything... (type / for commands)" autocomplete="off" rows="1"></textarea>
+          <textarea id="input" placeholder="Ask anything... (type / for commands)" autocomplete="off" rows="1" aria-label="Message input"></textarea>
           <button id="send-btn" title="Send">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -82,7 +114,7 @@
         </div>
         <div class="input-hint">
           <span>Try: <kbd>/help</kbd> <kbd>/markets</kbd> <kbd>/positions</kbd></span>
-          <span><kbd>Enter</kbd> to send</span>
+          <span><kbd>Enter</kbd> send &middot; <kbd>Shift+Enter</kbd> new line</span>
         </div>
       </div>
     </main>

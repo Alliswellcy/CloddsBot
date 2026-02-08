@@ -12,6 +12,7 @@ export class WSClient {
     this.sessionId = null;
     this.authenticated = false;
     this._reconnectTimer = null;
+    this._pingTimer = null;
   }
 
   connect(token, userId, sessionId) {
@@ -27,6 +28,10 @@ export class WSClient {
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
+    }
+    if (this._pingTimer) {
+      clearInterval(this._pingTimer);
+      this._pingTimer = null;
     }
     if (this.ws) {
       // Detach handlers to prevent reconnect cycle
@@ -65,7 +70,15 @@ export class WSClient {
         if (msg.type === 'authenticated') {
           this.authenticated = true;
           this.currentDelay = this.reconnectDelay;
+          // Start keepalive pings (every 2 min, server idle timeout is 5 min)
+          clearInterval(this._pingTimer);
+          this._pingTimer = setInterval(() => {
+            if (this.ws?.readyState === WebSocket.OPEN) {
+              this.ws.send(JSON.stringify({ type: 'ping' }));
+            }
+          }, 120000);
         }
+        if (msg.type === 'pong') return; // silent keepalive reply
         this._emit('message', msg);
       } catch { /* ignore malformed */ }
     };

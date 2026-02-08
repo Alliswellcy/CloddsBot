@@ -103,7 +103,7 @@ class App {
 
     inputEl.addEventListener('input', () => {
       autoResize();
-      sendBtnEl.classList.toggle('active', inputEl.value.trim().length > 0);
+      sendBtnEl.classList.toggle('active', inputEl.value.trim().length > 0 || !!this._pendingAttachment);
       this.commands.handleInput(inputEl.value);
     });
 
@@ -115,14 +115,48 @@ class App {
       }
     });
 
-    sendBtnEl.addEventListener('click', () => this._send());
+    sendBtnEl.addEventListener('click', () => {
+      if (this._generating) {
+        this.chat.hideTyping();
+        this._setGenerating(false);
+        return;
+      }
+      this._send();
+    });
 
-    // Attachment button
+    // Attachment button + file preview
     const attachBtn = document.getElementById('attach-btn');
     const fileInput = document.getElementById('file-input');
+    const filePreview = document.getElementById('file-preview');
+    const filePreviewIcon = filePreview?.querySelector('.file-preview-icon');
+    const filePreviewName = filePreview?.querySelector('.file-preview-name');
+    const filePreviewRemove = filePreview?.querySelector('.file-preview-remove');
+
+    const showFilePreview = (name, mime) => {
+      if (!filePreview) return;
+      const icon = mime?.startsWith('image/') ? '\uD83D\uDDBC\uFE0F' :
+                   mime === 'application/pdf' ? '\uD83D\uDCC4' :
+                   mime?.includes('json') ? '\uD83D\uDCCB' : '\uD83D\uDCCE';
+      filePreviewIcon.textContent = icon;
+      filePreviewName.textContent = name;
+      filePreview.style.display = 'flex';
+      attachBtn?.classList.add('has-file');
+      sendBtnEl.classList.add('active');
+    };
+
+    this._clearFilePreview = () => {
+      this._pendingAttachment = null;
+      if (filePreview) filePreview.style.display = 'none';
+      if (attachBtn) { attachBtn.classList.remove('has-file'); attachBtn.title = 'Attach file'; }
+    };
+
     attachBtn?.addEventListener('click', () => {
-      if (fileInput) fileInput.value = ''; // allow re-selecting same file
+      if (fileInput) fileInput.value = '';
       fileInput?.click();
+    });
+    filePreviewRemove?.addEventListener('click', () => {
+      this._clearFilePreview();
+      if (!inputEl.value.trim()) sendBtnEl.classList.remove('active');
     });
     fileInput?.addEventListener('change', () => {
       const file = fileInput.files?.[0];
@@ -134,8 +168,7 @@ class App {
           mimeType: file.type,
           data: reader.result?.split(',')[1] || '', // base64
         };
-        attachBtn.classList.add('has-file');
-        attachBtn.title = file.name;
+        showFilePreview(file.name, file.type);
       };
       reader.onerror = () => {
         this.chat.addMessage('Failed to read file.', 'system');
@@ -157,19 +190,56 @@ class App {
       }
     });
 
+    // Paste image support (Cmd+V / Ctrl+V)
+    document.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const blob = item.getAsFile();
+          if (!blob || !fileInput) return;
+          const dt = new DataTransfer();
+          dt.items.add(new File([blob], `pasted-image-${Date.now()}.png`, { type: blob.type }));
+          fileInput.files = dt.files;
+          fileInput.dispatchEvent(new Event('change'));
+          return;
+        }
+      }
+    });
+
     document.addEventListener('click', (e) => {
       if (!paletteEl.contains(e.target) && e.target !== inputEl) {
         this.commands.hide();
       }
     });
 
-    // Welcome chip clicks
-    document.querySelectorAll('.welcome-chip').forEach(chip => {
-      chip.addEventListener('click', () => {
-        inputEl.value = chip.dataset.msg;
+    // Welcome card clicks
+    document.querySelectorAll('.welcome-card').forEach(card => {
+      card.addEventListener('click', () => {
+        inputEl.value = card.dataset.msg;
         this._send();
       });
     });
+
+    // Reconnect banner
+    const reconnectBanner = document.getElementById('reconnect-banner');
+
+    // Tab notification state
+    this._unreadCount = 0;
+    this._originalTitle = document.title;
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && this._unreadCount > 0) {
+        this._unreadCount = 0;
+        document.title = this._originalTitle;
+      }
+    });
+
+    // Stop generation
+    this._generating = false;
+    this._stopSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+    this._sendSvg = sendBtnEl.innerHTML;
+    this._sendBtn = sendBtnEl;
 
     // WS handlers
     this.ws.on('open', () => {
@@ -180,15 +250,19 @@ class App {
     this.ws.on('close', () => {
       statusDot.className = 'status-dot error';
       statusDot.title = 'Reconnecting...';
+      reconnectBanner?.classList.add('visible');
       this.chat.hideTyping();
+      this._setGenerating(false);
     });
 
     this.ws.on('message', (msg) => {
       this.chat.hideTyping();
+      this._setGenerating(false);
 
       if (msg.type === 'authenticated') {
         statusDot.className = 'status-dot connected';
         statusDot.title = 'Connected';
+        reconnectBanner?.classList.remove('visible');
         // Re-fetch messages after reconnect to recover any missed responses
         // Skip if switchSession already loaded history (flag cleared after use)
         if (this.activeSessionId && !this._skipNextRefresh) {
@@ -199,6 +273,10 @@ class App {
         // Session switch confirmed
       } else if (msg.type === 'message') {
         this.chat.addBotMessage(msg.text, msg.messageId, msg.attachments);
+        if (document.hidden) {
+          this._unreadCount++;
+          document.title = `(${this._unreadCount}) New message - Clodds`;
+        }
       } else if (msg.type === 'edit') {
         this.chat.editMessage(msg.messageId, msg.text);
       } else if (msg.type === 'delete') {
@@ -396,9 +474,7 @@ class App {
     if (displayText) this.chat.addMessage(displayText, 'user');
     if (this._pendingAttachment) {
       this.ws.send(text, [this._pendingAttachment]);
-      this._pendingAttachment = null;
-      const attachBtn = document.getElementById('attach-btn');
-      if (attachBtn) { attachBtn.classList.remove('has-file'); attachBtn.title = 'Attach file'; }
+      this._clearFilePreview();
     } else {
       this.ws.send(text);
     }
@@ -406,6 +482,7 @@ class App {
     inputEl.style.height = 'auto';
     sendBtnEl.classList.remove('active');
     this.chat.showTyping();
+    this._setGenerating(true);
     this.commands.hide();
 
     // Auto-title: if session has no title, set from first message
@@ -428,6 +505,28 @@ class App {
       }
     }
     this._sending = false;
+  }
+
+  _setGenerating(on) {
+    this._generating = on;
+    clearTimeout(this._genTimeout);
+    const btn = this._sendBtn;
+    if (!btn) return;
+    if (on) {
+      btn.classList.add('stop-mode');
+      btn.innerHTML = this._stopSvg;
+      btn.title = 'Stop generating';
+      btn.classList.add('active');
+      // Auto-reset after 90s to prevent stuck state
+      this._genTimeout = setTimeout(() => {
+        this.chat.hideTyping();
+        this._setGenerating(false);
+      }, 90000);
+    } else {
+      btn.classList.remove('stop-mode');
+      btn.innerHTML = this._sendSvg;
+      btn.title = 'Send';
+    }
   }
 }
 

@@ -173,6 +173,7 @@ export class Sidebar {
         item.className = 'session-item' + (isActive ? ' active' : '');
         item.dataset.id = s.id;
         item.title = title;
+        item.setAttribute('role', 'listitem');
 
         const titleSpan = document.createElement('span');
         titleSpan.className = 'session-title';
@@ -210,7 +211,7 @@ export class Sidebar {
     if (!hasItems) {
       const empty = document.createElement('div');
       empty.className = 'session-empty';
-      empty.textContent = 'No conversations yet';
+      empty.textContent = filter ? `No results for "${filter}"` : 'No conversations yet';
       frag.appendChild(empty);
     }
 
