@@ -145,6 +145,7 @@ const SKILL_MANIFEST: string[] = [
   // ── New features (Feb 2026) ──
   'token-security',
   'dca',
+  'shield',
 ];
 
 // =============================================================================

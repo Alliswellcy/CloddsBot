@@ -967,6 +967,16 @@ Trade on Solana DEXes via unified interface or direct DEX commands:
 /pump sell <mint> 1000           Sell 1000 tokens
 ```
 
+**Security Shield:**
+```
+/shield scan <code>                    Scan code/plugin for malicious patterns (75 rules, 9 categories)
+/shield check <address>                Check address safety (auto-detect Solana/EVM)
+/shield validate <dest> <amt> [token]  Pre-flight transaction validation
+/shield scams [solana|evm]             List known scam addresses (70+ entries)
+/shield status                         Show scanner statistics
+/shield help                           Show help
+```
+
 **Token Security Audit:**
 ```
 /audit <address>                 Auto-detect chain, full security audit

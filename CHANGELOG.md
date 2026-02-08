@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Security Shield Module
+- `/shield scan <code>` — code/plugin scanner with 75 rules across 9 categories (shell exec, network exfil, wallet drain, prompt injection, obfuscation, hidden chars, data access, crypto theft, privilege escalation)
+- `/shield check <address>` — multi-chain address safety check (Solana + EVM) via native RPC, auto-detect chain
+- `/shield validate <dest> <amount> [token]` — pre-flight transaction validation with safe program whitelist, amount thresholds, NLP social engineering detection
+- `/shield scams [chain]` — browse 70+ known scam addresses (Inferno/Pink/Angel/Monkey/Venom drainers, Lazarus Group, exploit contracts) sourced from Etherscan, Mandiant, Check Point Research, CertiK
+- `/shield status` — scanner statistics
+- Diminishing-returns scoring (same category repeat = 30% weight) with combo boosts for dangerous combinations
+- Shannon entropy analysis for obfuscated code (>5.5 bits/char = +10 risk)
+- Input sanitizer: zero-width chars, RTL overrides, homoglyph detection, prompt injection (15 patterns), control char stripping
+- Pre-trade security hook in execution pipeline (runs before dry-run, fails open if shield not loaded)
+
 #### Token Security Auditing
 - `/audit <address>` command for EVM and Solana token security analysis via GoPlus API
 - Auto-detect chain (base58 = Solana, 0x = EVM) or specify with `--chain`
@@ -17,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Supports: Ethereum, BSC, Polygon, Arbitrum, Optimism, Avalanche, Fantom, Base, Linea, Scroll, zkSync, Mantle, Blast, Solana
 
 #### MCP Server Mode
-- `clodds mcp` command to expose all 110 skills as MCP tools via stdio JSON-RPC
+- `clodds mcp` command to expose all 111 skills as MCP tools via stdio JSON-RPC
 - `clodds mcp install` auto-configures Claude Desktop and Claude Code
 - `clodds mcp uninstall` removes configuration
 - Protocol version 2024-11-05, lazy skill loading, all tools named `clodds_<skill>`

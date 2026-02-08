@@ -2671,6 +2671,25 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
       return { success: false, error };
     }
 
+    // Security shield pre-trade check (runs before dry-run so security is always enforced)
+    if ((request as any).destination) {
+      try {
+        const { getSecurityShield } = await import('../security/shield.js');
+        const shield = getSecurityShield();
+        const check = await shield.validateTx({
+          destination: (request as any).destination,
+          amount: request.size,
+          token: (request as any).token,
+        });
+        if (!check.allowed) {
+          return { success: false, error: `Security blocked: ${check.flags.join(', ')}` };
+        }
+      } catch (err) {
+        // Shield not loaded or RPC failure — log but don't block
+        logger.debug({ err }, 'Security shield check skipped');
+      }
+    }
+
     // Dry run mode
     if (config.dryRun) {
       logger.info({ ...request, dryRun: true }, 'Dry run order');

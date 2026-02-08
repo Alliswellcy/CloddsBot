@@ -170,6 +170,7 @@ export const COMMAND_CATEGORIES: Record<string, string | string[]> = {
   // ── New features (Feb 2026) ──
   'token-security': ['Solana DeFi', 'EVM DeFi'],
   dca: ['Solana DeFi', 'Polymarket', 'Kalshi', 'Hyperliquid', 'CEX Futures', 'EVM DeFi'],
+  shield: 'Security',
 
   // ── Skills with non-standard casing in their name field ──
   'Features': 'Market Data', 'Tick Data': 'Market Data',

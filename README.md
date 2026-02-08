@@ -128,8 +128,9 @@ See [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) for all commands.
 | **Perpetual Futures** | 5 exchanges (Binance, Bybit, Hyperliquid, MEXC, Percolator) with up to 200x leverage, database tracking, A/B testing |
 | **On-Chain Perps** | Percolator protocol — Solana-native perpetual futures with pluggable matchers, keeper cranking, real-time slab polling |
 | **Token Security** | GoPlus-powered audits — honeypot detection, rug-pull analysis, holder concentration, risk scoring |
+| **Security Shield** | Code scanning (75 rules), scam DB (70+ addresses), multi-chain address checking, pre-trade tx validation |
 | **Trading** | Order execution on 5 platforms, portfolio tracking, P&L, trade logging, DCA on 16 platforms |
-| **MCP Server** | Expose all 110 skills as MCP tools for Claude Desktop and Claude Code |
+| **MCP Server** | Expose all 111 skills as MCP tools for Claude Desktop and Claude Code |
 | **Arbitrage** | Cross-platform detection, combinatorial analysis, semantic matching, real-time scanning |
 | **AI** | 6 LLM providers, 4 specialized agents, semantic memory, 21 tools |
 | **i18n** | 10 languages (EN, ZH, ES, JA, KO, DE, FR, PT, RU, AR) |
@@ -314,12 +315,12 @@ Enable: `clodds config set ledger.enabled true`
 
 ## Skills & Extensions
 
-**110 bundled skills** across trading, data, automation, and infrastructure — lazy-loaded on first use so missing dependencies don't crash the app. Run `/skills` to see status.
+**111 bundled skills** across trading, data, automation, and infrastructure — lazy-loaded on first use so missing dependencies don't crash the app. Run `/skills` to see status.
 
 | Category | Skills |
 |----------|--------|
 | Trading | Polymarket, Kalshi, Betfair, Hyperliquid, Binance, Bybit, MEXC, Jupiter, Raydium, Orca, Percolator, DCA (16 platforms) |
-| Analysis | Arbitrage detection, edge finding, whale tracking, copy trading, token security audits |
+| Analysis | Arbitrage detection, edge finding, whale tracking, copy trading, token security audits, security shield |
 | Automation | Cron jobs, triggers, bots, webhooks |
 | AI | Memory, embeddings, multi-agent routing |
 

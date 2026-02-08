@@ -164,6 +164,7 @@ All previously identified issues have been remediated.
 ✅ **SQL injection prevention** - Parameterized queries
 ✅ **Audit logging** - All trades logged
 ✅ **Modern crypto libraries** - @noble/* instead of deprecated elliptic
+✅ **Security Shield** - Code scanner (75 rules/9 categories), scam DB (70+ addresses from Etherscan/Mandiant/CertiK), multi-chain address checker, pre-trade tx validator, input sanitizer (zero-width/RTL/homoglyph/prompt injection detection)
 
 ---
 
