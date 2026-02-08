@@ -9,7 +9,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { SignalBus, TradingSignal } from '../gateway/signal-bus.js';
+import type { SignalBus, TradingSignal } from '../types/signal-bus.js';
 import type { ExecutionService, OrderResult } from '../execution/index.js';
 import type { SmartRouter } from '../execution/smart-router.js';
 import type { MLSignalModel } from '../trading/ml-signals.js';

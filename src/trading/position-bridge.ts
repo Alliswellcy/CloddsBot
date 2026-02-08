@@ -11,7 +11,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import type { SignalBus, TickUpdate } from '../gateway/signal-bus.js';
+import type { SignalBus, TickUpdate } from '../types/signal-bus.js';
 import type { ExecutionService, OrderRequest } from '../execution/index.js';
 import type {
   PositionManager,

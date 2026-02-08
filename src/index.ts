@@ -6,7 +6,7 @@
  */
 
 import 'dotenv/config';
-import { createGateway } from './gateway/index';
+// Gateway is private (gitignored) — loaded dynamically at runtime
 import { loadConfig } from './utils/config';
 import { logger } from './utils/logger';
 import { installHttpClient, configureHttpClient } from './utils/http';
@@ -203,6 +203,7 @@ async function main() {
     updateStep(idxChannels, 'running');
     updateStep(idxGateway, 'running');
 
+    const { createGateway } = await import('./gateway/index.js');
     let gateway;
     try {
       gateway = await createGateway(config);
@@ -259,6 +260,7 @@ async function main() {
     configureHttpClient(config.http);
     logger.info({ port: config.gateway.port }, 'Config loaded');
 
+    const { createGateway } = await import('./gateway/index.js');
     const gateway = await createGateway(config);
     await gateway.start();
 

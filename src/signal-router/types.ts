@@ -6,7 +6,7 @@
  */
 
 import type { Platform } from '../types.js';
-import type { TradingSignal } from '../gateway/signal-bus.js';
+import type { TradingSignal } from '../types/signal-bus.js';
 
 // ── Configuration ────────────────────────────────────────────────────────────
 

@@ -21,7 +21,7 @@ import { Command } from 'commander';
 import { createDatabase } from '../db/index';
 import { createMigrationRunner } from '../db/migrations';
 import { createPairingService } from '../pairing/index';
-import { createGateway } from '../gateway/index';
+// Gateway is private (gitignored) — loaded dynamically at runtime
 import { loadConfig } from '../utils/config';
 import { logger } from '../utils/logger';
 import { installHttpClient, configureHttpClient } from '../utils/http';
@@ -55,6 +55,7 @@ program
     logger.info('Starting Clodds...');
     const config = await loadConfig();
     configureHttpClient(config.http);
+    const { createGateway } = await import('../gateway/index.js');
     const gateway = await createGateway(config);
     await gateway.start();
 

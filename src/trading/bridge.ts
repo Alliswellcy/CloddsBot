@@ -10,7 +10,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import type { SignalBus, TickUpdate, TradingSignal } from '../gateway/signal-bus.js';
+import type { SignalBus, TickUpdate, TradingSignal } from '../types/signal-bus.js';
 import type { BotManager } from './bots/index.js';
 
 // ── Types ───────────────────────────────────────────────────────────────────
