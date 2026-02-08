@@ -5,6 +5,39 @@ All notable changes to Clodds will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-02-08
+
+### Added
+
+#### OpenClaw SKILL.md Compatibility
+- Full backwards compatibility with OpenClaw-format SKILL.md files — drop in and go
+- Shared YAML frontmatter parser (`src/skills/frontmatter.ts`) replacing two duplicate hand-rolled parsers
+- OpenClaw metadata resolution: `clodds`, `openclaw`, and `clawdbot` manifest keys
+- Gate merging: Clodds native `gates.bins/envs` + OpenClaw `requires.bins/env` combined and deduplicated
+- `{baseDir}` template variable resolution in skill content
+- Graceful handling of missing frontmatter (uses directory name as fallback)
+
+#### Advanced Skill Loading
+- **Command dispatch**: Route `/command` directly to a tool, bypassing LLM (`command-dispatch: tool`)
+- **bins/ directory**: Auto-discovered and added to PATH when skill is active
+- **Environment injection**: `skill.json` env overrides with save/restore pattern
+- **Snapshot caching**: SHA-256 hash of directory structure + file mtimes — skip reload if unchanged
+- **Hot-reload**: File watching with debounced reload (`watch: true` in config)
+- **Skill whitelisting**: `allowBundled` config to load only specific bundled skills
+- **Config key gating**: `requires.config` with dot-notation key traversal
+- **Platform install commands**: Per-OS install instructions from OpenClaw metadata
+- **Binary check caching**: `which` lookups cached for the session
+
+#### Skills Documentation
+- Comprehensive `docs/SKILLS.md`: frontmatter reference, OpenClaw compatibility guide, drop-in instructions, advanced features
+- Updated `docs/ARCHITECTURE.md` with new skills system overview
+
+### Changed
+- `Skill` interface extended with 15 optional fields (all backward-compatible)
+- `SkillManagerConfig` interface added for manager configuration
+- `isSkillCommand()` now checks both handler map and dispatch map
+- Skill count: 110+ TypeScript handlers, 90+ SKILL.md prompt skills
+
 ## [0.3.10] - 2026-02-08
 
 ### Added
@@ -479,5 +512,6 @@ Complete agent-to-agent commerce system:
 
 ---
 
+[1.0.0]: https://github.com/alsk1992/CloddsBot/releases/tag/v1.0.0
 [0.2.0]: https://github.com/alsk1992/CloddsBot/releases/tag/v0.2.0
 [0.1.0]: https://github.com/alsk1992/CloddsBot/releases/tag/v0.1.0
