@@ -35,7 +35,10 @@ function parseChainFlag(args: string[]): { chain: PancakeChain; cleanArgs: strin
   };
 
   const chainArg = args[chainIdx + 1]?.toLowerCase() || 'bsc';
-  const chain = chainMap[chainArg] || 'bsc';
+  const chain = chainMap[chainArg];
+  if (!chain) {
+    throw new Error(`Unknown chain "${chainArg}". Supported: bsc, eth, arb, base`);
+  }
   const cleanArgs = [...args.slice(0, chainIdx), ...args.slice(chainIdx + 2)];
 
   return { chain, cleanArgs };
