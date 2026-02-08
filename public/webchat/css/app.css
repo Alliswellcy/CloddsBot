@@ -69,6 +69,7 @@ body {
   border-bottom: none;
 }
 .sidebar.collapsed .sidebar-header-title,
+.sidebar.collapsed .sidebar-logo,
 .sidebar.collapsed .sidebar-search,
 .sidebar.collapsed .session-list {
   display: none;
@@ -97,6 +98,14 @@ body {
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
+}
+
+.sidebar-logo {
+  height: 28px;
+  width: auto;
+  flex: 1;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 .sidebar-icon-btn {
@@ -339,6 +348,12 @@ body {
   gap: 16px;
   padding: 0;
   text-align: center;
+}
+.welcome-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  object-fit: contain;
 }
 .welcome-greeting {
   font-size: 32px;
