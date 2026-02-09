@@ -3931,7 +3931,19 @@ export function createOnboardCommand(program: Command): void {
       console.log(`    ${bold('clodds doctor')}    ${dim('run diagnostics')}`);
       console.log(`    ${bold('clodds repl')}      ${dim('local test shell')}`);
       console.log('');
-      console.log(`  ${dim('WebChat:')} ${cyan('http://localhost:18789/webchat')}`);
+      const { networkInterfaces } = await import('os');
+      const getHost = (): string => {
+        if (process.env.CLODDS_PUBLIC_HOST) return process.env.CLODDS_PUBLIC_HOST;
+        const nets = networkInterfaces();
+        for (const iface of Object.values(nets)) {
+          for (const cfg of iface || []) {
+            if (!cfg.internal && cfg.family === 'IPv4') return cfg.address;
+          }
+        }
+        return 'localhost';
+      };
+      const webHost = getHost();
+      console.log(`  ${dim('WebChat:')} ${cyan(`http://${webHost}:18789/webchat`)}`);
 
       if (channelChoice === 'telegram' && envVars.TELEGRAM_BOT_TOKEN) {
         console.log(`  ${dim('Telegram:')} message your bot to start chatting`);
@@ -3968,7 +3980,7 @@ export function createOnboardCommand(program: Command): void {
 
           console.log(`\r  ${green(bold('Clodds is running'))}                `);
           console.log('');
-          console.log(`  ${cyan(`http://localhost:${config.gateway.port}/webchat`)}`);
+          console.log(`  ${cyan(`http://${webHost}:${config.gateway.port}/webchat`)}`);
           console.log(`  ${dim('Press Ctrl+C to stop')}`);
           console.log('');
 
