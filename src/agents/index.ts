@@ -1209,7 +1209,7 @@ function buildTools(): ToolDefinition[] {
     },
     {
       name: 'polymarket_maker_buy',
-      description: 'POST-ONLY maker buy - places order that MUST add liquidity (sit on book). If order would cross spread, it gets REJECTED instead of taking. Use this to avoid taker fees (1-1.5% on 15-min crypto) and earn maker rebates.',
+      description: 'POST-ONLY maker buy - places order that MUST add liquidity (sit on book). If order would cross spread, it gets REJECTED instead of taking. ONLY 15-minute crypto markets have taker fees. Hourly, daily, and all other Polymarket markets have ZERO trading fees.',
       input_schema: {
         type: 'object',
         properties: {
@@ -1222,7 +1222,7 @@ function buildTools(): ToolDefinition[] {
     },
     {
       name: 'polymarket_maker_sell',
-      description: 'POST-ONLY maker sell - places order that MUST add liquidity (sit on book). If order would cross spread, it gets REJECTED instead of taking. Use this to avoid taker fees (1-1.5% on 15-min crypto) and earn maker rebates.',
+      description: 'POST-ONLY maker sell - places order that MUST add liquidity (sit on book). If order would cross spread, it gets REJECTED instead of taking. ONLY 15-minute crypto markets have taker fees. Hourly, daily, and all other Polymarket markets have ZERO trading fees.',
       input_schema: {
         type: 'object',
         properties: {
@@ -1235,7 +1235,7 @@ function buildTools(): ToolDefinition[] {
     },
     {
       name: 'polymarket_fee_rate',
-      description: 'Check if a market has trading fees. 15-minute crypto markets (BTC/ETH/SOL/XRP) have 1-1.5% taker fees. Regular markets have 0% fees.',
+      description: 'Check if a market has trading fees. ONLY 15-minute crypto markets have taker fees (~1-1.5%). All other Polymarket markets (hourly, daily, politics, sports, etc.) have ZERO trading fees.',
       input_schema: {
         type: 'object',
         properties: {
@@ -1401,7 +1401,7 @@ function buildTools(): ToolDefinition[] {
     },
     {
       name: 'polymarket_neg_risk',
-      description: 'Check if a token is in a negative risk market (crypto 15-min markets).',
+      description: 'Check if a token is in a negative risk market. Use the /fee-rate endpoint to check fees — only 15-min crypto markets have fees.',
       input_schema: {
         type: 'object',
         properties: {
