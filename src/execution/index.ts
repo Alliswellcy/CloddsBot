@@ -588,20 +588,33 @@ export async function getPolymarketBalance(
   address?: string
 ): Promise<{ balance: number; allowance: number }> {
   const walletAddress = address || auth.address;
-  const url = `${POLY_CLOB_URL}/balance?address=${walletAddress}`;
 
-  const headers = buildPolymarketHeadersForUrl(auth, 'GET', url);
-
+  // Try CLOB /balance-allowance first (authenticated), fallback to on-chain USDC
   try {
+    const url = `${POLY_CLOB_URL}/balance-allowance?asset_type=USDC`;
+    const headers = buildPolymarketHeadersForUrl(auth, 'GET', url);
     const response = await fetch(url, { headers });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    if (response.ok) {
+      const data = await response.json() as { balance?: string; allowance?: string };
+      const balance = parseFloat(data.balance || '0') / 1e6;
+      const allowance = parseFloat(data.allowance || '0') / 1e6;
+      if (balance > 0 || allowance > 0) return { balance, allowance };
     }
-    const data = await response.json() as { balance?: string; allowance?: string };
-    return {
-      balance: parseFloat(data.balance || '0'),
-      allowance: parseFloat(data.allowance || '0'),
-    };
+  } catch { /* fallback below */ }
+
+  // Fallback: read USDC balance directly from Polygon chain
+  try {
+    const USDC_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+    const paddedAddr = walletAddress.slice(2).toLowerCase().padStart(64, '0');
+    const data = `0x70a08231${paddedAddr}`;
+    const rpcResponse = await fetch('https://polygon-rpc.com/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: USDC_POLYGON, data }, 'latest'], id: 1 }),
+    });
+    const rpcData = await rpcResponse.json() as { result?: string };
+    const balance = parseInt(rpcData.result || '0x0', 16) / 1e6;
+    return { balance, allowance: balance };
   } catch (error) {
     logger.error({ error, walletAddress }, 'Failed to fetch Polymarket balance');
     return { balance: 0, allowance: 0 };
@@ -621,36 +634,43 @@ export async function getPolymarketPositions(
   avgPrice: number;
   currentPrice: number;
   unrealizedPnl: number;
+  title?: string;
+  outcome?: string;
+  currentValue?: number;
 }>> {
   const walletAddress = address || auth.address;
-  const url = `${POLY_CLOB_URL}/positions?address=${walletAddress}`;
-
-  const headers = buildPolymarketHeadersForUrl(auth, 'GET', url);
 
   try {
-    const response = await fetch(url, { headers });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
+    // Use data-api which has rich position data (title, PnL, etc.)
+    const url = `https://data-api.polymarket.com/positions?user=${walletAddress.toLowerCase()}&sizeThreshold=0.01`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
     const data = await response.json() as Array<{
-      asset_id?: string;
-      condition_id?: string;
-      size?: string;
-      avg_price?: string;
-      cur_price?: string;
-      unrealized_pnl?: string;
+      asset?: string;
+      conditionId?: string;
+      size?: number;
+      avgPrice?: number;
+      curPrice?: number;
+      cashPnl?: number;
+      currentValue?: number;
+      title?: string;
+      outcome?: string;
     }>;
 
     return data.map(p => ({
-      tokenId: p.asset_id || '',
-      conditionId: p.condition_id || '',
-      size: parseFloat(p.size || '0'),
-      avgPrice: parseFloat(p.avg_price || '0'),
-      currentPrice: parseFloat(p.cur_price || '0'),
-      unrealizedPnl: parseFloat(p.unrealized_pnl || '0'),
+      tokenId: p.asset || '',
+      conditionId: p.conditionId || '',
+      size: p.size || 0,
+      avgPrice: p.avgPrice || 0,
+      currentPrice: p.curPrice || 0,
+      unrealizedPnl: p.cashPnl || 0,
+      title: p.title,
+      outcome: p.outcome,
+      currentValue: p.currentValue,
     }));
   } catch (error) {
-    logger.error({ error, walletAddress }, 'Failed to fetch Polymarket positions');
+    logger.error({ error, walletAddress: walletAddress }, 'Failed to fetch Polymarket positions');
     return [];
   }
 }
@@ -669,34 +689,43 @@ export async function getPolymarketTrades(
   size: number;
   timestamp: Date;
   transactionHash?: string;
+  title?: string;
+  outcome?: string;
 }>> {
-  const url = `${POLY_CLOB_URL}/trades?limit=${limit}`;
-  const headers = buildPolymarketHeadersForUrl(auth, 'GET', url);
+  const walletAddress = auth.address;
 
   try {
-    const response = await fetch(url, { headers });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
+    // Use data-api activity endpoint which has rich trade data
+    const url = `https://data-api.polymarket.com/activity?user=${walletAddress.toLowerCase()}&limit=${limit}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
     const data = await response.json() as Array<{
-      id?: string;
-      asset_id?: string;
+      transactionHash?: string;
+      asset?: string;
       side?: string;
-      price?: string;
-      size?: string;
-      timestamp?: string;
-      transaction_hash?: string;
+      price?: number;
+      size?: number;
+      usdcSize?: number;
+      timestamp?: number;
+      title?: string;
+      outcome?: string;
+      type?: string;
     }>;
 
-    return data.map(t => ({
-      id: t.id || '',
-      tokenId: t.asset_id || '',
-      side: (t.side?.toUpperCase() || 'BUY') as 'BUY' | 'SELL',
-      price: parseFloat(t.price || '0'),
-      size: parseFloat(t.size || '0'),
-      timestamp: new Date(t.timestamp || Date.now()),
-      transactionHash: t.transaction_hash,
-    }));
+    return data
+      .filter(t => t.type === 'TRADE' || t.side)
+      .map(t => ({
+        id: t.transactionHash || '',
+        tokenId: t.asset || '',
+        side: (t.side?.toUpperCase() || 'BUY') as 'BUY' | 'SELL',
+        price: t.price || 0,
+        size: t.size || t.usdcSize || 0,
+        timestamp: new Date((t.timestamp || 0) * 1000),
+        transactionHash: t.transactionHash,
+        title: t.title,
+        outcome: t.outcome,
+      }));
   } catch (error) {
     logger.error({ error }, 'Failed to fetch Polymarket trades');
     return [];
