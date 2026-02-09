@@ -1147,7 +1147,7 @@ function buildTools(): ToolDefinition[] {
     },
     {
       name: 'polymarket_orderbook',
-      description: 'Get orderbook for a Polymarket token - shows best bid/ask, spread, and depth. Public endpoint - no credentials required. Essential for checking prices before trading.',
+      description: 'Get orderbook + real tradeable prices for a Polymarket token. Returns buyPrice (best ask), sellPrice (best bid), midpoint, spread, and lastTradePrice from official CLOB endpoints. Also includes raw book depth. IMPORTANT: Use buyPrice/sellPrice for actual trading prices — raw bids/asks may show AMM extremes.',
       input_schema: {
         type: 'object',
         properties: {
@@ -9946,14 +9946,35 @@ async function executeTool(
         // Orderbook is public - no credentials required
         const tokenId = toolInput.token_id as string;
         try {
-          const response = await fetch(`https://clob.polymarket.com/book?token_id=${tokenId}`);
-          if (!response.ok) {
-            return JSON.stringify({ error: `Orderbook fetch failed: ${response.status}` });
-          }
-          const data = await response.json() as { bids?: Array<{ price: string; size: string }>; asks?: Array<{ price: string; size: string }> };
+          // Fetch raw book AND proper pricing endpoints in parallel
+          const [bookRes, buyPriceRes, sellPriceRes, midRes, spreadRes, lastRes] = await Promise.all([
+            fetch(`https://clob.polymarket.com/book?token_id=${tokenId}`),
+            fetch(`https://clob.polymarket.com/price?token_id=${tokenId}&side=BUY`),
+            fetch(`https://clob.polymarket.com/price?token_id=${tokenId}&side=SELL`),
+            fetch(`https://clob.polymarket.com/midpoint?token_id=${tokenId}`),
+            fetch(`https://clob.polymarket.com/spread?token_id=${tokenId}`),
+            fetch(`https://clob.polymarket.com/last-trade-price?token_id=${tokenId}`),
+          ]);
+          const data = await bookRes.json() as { bids?: Array<{ price: string; size: string }>; asks?: Array<{ price: string; size: string }> };
+          const buyPrice = await buyPriceRes.json() as { price?: string };
+          const sellPrice = await sellPriceRes.json() as { price?: string };
+          const mid = await midRes.json() as { mid?: string };
+          const spread = await spreadRes.json() as { spread?: string };
+          const last = await lastRes.json() as { price?: string; side?: string };
           const bids = (data.bids || []).slice(0, 10);
           const asks = (data.asks || []).slice(0, 10);
-          return JSON.stringify({ token_id: tokenId, bids, asks, bid_count: bids.length, ask_count: asks.length });
+          return JSON.stringify({
+            token_id: tokenId,
+            // Tradeable prices from official CLOB endpoints — use these, not raw book extremes
+            buyPrice: buyPrice.price || null,
+            sellPrice: sellPrice.price || null,
+            midpoint: mid.mid || null,
+            spread: spread.spread || null,
+            lastTradePrice: last.price || null,
+            lastTradeSide: last.side || null,
+            // Raw book depth (may show AMM extremes at 1¢/99¢ — ignore those, use prices above)
+            bids, asks, bid_count: bids.length, ask_count: asks.length,
+          });
         } catch (err: unknown) {
           const error = err as Error;
           return JSON.stringify({ error: 'Orderbook fetch failed', details: error.message });
