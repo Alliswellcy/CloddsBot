@@ -35,49 +35,6 @@ Built on Claude with arbitrage detection algorithms based on [arXiv:2508.03474](
 
 ---
 
-## Deployment Options
-
-| Option | Best For | Setup Time | Features |
-|--------|----------|------------|----------|
-| **[Self-Hosted](#quick-start)** | Full control, all features | 2 min | 21 channels, trading, DeFi, bots |
-| **[Cloudflare Worker](#cloudflare-worker)** | Lightweight, edge deployment | 2 min | 3 webhook channels, market data, arbitrage |
-| **[Compute API](#compute-api)** | Agents paying for compute | Live | LLM, code, web, data, storage |
-
-## Compute API
-
-**Live at:** https://compute.cloddsbot.com
-
-Agents can pay USDC for compute resources — no API keys needed, just a wallet.
-
-```bash
-# Check health
-curl https://compute.cloddsbot.com/health
-
-# See pricing
-curl https://compute.cloddsbot.com/pricing
-
-# Check balance
-curl https://compute.cloddsbot.com/balance/0xYourWallet
-```
-
-**Services:**
-| Service | Pricing | Description |
-|---------|---------|-------------|
-| `llm` | $0.000003/token | Claude, GPT-4, Llama, Mixtral |
-| `code` | $0.001/second | Sandboxed Python, JS, Rust, Go |
-| `web` | $0.005/request | Web scraping with JS rendering |
-| `data` | $0.001/request | Prices, orderbooks, candles |
-| `storage` | $0.0001/MB | Key-value file storage |
-| `trade` | $0.01/call | Trade execution (Polymarket, DEXs) |
-
-**Payment flow:**
-1. Send USDC to treasury wallet on Base
-2. Include payment proof in request
-3. API credits your balance
-4. Use compute services
-
-See [docs/API.md](./docs/API.md#clodds-compute-api) for full documentation.
-
 ## Quick Start
 
 ```bash
@@ -485,6 +442,43 @@ curl -X POST https://api.cloddsbot.com/api/marketplace/listings \
 ```
 
 **Product types:** Code (trading bots, strategies), API services (signal feeds), Datasets (backtests, ML models). **Purchase flow:** Buyer funds USDC escrow → on-chain verification → Seller delivers → Buyer confirms → Escrow releases (95% seller, 5% platform fee). 72h auto-release cron, Solana tx retry (3x), platform wallet pays ATA rent. Seller wallets validated as base58, one pending order per listing, helpful vote dedup. 7 categories, 30+ endpoints, reviews with verified purchase badges, seller leaderboard.
+
+---
+
+## Compute API
+
+**Live at:** https://compute.cloddsbot.com
+
+Agents can pay USDC for compute resources — no API keys needed, just a wallet.
+
+```bash
+# Check health
+curl https://compute.cloddsbot.com/health
+
+# See pricing
+curl https://compute.cloddsbot.com/pricing
+
+# Check balance
+curl https://compute.cloddsbot.com/balance/0xYourWallet
+```
+
+**Services:**
+| Service | Pricing | Description |
+|---------|---------|-------------|
+| `llm` | $0.000003/token | Claude, GPT-4, Llama, Mixtral |
+| `code` | $0.001/second | Sandboxed Python, JS, Rust, Go |
+| `web` | $0.005/request | Web scraping with JS rendering |
+| `data` | $0.001/request | Prices, orderbooks, candles |
+| `storage` | $0.0001/MB | Key-value file storage |
+| `trade` | $0.01/call | Trade execution (Polymarket, DEXs) |
+
+**Payment flow:**
+1. Send USDC to treasury wallet on Base
+2. Include payment proof in request
+3. API credits your balance
+4. Use compute services
+
+See [docs/API.md](./docs/API.md#clodds-compute-api) for full documentation.
 
 ---
 
