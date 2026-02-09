@@ -11139,9 +11139,12 @@ async function executeTool(
                   const events = await res.json() as Array<Record<string, unknown>>;
                   if (Array.isArray(events) && events.length > 0) {
                     const ev = events[0];
+                    // Skip resolved/closed markets
+                    if (ev.closed === true || ev.active === false) continue;
                     const mkts = ev.markets as Array<Record<string, unknown>> | undefined;
                     if (mkts && mkts.length > 0) {
                       const m = mkts[0];
+                      if (m.closed === true || m.active === false) continue;
                       // Parse tokens
                       const tokenIds = JSON.parse((m.clobTokenIds as string) || '[]') as string[];
                       const outcomes = JSON.parse((m.outcomes as string) || '[]') as string[];
@@ -11177,14 +11180,17 @@ async function executeTool(
               } else if (tf === '1h') {
                 // Hourly: {coinName}-up-or-down-{month}-{day}-{hour}{am/pm}-et
                 const now = new Date();
-                const etOffset = -5 * 60; // ET = UTC-5
+                const etOffset = -5 * 60; // ET = UTC-5 (EST; adjust to -4 for EDT if needed)
                 const etTime = new Date(now.getTime() + (etOffset + now.getTimezoneOffset()) * 60000);
                 const months = ['january','february','march','april','may','june','july','august','september','october','november','december'];
-                const month = months[etTime.getMonth()];
-                const day = etTime.getDate();
-                // Try current hour and next hour
-                for (const hourOff of [0, 1]) {
-                  const h24 = (etTime.getHours() + hourOff) % 24;
+                // Try current hour, next hour, and +2 hours (handles midnight rollover)
+                let foundHourly = false;
+                for (const hourOff of [0, 1, 2]) {
+                  if (foundHourly) break;
+                  const target = new Date(etTime.getTime() + hourOff * 3600000);
+                  const month = months[target.getMonth()];
+                  const day = target.getDate();
+                  const h24 = target.getHours();
                   const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
                   const ampm = h24 < 12 ? 'am' : 'pm';
                   slug = `${coinName}-up-or-down-${month}-${day}-${h12}${ampm}-et`;
@@ -11192,9 +11198,12 @@ async function executeTool(
                   const events = await res.json() as Array<Record<string, unknown>>;
                   if (Array.isArray(events) && events.length > 0) {
                     const ev = events[0];
+                    // Skip resolved/closed markets
+                    if (ev.closed === true || ev.active === false) continue;
                     const mkts = ev.markets as Array<Record<string, unknown>> | undefined;
                     if (mkts && mkts.length > 0) {
                       const m = mkts[0];
+                      if (m.closed === true || m.active === false) continue;
                       const tokenIds = JSON.parse((m.clobTokenIds as string) || '[]') as string[];
                       const outcomes = JSON.parse((m.outcomes as string) || '[]') as string[];
                       const prices = JSON.parse((m.outcomePrices as string) || '[]') as string[];
@@ -11207,38 +11216,48 @@ async function executeTool(
                         conditionId: m.conditionId, endDate: m.endDate,
                         tokens, volume: m.volumeNum, liquidity: m.liquidityNum,
                       });
-                      break;
+                      foundHourly = true;
                     }
                   }
                 }
               } else if (tf === 'daily') {
                 // Daily: {coinName}-up-or-down-on-{month}-{day}
+                // Try today and tomorrow (today's may be resolved)
                 const now = new Date();
                 const etOffset = -5 * 60;
                 const etTime = new Date(now.getTime() + (etOffset + now.getTimezoneOffset()) * 60000);
                 const months = ['january','february','march','april','may','june','july','august','september','october','november','december'];
-                const month = months[etTime.getMonth()];
-                const day = etTime.getDate();
-                slug = `${coinName}-up-or-down-on-${month}-${day}`;
-                const res = await fetch(`${GAMMA}/events?slug=${slug}`);
-                const events = await res.json() as Array<Record<string, unknown>>;
-                if (Array.isArray(events) && events.length > 0) {
-                  const ev = events[0];
-                  const mkts = ev.markets as Array<Record<string, unknown>> | undefined;
-                  if (mkts && mkts.length > 0) {
-                    const m = mkts[0];
-                    const tokenIds = JSON.parse((m.clobTokenIds as string) || '[]') as string[];
-                    const outcomes = JSON.parse((m.outcomes as string) || '[]') as string[];
-                    const prices = JSON.parse((m.outcomePrices as string) || '[]') as string[];
-                    const tokens: Record<string, unknown> = {};
-                    for (let i = 0; i < outcomes.length; i++) {
-                      tokens[outcomes[i]] = { tokenId: tokenIds[i], price: prices[i] };
+                let foundDaily = false;
+                for (const dayOff of [0, 1]) {
+                  if (foundDaily) break;
+                  const target = new Date(etTime.getTime() + dayOff * 86400000);
+                  const month = months[target.getMonth()];
+                  const day = target.getDate();
+                  slug = `${coinName}-up-or-down-on-${month}-${day}`;
+                  const res = await fetch(`${GAMMA}/events?slug=${slug}`);
+                  const events = await res.json() as Array<Record<string, unknown>>;
+                  if (Array.isArray(events) && events.length > 0) {
+                    const ev = events[0];
+                    // Skip resolved/closed markets
+                    if (ev.closed === true || ev.active === false) continue;
+                    const mkts = ev.markets as Array<Record<string, unknown>> | undefined;
+                    if (mkts && mkts.length > 0) {
+                      const m = mkts[0];
+                      if (m.closed === true || m.active === false) continue;
+                      const tokenIds = JSON.parse((m.clobTokenIds as string) || '[]') as string[];
+                      const outcomes = JSON.parse((m.outcomes as string) || '[]') as string[];
+                      const prices = JSON.parse((m.outcomePrices as string) || '[]') as string[];
+                      const tokens: Record<string, unknown> = {};
+                      for (let i = 0; i < outcomes.length; i++) {
+                        tokens[outcomes[i]] = { tokenId: tokenIds[i], price: prices[i] };
+                      }
+                      results.push({
+                        coin: c, timeframe: 'daily', slug, title: ev.title,
+                        conditionId: m.conditionId, endDate: m.endDate,
+                        tokens, volume: m.volumeNum, liquidity: m.liquidityNum,
+                      });
+                      foundDaily = true;
                     }
-                    results.push({
-                      coin: c, timeframe: 'daily', slug, title: ev.title,
-                      conditionId: m.conditionId, endDate: m.endDate,
-                      tokens, volume: m.volumeNum, liquidity: m.liquidityNum,
-                    });
                   }
                 }
               }
