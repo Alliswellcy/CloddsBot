@@ -120,8 +120,29 @@ export interface SessionManager {
   dispose: () => void;
 }
 
-/** Max conversation history to keep (prevent unbounded growth) */
-const MAX_HISTORY_LENGTH = 20;
+/** Max messages to keep in the session JSON blob for LLM context.
+ *  Full history lives in the messages table (unlimited, append-only). */
+const MAX_LLM_CONTEXT = 20;
+
+/** When compacting, keep this many recent messages and summarize the rest */
+const COMPACT_KEEP_RECENT = 10;
+
+/**
+ * Extractive summary: compress messages into a concise recap.
+ * No LLM call needed — just extracts key lines from each message.
+ */
+function compactMessages(messages: ConversationMessage[]): string {
+  const lines: string[] = [];
+  for (const msg of messages) {
+    const text = msg.content.trim();
+    if (!text) continue;
+    const prefix = msg.role === 'user' ? 'User' : 'Assistant';
+    // Take first meaningful sentence (up to 120 chars)
+    const firstLine = text.split(/[.!?\n]/).filter(s => s.trim().length > 5)[0]?.trim() || text.slice(0, 120);
+    lines.push(`- ${prefix}: ${firstLine.slice(0, 120)}`);
+  }
+  return lines.join('\n');
+}
 
 /** Default session configuration */
 const DEFAULT_CONFIG: SessionConfig = {
@@ -271,6 +292,7 @@ export function createSessionManager(db: Database, configInput?: Config['session
       ...context,
       messageCount: 0,
       conversationHistory: [],
+      contextSummary: undefined,
       checkpoint: undefined,
       checkpointRestoredAt: undefined,
     };
@@ -495,30 +517,70 @@ export function createSessionManager(db: Database, configInput?: Config['session
     },
 
     addToHistory(session: Session, role: 'user' | 'assistant', content: string): void {
+      // Write to messages table (append-only, one row per message)
+      if (db.insertMessage) {
+        db.insertMessage(session.id, role, content);
+      }
+
+      // Keep in-memory LLM context window (last N messages only)
       if (!session.context.conversationHistory) {
         session.context.conversationHistory = [];
       }
-
       session.context.conversationHistory.push({
         role,
         content,
         timestamp: Date.now(),
       });
 
-      // Trim to max length (keep most recent)
-      if (session.context.conversationHistory.length > MAX_HISTORY_LENGTH) {
-        session.context.conversationHistory = session.context.conversationHistory.slice(-MAX_HISTORY_LENGTH);
+      // Compact: when history exceeds window, summarize oldest and keep recent
+      if (session.context.conversationHistory.length > MAX_LLM_CONTEXT) {
+        const overflow = session.context.conversationHistory.length - COMPACT_KEEP_RECENT;
+        if (overflow > 0) {
+          const evicted = session.context.conversationHistory.slice(0, overflow);
+          const newSummary = compactMessages(evicted);
+          // Append to existing summary (cap at ~3000 chars to keep JSON blob small)
+          const combined = session.context.contextSummary
+            ? session.context.contextSummary + '\n' + newSummary
+            : newSummary;
+          // If too long, keep only the most recent portion
+          session.context.contextSummary = combined.length > 3000
+            ? combined.slice(-3000)
+            : combined;
+          // Keep only the recent messages
+          session.context.conversationHistory = session.context.conversationHistory.slice(overflow);
+        }
       }
 
       this.updateSession(session);
     },
 
     getHistory(session: Session): ConversationMessage[] {
-      return session.context.conversationHistory || [];
+      const history = session.context.conversationHistory || [];
+      let recent = history.slice(-MAX_LLM_CONTEXT);
+
+      // Prepend context summary so the LLM has awareness of earlier conversation
+      if (session.context.contextSummary) {
+        // Ensure recent starts with 'user' to maintain alternation after our synthetic pair
+        if (recent.length > 0 && recent[0].role === 'assistant') {
+          recent = recent.slice(1);
+        }
+        return [
+          { role: 'user' as const, content: `[Previous conversation summary]\n${session.context.contextSummary}`, timestamp: 0 },
+          { role: 'assistant' as const, content: 'Understood. I have context from our earlier conversation.', timestamp: 0 },
+          ...recent,
+        ];
+      }
+
+      return recent;
     },
 
     clearHistory(session: Session): void {
       session.context.conversationHistory = [];
+      session.context.contextSummary = undefined;
+      // Clear messages table too
+      if (db.deleteSessionMessages) {
+        db.deleteSessionMessages(session.id);
+      }
       this.updateSession(session);
       logger.info({ sessionKey: session.key }, 'Conversation history cleared');
     },
@@ -529,7 +591,7 @@ export function createSessionManager(db: Database, configInput?: Config['session
         createdAt: Date.now(),
         messageCount: session.context.messageCount,
         summary,
-        history: history.slice(-MAX_HISTORY_LENGTH),
+        history: history.slice(-MAX_LLM_CONTEXT),
       };
       this.updateSession(session);
       logger.info({ sessionKey: session.key }, 'Session checkpoint saved');

@@ -315,6 +315,13 @@ http://127.0.0.1:18789/webchat
 If you set `WEBCHAT_TOKEN`, the browser will prompt for it on first load and
 store it in localStorage.
 
+Features:
+- **Unlimited message history** — messages stored in a dedicated database table, not capped
+- **Sidebar with tabs** — Chats, Projects, Artifacts, Code
+- **Thinking indicator** — shows elapsed time while the AI is generating
+- **Context compacting** — older messages are summarized so the AI never fully forgets earlier conversation
+- **Session management** — create, rename, delete, search across conversations
+
 ## Chat commands
 
 Send these in any supported channel (Telegram, Discord, WebChat, etc.):

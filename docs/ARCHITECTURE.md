@@ -726,15 +726,30 @@ CREATE TABLE users (
   UNIQUE(platform, platform_user_id)
 );
 
--- Sessions
+-- Sessions (context stores LLM window + preferences, NOT full history)
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
+  key TEXT UNIQUE,
   user_id TEXT REFERENCES users(id),
-  messages TEXT,  -- JSON array
-  context TEXT,   -- JSON
+  channel TEXT,
+  chat_id TEXT,
+  chat_type TEXT,
+  context TEXT,   -- JSON: last 20 msgs for LLM, contextSummary, preferences
+  title TEXT,
   created_at INTEGER,
   updated_at INTEGER
 );
+
+-- Messages (append-only, one row per message — unlimited history)
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  role TEXT NOT NULL,       -- 'user' | 'assistant'
+  content TEXT NOT NULL,
+  timestamp INTEGER NOT NULL
+);
+CREATE INDEX idx_messages_session ON messages(session_id);
+CREATE INDEX idx_messages_session_ts ON messages(session_id, timestamp);
 
 -- Trades
 CREATE TABLE trades (

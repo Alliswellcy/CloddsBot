@@ -622,6 +622,12 @@ export interface Database {
   listWebchatSessions(userId: string): Array<{ id: string; title: string | undefined; updatedAt: number; messageCount: number; lastMessage: string | undefined }>;
   updateSessionTitle(key: string, title: string): void;
 
+  // Messages (append-only per-row storage)
+  insertMessage(sessionId: string, role: string, content: string): string;
+  getSessionMessages(sessionId: string, options?: { limit?: number; before?: number }): Array<{ id: string; role: string; content: string; timestamp: number }>;
+  getSessionMessageCount(sessionId: string): number;
+  deleteSessionMessages(sessionId: string): void;
+
   // Cron jobs
   listCronJobs(): Array<{
     id: string;
@@ -2325,12 +2331,21 @@ export async function initDatabase(): Promise<Database> {
     },
 
     deleteSession(key: string): void {
+      // Delete messages first, then session
+      const session = getOne<{ id: string }>('SELECT id FROM sessions WHERE key = ?', [key]);
+      if (session) {
+        run('DELETE FROM messages WHERE session_id = ?', [session.id]);
+      }
       run('DELETE FROM sessions WHERE key = ?', [key]);
     },
 
     deleteSessionsBefore(cutoffMs: number): number {
-      const rows = getAll<{ key: string }>('SELECT key FROM sessions WHERE updated_at < ?', [cutoffMs]);
+      const rows = getAll<{ key: string; id: string }>('SELECT key, id FROM sessions WHERE updated_at < ?', [cutoffMs]);
       if (rows.length === 0) return 0;
+      // Delete messages for all expired sessions
+      for (const row of rows) {
+        run('DELETE FROM messages WHERE session_id = ?', [row.id]);
+      }
       run('DELETE FROM sessions WHERE updated_at < ?', [cutoffMs]);
       return rows.length;
     },
@@ -2345,34 +2360,67 @@ export async function initDatabase(): Promise<Database> {
     },
 
     listWebchatSessions(userId: string): Array<{ id: string; title: string | undefined; updatedAt: number; messageCount: number; lastMessage: string | undefined }> {
-      const rows = getAll<{ id: string; title: string | null; context: string; updated_at: number }>(
-        'SELECT id, title, context, updated_at FROM sessions WHERE channel = ? AND user_id = ? ORDER BY updated_at DESC LIMIT 200',
+      const rows = getAll<{ id: string; title: string | null; updated_at: number; msg_count: number; last_content: string | null }>(
+        `SELECT s.id, s.title, s.updated_at,
+                COALESCE(m.cnt, 0) as msg_count,
+                m.last_content
+         FROM sessions s
+         LEFT JOIN (
+           SELECT session_id,
+                  COUNT(*) as cnt,
+                  (SELECT content FROM messages m2 WHERE m2.session_id = messages.session_id ORDER BY m2.timestamp DESC LIMIT 1) as last_content
+           FROM messages
+           GROUP BY session_id
+         ) m ON m.session_id = s.id
+         WHERE s.channel = ? AND s.user_id = ?
+         ORDER BY s.updated_at DESC LIMIT 200`,
         ['webchat', userId]
       );
-      return rows.map(row => {
-        let messageCount = 0;
-        let lastMessage: string | undefined;
-        try {
-          const ctx = JSON.parse(row.context || '{}');
-          const history = ctx.conversationHistory || [];
-          messageCount = history.length;
-          if (history.length > 0) {
-            const last = history[history.length - 1];
-            lastMessage = typeof last.content === 'string' ? last.content.slice(0, 100) : undefined;
-          }
-        } catch { /* ignore */ }
-        return {
-          id: row.id,
-          title: row.title || undefined,
-          updatedAt: row.updated_at,
-          messageCount,
-          lastMessage,
-        };
-      });
+      return rows.map(row => ({
+        id: row.id,
+        title: row.title || undefined,
+        updatedAt: row.updated_at,
+        messageCount: row.msg_count,
+        lastMessage: row.last_content?.slice(0, 100) || undefined,
+      }));
     },
 
     updateSessionTitle(key: string, title: string): void {
       run('UPDATE sessions SET title = ?, updated_at = ? WHERE key = ?', [title, Date.now(), key]);
+    },
+
+    // Messages (append-only per-row storage)
+    insertMessage(sessionId: string, role: string, content: string): string {
+      const id = `${sessionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const timestamp = Date.now();
+      run(
+        'INSERT INTO messages (id, session_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)',
+        [id, sessionId, role, content, timestamp]
+      );
+      return id;
+    },
+
+    getSessionMessages(sessionId: string, options?: { limit?: number; before?: number }): Array<{ id: string; role: string; content: string; timestamp: number }> {
+      const limit = options?.limit || 500;
+      if (options?.before) {
+        return getAll<{ id: string; role: string; content: string; timestamp: number }>(
+          'SELECT id, role, content, timestamp FROM messages WHERE session_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?',
+          [sessionId, options.before, limit]
+        ).reverse();
+      }
+      return getAll<{ id: string; role: string; content: string; timestamp: number }>(
+        'SELECT id, role, content, timestamp FROM messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?',
+        [sessionId, limit]
+      );
+    },
+
+    getSessionMessageCount(sessionId: string): number {
+      const row = getOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM messages WHERE session_id = ?', [sessionId]);
+      return row?.cnt || 0;
+    },
+
+    deleteSessionMessages(sessionId: string): void {
+      run('DELETE FROM messages WHERE session_id = ?', [sessionId]);
     },
 
     // Cron jobs

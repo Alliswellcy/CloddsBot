@@ -195,6 +195,27 @@ CLODDS_FORCE_HTTPS=true
 CLODDS_IP_RATE_LIMIT=100
 ```
 
+### MCP Server Security
+
+The MCP stdio server includes 5 security layers, all opt-in via environment variables:
+
+| Layer | Env Var | Default | Description |
+|-------|---------|---------|-------------|
+| Tool allowlist | `CLODDS_MCP_ALLOWED_TOOLS` | _(all)_ | Comma-separated list of allowed tool names |
+| Tool blocklist | `CLODDS_MCP_BLOCKED_TOOLS` | _(none)_ | Comma-separated list of blocked tool names |
+| Tool profiles | `CLODDS_MCP_TOOL_PROFILE` | `full` | Predefined access: `read-only`, `trading`, `full` |
+| Rate limiting | `CLODDS_MCP_RATE_LIMIT` | `60` | Max calls per minute per client |
+| Audit logging | `CLODDS_MCP_AUDIT` | `true` | Structured JSON audit logs to stderr |
+
+Input sanitization runs automatically on all tool calls — string arguments are scanned for SQL injection, command injection, XSS, and path traversal patterns using the existing `detectInjection()` function.
+
+```bash
+# Example: restrict MCP to read-only tools with audit logging
+CLODDS_MCP_TOOL_PROFILE=read-only
+CLODDS_MCP_RATE_LIMIT=30
+CLODDS_MCP_AUDIT=true
+```
+
 ---
 
 ## 6. Publishing Checklist ✅

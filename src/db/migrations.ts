@@ -1295,6 +1295,49 @@ const MIGRATIONS: Migration[] = [
     `,
   },
   // Note: Prediction tables are created directly by src/acp/predictions.ts on init
+
+  // ── Migration 15: messages table (append-only, replaces JSON blob) ──
+  {
+    version: 15,
+    name: 'messages_table',
+    up: (db: Database) => {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          timestamp INTEGER NOT NULL
+        );
+      `);
+      db.run('CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);');
+      db.run('CREATE INDEX IF NOT EXISTS idx_messages_session_ts ON messages(session_id, timestamp);');
+
+      // Backfill: migrate existing conversationHistory from sessions.context JSON blobs
+      const rows = db.query<{ id: string; context: string }>(
+        'SELECT id, context FROM sessions WHERE channel = ?',
+        ['webchat']
+      );
+      for (const row of rows) {
+        try {
+          const ctx = JSON.parse(row.context || '{}');
+          const history = ctx.conversationHistory || [];
+          for (let i = 0; i < history.length; i++) {
+            const msg = history[i];
+            const msgId = `${row.id}-backfill-${i}`;
+            const ts = msg.timestamp || Date.now();
+            db.run(
+              'INSERT OR IGNORE INTO messages (id, session_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)',
+              [msgId, row.id, msg.role || 'user', msg.content || '', ts]
+            );
+          }
+        } catch { /* skip unparseable sessions */ }
+      }
+    },
+    down: `
+      DROP TABLE IF EXISTS messages;
+    `,
+  },
 ];
 
 export interface MigrationRunner {

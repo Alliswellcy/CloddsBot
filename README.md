@@ -19,6 +19,7 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> •
+  <a href="#webchat">WebChat</a> •
   <a href="#everything-we-built">Features</a> •
   <a href="#channels">Channels</a> •
   <a href="#prediction-markets-10">Markets</a> •
@@ -96,6 +97,37 @@ npm run build && npm start
 ```
 </details>
 
+## WebChat
+
+Built-in browser interface at `http://localhost:18789/webchat` -- no setup, no third-party dependencies.
+
+**Interface:**
+- Claude-style sidebar with 4 tabs: Chats, Projects, Artifacts, Code
+- Create and organize conversations into project folders
+- Artifacts and code blocks auto-extracted from chat history
+- One-click copy for code snippets, search across all conversations
+
+**Thinking Indicator:**
+- Live spinner with elapsed timer while the AI generates
+- Replaces generic typing dots with actual status feedback
+
+**Unlimited History:**
+- Every message stored in a dedicated database table (append-only, one row per message)
+- No message cap -- scroll back through entire conversation history
+- Paginated loading so even 1000+ message chats load instantly
+
+**Context Compacting:**
+- Older messages automatically summarized so the AI never fully forgets what you discussed
+- LLM receives a compressed recap of earlier conversation + the last 20 messages
+- Similar to how Claude.ai and ChatGPT handle long conversations
+
+**Session Management:**
+- Create, rename, delete conversations via REST API
+- Profile menu with language selector (9 languages), help, about
+- Persistent across restarts (SQLite-backed)
+
+---
+
 ## CLI
 
 ```bash
@@ -119,7 +151,7 @@ See [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) for all commands.
 
 | Category | What's Included |
 |----------|-----------------|
-| **Messaging** | 21 platforms (Telegram, Discord, WhatsApp, Slack, Teams, Signal, Matrix, iMessage, LINE, Nostr, and more) |
+| **Messaging** | 21 platforms (Telegram, Discord, WhatsApp, Slack, Teams, Signal, Matrix, iMessage, LINE, Nostr, and more) + built-in WebChat with sidebar, unlimited history, context compacting |
 | **Prediction Markets** | 10 platforms (Polymarket, Kalshi, Betfair, Smarkets, Drift, Manifold, Metaculus, PredictIt, Opinion.xyz, Predict.fun) |
 | **Perpetual Futures** | 7 exchanges (Binance, Bybit, Hyperliquid, MEXC, Drift, Percolator, Lighter) with up to 200x leverage, database tracking, A/B testing |
 | **On-Chain Perps** | Percolator protocol — Solana-native perpetual futures with pluggable matchers, keeper cranking, real-time slab polling |
@@ -144,9 +176,9 @@ See [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) for all commands.
 
 ## Channels (21)
 
-Telegram, Discord, Slack, WhatsApp, Teams, Matrix, Signal, iMessage, LINE, Nostr, Twitch, WebChat, and more.
+Telegram, Discord, Slack, WhatsApp, Teams, Matrix, Signal, iMessage, LINE, Nostr, Twitch, **WebChat**, and more.
 
-All channels support real-time sync, rich media, and offline queuing.
+All channels support real-time sync, rich media, and offline queuing. WebChat is the built-in browser interface with a full sidebar UI, unlimited message history, and conversation management -- see [WebChat](#webchat) above.
 
 ---
 

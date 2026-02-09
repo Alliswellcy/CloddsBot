@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
   <title>Clodds</title>
   <link rel="icon" href="https://cloddsbot.com/logo.png" type="image/png">
-  <link rel="stylesheet" href="css/app.css?v=4">
+  <link rel="stylesheet" href="css/app.css?v=6">
 </head>
 <body>
   <div class="app">
@@ -24,10 +24,118 @@
           </svg>
         </button>
       </div>
+
       <div class="sidebar-search">
-        <input class="sidebar-search-input" type="text" placeholder="Search chats..." aria-label="Search conversations" />
+        <input class="sidebar-search-input" type="text" placeholder="Search..." aria-label="Search" />
       </div>
-      <div class="session-list" role="list" aria-label="Conversations"></div>
+
+      <!-- Nav Tabs -->
+      <div class="sidebar-nav" role="tablist">
+        <button class="sidebar-nav-btn active" data-tab="chats" role="tab" aria-selected="true" title="Chats">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span class="sidebar-nav-label">Chats</span>
+        </button>
+        <button class="sidebar-nav-btn" data-tab="projects" role="tab" aria-selected="false" title="Projects">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>
+          </svg>
+          <span class="sidebar-nav-label">Projects</span>
+        </button>
+        <button class="sidebar-nav-btn" data-tab="artifacts" role="tab" aria-selected="false" title="Artifacts">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          </svg>
+          <span class="sidebar-nav-label">Artifacts</span>
+        </button>
+        <button class="sidebar-nav-btn" data-tab="code" role="tab" aria-selected="false" title="Code">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+          </svg>
+          <span class="sidebar-nav-label">Code</span>
+        </button>
+      </div>
+
+      <!-- Tab Content Panels -->
+      <div class="sidebar-tab-content active" data-panel="chats">
+        <div class="session-list" role="list" aria-label="Conversations"></div>
+      </div>
+
+      <div class="sidebar-tab-content" data-panel="projects">
+        <div class="tab-panel-header">
+          <button class="tab-panel-action" id="new-project-btn" title="New project">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            New Project
+          </button>
+        </div>
+        <div class="project-list" role="list" aria-label="Projects"></div>
+      </div>
+
+      <div class="sidebar-tab-content" data-panel="artifacts">
+        <div class="artifact-list" role="list" aria-label="Artifacts"></div>
+      </div>
+
+      <div class="sidebar-tab-content" data-panel="code">
+        <div class="code-list" role="list" aria-label="Code snippets"></div>
+      </div>
+
+      <!-- Profile Bar -->
+      <div class="sidebar-profile" id="sidebar-profile">
+        <div class="sidebar-profile-avatar" id="profile-avatar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+        </div>
+        <span class="sidebar-profile-name">Profile</span>
+        <svg class="sidebar-profile-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+
+      <!-- Profile Popover -->
+      <div class="profile-popover" id="profile-popover">
+        <div class="popover-item" id="popover-language">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="2" y1="12" x2="22" y2="12"/>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+          </svg>
+          <span>Language</span>
+          <select class="popover-select" id="language-select">
+            <option value="en-US">English</option>
+            <option value="es-ES">Spanish</option>
+            <option value="fr-FR">French</option>
+            <option value="de-DE">German</option>
+            <option value="pt-BR">Portuguese</option>
+            <option value="ja-JP">Japanese</option>
+            <option value="zh-CN">Chinese</option>
+            <option value="ko-KR">Korean</option>
+            <option value="ar-SA">Arabic</option>
+          </select>
+        </div>
+        <div class="popover-item" id="popover-help">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span>Get Help</span>
+        </div>
+        <div class="popover-divider"></div>
+        <div class="popover-item popover-about" id="popover-about">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          <span>About</span>
+          <span class="popover-version">Clodds v1.0</span>
+        </div>
+      </div>
     </aside>
 
     <div class="sidebar-backdrop"></div>
@@ -59,7 +167,11 @@
         <div class="msg-avatar bot-avatar">
           <img class="avatar-img" src="https://cloddsbot.com/logo.png" alt="C" onerror="this.remove();this.parentElement.textContent='C'" />
         </div>
-        <div class="typing-dots"><span></span><span></span><span></span></div>
+        <div class="typing-indicator">
+          <span class="typing-spinner"></span>
+          <span class="typing-label">Thinking</span>
+          <span class="typing-elapsed" id="typing-elapsed"></span>
+        </div>
       </div>
 
       <div class="input-area">
@@ -116,6 +228,6 @@
     </main>
   </div>
 
-  <script type="module" src="js/app.js?v=4"></script>
+  <script type="module" src="js/app.js?v=6"></script>
 </body>
 </html>

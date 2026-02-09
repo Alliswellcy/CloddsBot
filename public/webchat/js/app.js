@@ -73,6 +73,20 @@ class App {
         body: JSON.stringify({ title, userId: this.userId }),
       }).catch(() => {});
     };
+    // Artifact/code click — switch to session and scroll to message
+    this.sidebar.onArtifactClick = (sessionId, messageIndex) => {
+      this._navigateToMessage(sessionId, messageIndex);
+    };
+    this.sidebar.onCodeClick = (sessionId, messageIndex) => {
+      this._navigateToMessage(sessionId, messageIndex);
+    };
+
+    // Language change — update speech recognition (set later once recognition is created)
+    this._recognition = null;
+    this.sidebar.onLanguageChange = (lang) => {
+      if (this._recognition) this._recognition.lang = lang;
+    };
+
     // Chat edit callback — put text back into input
     this.chat.onEdit = (text) => {
       inputEl.value = text;
@@ -218,10 +232,10 @@ class App {
     const micBtn = document.getElementById('mic-btn');
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition && micBtn) {
-      const recognition = new SpeechRecognition();
+      const recognition = this._recognition = new SpeechRecognition();
       recognition.continuous = false;
       recognition.interimResults = true;
-      recognition.lang = 'en-US';
+      recognition.lang = Storage.get('webchat_language') || 'en-US';
       let listening = false;
       let textBeforeVoice = '';
 
@@ -348,6 +362,10 @@ class App {
       } else if (msg.type === 'message') {
         this._setWelcomeMode(false);
         this.chat.addBotMessage(msg.text, msg.messageId, msg.attachments);
+        // Feed new bot message to sidebar for live artifact extraction
+        if (this.activeSessionId && msg.text) {
+          this.sidebar.feedMessages(this.activeSessionId, [{ role: 'assistant', content: msg.text }]);
+        }
         if (document.hidden) {
           this._unreadCount++;
           document.title = `(${this._unreadCount}) New message - Clodds`;
@@ -414,6 +432,8 @@ class App {
         const msgs = data.messages || [];
         this.chat.loadHistory(msgs);
         this._setWelcomeMode(!msgs.length);
+        // Feed to sidebar for artifact/code extraction
+        this.sidebar.feedMessages(sessionId, msgs);
       } else {
         this.chat.clear();
         this.chat.showWelcome();
@@ -452,7 +472,9 @@ class App {
       if (r.ok) {
         const data = await r.json();
         if (this.activeSessionId !== sessionId || this._refreshSeq !== seq) return;
-        this.chat.loadHistory(data.messages || []);
+        const msgs = data.messages || [];
+        this.chat.loadHistory(msgs);
+        this.sidebar.feedMessages(sessionId, msgs);
       }
     } catch { /* ignore */ }
   }
@@ -597,6 +619,33 @@ class App {
 
   _showGreeting() {
     this._setWelcomeMode(true);
+  }
+
+  async _navigateToMessage(sessionId, messageIndex) {
+    // Switch to chats tab
+    this.sidebar.switchTab('chats');
+    // Switch to session if needed
+    if (this.activeSessionId !== sessionId) {
+      await this.switchSession(sessionId);
+    }
+    // Scroll to the message by index
+    const messagesEl = document.getElementById('messages');
+    if (!messagesEl) return;
+    // Messages are direct children of #messages (skipping welcome div)
+    const msgEls = Array.from(messagesEl.children).filter(el => el.classList.contains('msg-row') || el.classList.contains('msg-system'));
+    if (messageIndex >= 0 && messageIndex < msgEls.length) {
+      const target = msgEls[messageIndex];
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Brief highlight
+      target.style.outline = '2px solid var(--accent)';
+      target.style.outlineOffset = '2px';
+      target.style.borderRadius = '8px';
+      setTimeout(() => {
+        target.style.outline = '';
+        target.style.outlineOffset = '';
+        target.style.borderRadius = '';
+      }, 2000);
+    }
   }
 
   _setGenerating(on) {

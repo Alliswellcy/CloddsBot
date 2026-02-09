@@ -7,6 +7,15 @@
 
 import { createInterface } from 'readline';
 import type { JsonRpcRequest, JsonRpcResponse, McpTool } from './index.js';
+import {
+  loadSecurityConfig,
+  isToolAllowed,
+  filterTools,
+  checkRateLimit,
+  sanitizeToolArgs,
+  logAudit,
+  type McpSecurityConfig,
+} from './security.js';
 
 // =============================================================================
 // TYPES
@@ -39,6 +48,7 @@ function errorResponse(id: string | number | undefined, code: number, message: s
 // SKILL LOADER (lazy)
 // =============================================================================
 
+let securityConfig: McpSecurityConfig;
 let skillManifest: string[] | null = null;
 let executeSkill: ((msg: string) => Promise<{ handled: boolean; response?: string; error?: string }>) | null = null;
 
@@ -119,7 +129,8 @@ async function handleRequest(req: JsonRpcRequest): Promise<JsonRpcResponse | nul
 
     case 'tools/list': {
       const tools = await listTools();
-      return { jsonrpc: '2.0', id: req.id, result: { tools } };
+      const filtered = filterTools(tools, securityConfig);
+      return { jsonrpc: '2.0', id: req.id, result: { tools: filtered } };
     }
 
     case 'tools/call': {
@@ -127,7 +138,33 @@ async function handleRequest(req: JsonRpcRequest): Promise<JsonRpcResponse | nul
       if (!params?.name) {
         return errorResponse(req.id, -32602, 'Missing tool name');
       }
-      const toolResult = await callTool(params.name, params.arguments ?? {});
+
+      const toolName = params.name;
+      const toolArgs = params.arguments ?? {};
+      const clientId = 'stdio'; // single client for stdio transport
+      const start = Date.now();
+
+      // Security pipeline
+      if (!isToolAllowed(toolName, securityConfig)) {
+        logAudit({ tool: toolName, clientId, timestamp: start, durationMs: 0, success: false, error: 'blocked' }, securityConfig);
+        return errorResponse(req.id, -32600, `Tool not allowed: ${toolName}`);
+      }
+
+      const rateLimitMsg = checkRateLimit(clientId, securityConfig);
+      if (rateLimitMsg) {
+        logAudit({ tool: toolName, clientId, timestamp: start, durationMs: 0, success: false, error: 'rate_limited' }, securityConfig);
+        return errorResponse(req.id, -32000, rateLimitMsg);
+      }
+
+      const injectionMsg = sanitizeToolArgs(toolArgs);
+      if (injectionMsg) {
+        logAudit({ tool: toolName, clientId, timestamp: start, durationMs: 0, success: false, error: 'injection' }, securityConfig);
+        return errorResponse(req.id, -32602, injectionMsg);
+      }
+
+      const toolResult = await callTool(toolName, toolArgs);
+      const durationMs = Date.now() - start;
+      logAudit({ tool: toolName, clientId, timestamp: start, durationMs, success: !toolResult.isError }, securityConfig);
       return { jsonrpc: '2.0', id: req.id, result: toolResult };
     }
 
@@ -141,6 +178,8 @@ async function handleRequest(req: JsonRpcRequest): Promise<JsonRpcResponse | nul
 // =============================================================================
 
 export async function startMcpServer(): Promise<void> {
+  securityConfig = loadSecurityConfig();
+
   // Redirect log output to stderr so stdout is clean for JSON-RPC
   process.env.LOG_LEVEL = 'silent';
 

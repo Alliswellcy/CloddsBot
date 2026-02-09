@@ -278,11 +278,33 @@ export class Chat {
 
   showTyping() {
     this.typingEl.classList.add('visible');
+    this._typingStart = Date.now();
+    this._updateTypingElapsed();
+    this._typingTimer = setInterval(() => this._updateTypingElapsed(), 1000);
     this._scrollToBottom();
   }
 
   hideTyping() {
     this.typingEl.classList.remove('visible');
+    clearInterval(this._typingTimer);
+    this._typingTimer = null;
+    const elapsed = document.getElementById('typing-elapsed');
+    if (elapsed) elapsed.textContent = '';
+  }
+
+  _updateTypingElapsed() {
+    const elapsed = document.getElementById('typing-elapsed');
+    if (!elapsed || !this._typingStart) return;
+    const secs = Math.floor((Date.now() - this._typingStart) / 1000);
+    if (secs < 1) {
+      elapsed.textContent = '';
+    } else if (secs < 60) {
+      elapsed.textContent = `${secs}s`;
+    } else {
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      elapsed.textContent = `${m}m ${s}s`;
+    }
   }
 
   renderMarkdown(text) {

@@ -508,6 +508,8 @@ export interface SessionContext {
   preferences: Record<string, unknown>;
   /** Conversation history for multi-turn context (last N messages) */
   conversationHistory: ConversationMessage[];
+  /** Compressed summary of older conversation that was evicted from the window */
+  contextSummary?: string;
   /** Checkpoint for conversation resumption */
   checkpoint?: {
     createdAt: number;

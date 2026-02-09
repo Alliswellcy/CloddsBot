@@ -108,6 +108,25 @@ The following features are **disabled by default** for security:
 
 Only enable these if you understand the risks. For untrusted code execution, use Docker containers or `isolated-vm`.
 
+### MCP Server Security
+
+When exposing Clodds as an MCP tool server, use these controls to restrict access:
+
+| Feature | Environment Variable | Default |
+|---------|---------------------|---------|
+| Tool blocklist | `CLODDS_MCP_BLOCKED_TOOLS` | _(none)_ |
+| Tool allowlist | `CLODDS_MCP_ALLOWED_TOOLS` | _(all)_ |
+| Tool profile | `CLODDS_MCP_TOOL_PROFILE` | `full` |
+| Rate limit | `CLODDS_MCP_RATE_LIMIT` | `60` calls/min |
+| Audit logging | `CLODDS_MCP_AUDIT` | `true` |
+
+Tool profiles provide predefined access levels:
+- **`read-only`** — feeds, markets, analytics, portfolio, watchlist, search
+- **`trading`** — read-only + trading, execution, order skills
+- **`full`** — all tools (default)
+
+All string arguments are scanned for injection patterns (SQL, command, XSS, path traversal) before execution.
+
 ### Rate Limiting & HTTPS
 
 Production deployments should enable:
