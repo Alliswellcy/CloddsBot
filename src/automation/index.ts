@@ -9,4 +9,4 @@ export { createWebhookManager, createWebhookMiddleware } from './webhooks';
 export type { Webhook, WebhookManager } from './webhooks';
 
 export { createHeartbeatService } from './heartbeats';
-export type { HeartbeatConfig, HeartbeatService, HeartbeatSender, HeartbeatGenerator } from './heartbeats';
+export type { HeartbeatConfig, HeartbeatService, AgentTurnFn, DeliverFn } from './heartbeats';

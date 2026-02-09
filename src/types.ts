@@ -1275,6 +1275,13 @@ export interface Config {
     portfolioSyncIntervalMs?: number;
     stopLossIntervalMs?: number;
   };
+  heartbeat?: {
+    enabled: boolean;
+    intervalMinutes?: number;
+    quietHoursStart?: number;
+    quietHoursEnd?: number;
+    workspaceDir?: string;
+  };
   monitoring?: MonitoringConfig;
   marketCache?: {
     enabled?: boolean;
