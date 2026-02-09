@@ -144,7 +144,7 @@
     "zod": "^3.22.4"
   },
   "overrides": {
-    "axios": "^1.7.4",
+    "axios": "^1.13.5",
     "undici": "^6.23.0",
     "nanoid": "^3.3.8",
     "bigint-buffer": "npm:@vekexasia/bigint-buffer2@^1.0.4",
