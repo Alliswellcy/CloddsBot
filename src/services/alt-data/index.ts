@@ -5,7 +5,7 @@
  * and emits TradingSignals on the signal bus when confidence thresholds are met.
  */
 
-import type { SignalBus, TradingSignal } from '../../gateway/signal-bus.js';
+import type { SignalBus, TradingSignal } from '../../types/signal-bus.js';
 import type { AltDataConfig, AltDataEvent, AltDataSignal, AltDataService } from './types.js';
 export type { AltDataService };
 import { createSentimentAnalyzer } from './sentiment.js';

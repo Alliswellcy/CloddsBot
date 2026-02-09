@@ -30,7 +30,10 @@ import { logger } from '../utils/logger';
 import { createSkillManager, SkillManager } from '../skills/loader';
 import { FeedManager } from '../feeds';
 import { Database } from '../db';
-import { CredentialsManager, createCredentialsManager } from '../credentials';
+import type { CredentialsManager } from '../types';
+// credentials module is private (gitignored) — lazy-load at runtime
+const _credPath = '../credentials/index.js';
+const _loadCredentials = () => import(_credPath).then(m => m.createCredentialsManager) as Promise<(db: import('../db').Database) => CredentialsManager>;
 import { SessionManager } from '../sessions';
 import { MemoryService, createClaudeSummarizer } from '../memory';
 import { RateLimiter, RateLimitConfig, access, AccessControl, sanitize, detectInjection } from '../security/index';
@@ -16695,6 +16698,7 @@ export async function createAgentManager(
 
   const client = new Anthropic({ apiKey });
   const skills = createSkillManager(config.agents.defaults.workspace);
+  const createCredentialsManager = await _loadCredentials();
   const credentials = createCredentialsManager(db);
   const transcription = createTranscriptionTool(config.agents.defaults.workspace);
   const files = createFileTool(config.agents.defaults.workspace);

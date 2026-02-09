@@ -36,7 +36,9 @@ export type {
 export { createBittensorService } from './service.js';
 
 // Server routes are private (gitignored) — lazy import for hosted deployment only
+// server module is private (gitignored) — use variable path to skip TS resolution
+const _serverPath = './server.js';
 export async function createBittensorRouter(service: BittensorService) {
-  const { createBittensorRouter: create } = await import('./server.js');
+  const { createBittensorRouter: create } = await import(_serverPath);
   return create(service);
 }

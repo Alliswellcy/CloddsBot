@@ -4,7 +4,7 @@
 
 import type { Database } from '../../db';
 import type { TradingContext, PolymarketCredentials, KalshiCredentials, Config } from '../../types';
-import type { CredentialsManager } from '../../credentials';
+import type { CredentialsManager } from '../../types';
 import type { FeedManager } from '../../feeds';
 
 /**

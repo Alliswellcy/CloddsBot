@@ -540,6 +540,30 @@ export interface ConversationMessage {
 }
 
 // =============================================================================
+// CREDENTIALS
+// =============================================================================
+
+/**
+ * Credentials Manager interface — manages encrypted per-user trading credentials.
+ * Implementation lives in src/credentials/ (private, gitignored).
+ */
+export interface CredentialsManager {
+  setCredentials: (
+    userId: string,
+    platform: Platform,
+    credentials: PolymarketCredentials | KalshiCredentials | ManifoldCredentials
+  ) => Promise<void>;
+  getCredentials: <T>(userId: string, platform: Platform) => Promise<T | null>;
+  hasCredentials: (userId: string, platform: Platform) => Promise<boolean>;
+  deleteCredentials: (userId: string, platform: Platform) => Promise<void>;
+  markSuccess: (userId: string, platform: Platform) => Promise<void>;
+  markFailure: (userId: string, platform: Platform) => Promise<void>;
+  isInCooldown: (userId: string, platform: Platform) => Promise<boolean>;
+  buildTradingContext: (userId: string, sessionKey: string) => Promise<TradingContext>;
+  listUserPlatforms: (userId: string) => Promise<Platform[]>;
+}
+
+// =============================================================================
 // MESSAGES
 // =============================================================================
 

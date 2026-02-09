@@ -2,15 +2,18 @@
  * Gateway command - starts the Clodds server
  */
 
-import { createGateway } from '../../gateway/index';
 import { loadConfig } from '../../utils/config';
 import { logger } from '../../utils/logger';
+
+// gateway module is private (gitignored) — lazy-load at runtime
+const _gwPath = '../../gateway/index.js';
 
 export async function startGateway(options: { config?: string }): Promise<void> {
   try {
     logger.info('Starting Clodds gateway...');
 
     const config = await loadConfig(options.config);
+    const { createGateway } = await import(_gwPath);
     const gateway = await createGateway(config);
     await gateway.start();
 

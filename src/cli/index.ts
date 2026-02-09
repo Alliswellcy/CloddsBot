@@ -55,7 +55,8 @@ program
     logger.info('Starting Clodds...');
     const config = await loadConfig();
     configureHttpClient(config.http);
-    const { createGateway } = await import('../gateway/index.js');
+    const _gwPath = '../gateway/index.js';
+    const { createGateway } = await import(_gwPath);
     const gateway = await createGateway(config);
     await gateway.start();
 

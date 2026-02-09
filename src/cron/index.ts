@@ -28,7 +28,7 @@ import type {
   User,
   KalshiCredentials,
 } from '../types';
-import type { CredentialsManager } from '../credentials';
+import type { CredentialsManager } from '../types';
 import { buildKalshiHeadersForUrl } from '../utils/kalshi-auth';
 import { logger } from '../utils/logger';
 

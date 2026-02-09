@@ -13,7 +13,8 @@ async function execute(args: string): Promise<string> {
   const cmd = parts[0]?.toLowerCase() || 'list';
 
   try {
-    const { createCredentialsManager } = await import('../../../credentials/index');
+    const _credPath = '../../../credentials/index';
+    const { createCredentialsManager } = await import(_credPath);
     const { createDatabase } = await import('../../../db/index');
     const db = createDatabase();
     const manager = createCredentialsManager(db);

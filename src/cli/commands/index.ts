@@ -3955,7 +3955,8 @@ export function createOnboardCommand(program: Command): void {
           const config = await loadConfig();
           const { configureHttpClient } = await import('../../utils/http.js');
           configureHttpClient(config.http);
-          const { createGateway } = await import('../../gateway/index.js');
+          const _gwPath = '../../gateway/index.js';
+          const { createGateway } = await import(_gwPath);
 
           process.stdout.write(`  ${dim('Starting...')}`);
           const gateway = await createGateway(config);
