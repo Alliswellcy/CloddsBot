@@ -9,6 +9,7 @@
  * - Configurable timeouts and thresholds
  */
 
+import v8 from 'v8';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -234,7 +235,8 @@ export class HealthChecker {
    */
   async checkLiveness(): Promise<LivenessResult> {
     const memUsage = process.memoryUsage();
-    const heapPercent = (memUsage.heapUsed / memUsage.heapTotal) * 100;
+    const heapLimit = v8.getHeapStatistics().heap_size_limit;
+    const heapPercent = (memUsage.heapUsed / heapLimit) * 100;
 
     // Check event loop latency
     const eventLoopLatency = await this.measureEventLoopLatency();
@@ -245,7 +247,7 @@ export class HealthChecker {
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       memory: {
         heapUsed: memUsage.heapUsed,
-        heapTotal: memUsage.heapTotal,
+        heapTotal: heapLimit,
         rss: memUsage.rss,
         percent: heapPercent,
       },
@@ -442,7 +444,8 @@ export function createMemoryHealthCheck(
 ): HealthCheckFn {
   return async (): Promise<ComponentHealth> => {
     const memUsage = process.memoryUsage();
-    const heapPercent = (memUsage.heapUsed / memUsage.heapTotal) * 100;
+    const heapLimit = v8.getHeapStatistics().heap_size_limit;
+    const heapPercent = (memUsage.heapUsed / heapLimit) * 100;
 
     let status: HealthStatus = 'healthy';
     if (heapPercent >= criticalThresholdPct) {
@@ -457,7 +460,7 @@ export function createMemoryHealthCheck(
       details: {
         type: 'memory',
         heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
-        heapTotalMB: Math.round(memUsage.heapTotal / 1024 / 1024),
+        heapTotalMB: Math.round(heapLimit / 1024 / 1024),
         rssMB: Math.round(memUsage.rss / 1024 / 1024),
         heapPercent: Math.round(heapPercent * 100) / 100,
         warnThresholdPct,

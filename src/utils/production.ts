@@ -4,6 +4,7 @@
  * Health checks, error tracking, and graceful shutdown handling
  */
 
+import v8 from 'v8';
 import { logger } from './logger';
 
 // =============================================================================
@@ -55,9 +56,10 @@ export function checkDatabase(db: { query: <T>(sql: string) => T[] }): CheckResu
  */
 export function checkMemory(): CheckResult {
   const used = process.memoryUsage();
+  const heapLimit = v8.getHeapStatistics().heap_size_limit;
   const heapUsedMB = Math.round(used.heapUsed / 1024 / 1024);
-  const heapTotalMB = Math.round(used.heapTotal / 1024 / 1024);
-  const usagePercent = (used.heapUsed / used.heapTotal) * 100;
+  const heapTotalMB = Math.round(heapLimit / 1024 / 1024);
+  const usagePercent = (used.heapUsed / heapLimit) * 100;
 
   if (usagePercent > 90) {
     return {
