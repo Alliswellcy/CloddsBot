@@ -211,6 +211,12 @@ export function inferToolMetadata(toolName: string, description: string): ToolMe
     ['docker_', 'docker'],
     ['git_', 'git'],
     ['shell_history_', 'shell'],
+    ['exec_', 'exec'],
+    ['paper_', 'paper'],
+    ['email_', 'email'],
+    ['sms_', 'sms'],
+    ['sql_', 'sql'],
+    ['subagent_', 'subagent'],
   ];
 
   for (const [prefix, platform] of platformPrefixes) {
@@ -218,6 +224,18 @@ export function inferToolMetadata(toolName: string, description: string): ToolMe
       meta.platform = platform;
       break;
     }
+  }
+
+  // Exact name matches for tools without prefix convention
+  const exactMatches: Record<string, string> = {
+    bittensor: 'bittensor',
+    orderbook_imbalance: 'polymarket',
+    setup_polymarket_credentials: 'polymarket',
+    setup_kalshi_credentials: 'kalshi',
+    setup_manifold_credentials: 'manifold',
+  };
+  if (!meta.platform && exactMatches[toolName]) {
+    meta.platform = exactMatches[toolName];
   }
 
   // Category inference
@@ -270,38 +288,44 @@ const PLATFORM_KEYWORDS: [RegExp, string][] = [
   [/\bmanifold\b/i, 'manifold'],
   [/\bmetaculus\b/i, 'metaculus'],
   [/\bpredictit\b/i, 'predictit'],
-  [/\bpredict\.?fun\b/i, 'predictfun'],
+  [/\bpredict[\s._-]?fun\b/i, 'predictfun'],
   [/\bdrift\b/i, 'drift'],
-  [/\bopinion(?:\.trade)?\b/i, 'opinion'],
-  [/\bbinance\b/i, 'binance'],
+  [/\bopinion\b/i, 'opinion'],
+  [/\bbinance\b|futures\b/i, 'binance'],
   [/\bbybit\b/i, 'bybit'],
   [/\bmexc\b/i, 'mexc'],
   [/\bhyper(?:liquid)?\b/i, 'hyperliquid'],
   [/\b(?:solana|sol)\b/i, 'solana'],
-  [/\bjupiter|jup\b/i, 'solana'],
-  [/\bpump\.?fun\b/i, 'pumpfun'],
-  [/\bbags\b/i, 'bags'],
+  [/\b(?:jupiter|jup)\b/i, 'solana'],
+  [/\bpump[\s._-]?fun\b|pumpfun\b/i, 'pumpfun'],
+  [/\bbags(?:\.fm)?\b/i, 'bags'],
   [/\bmeteora\b/i, 'meteora'],
   [/\braydium\b/i, 'raydium'],
   [/\borca\b/i, 'orca'],
-  [/\bcoingecko\b/i, 'coingecko'],
+  [/\bcoingecko\b|coin\s?gecko\b/i, 'coingecko'],
   [/\byahoo\b/i, 'yahoo'],
-  [/\bacp\b/i, 'acp'],
+  [/\bacp\b|marketplace\b/i, 'acp'],
   [/\bswarm\b/i, 'swarm'],
   [/\bwormhole\b/i, 'wormhole'],
   [/\bdocker\b/i, 'docker'],
   [/\bgit\b/i, 'git'],
-  [/\bevm|ethereum|eth\b/i, 'evm'],
+  [/\b(?:evm|ethereum|eth)\b/i, 'evm'],
+  [/\busdc[\s._-]?bridge\b|\bcross[\s._-]?chain\b/i, 'usdc_bridge'],
+  [/\bbittensor\b|\btao\b|\bbtcli\b/i, 'bittensor'],
+  [/\bqmd\b/i, 'qmd'],
 ];
 
 /**
  * Category keywords for preloading tools from user messages.
  */
 const CATEGORY_KEYWORDS: [RegExp, string][] = [
-  [/\b(?:buy|sell|order|trade|swap|long|short|execute)\b/i, 'trading'],
+  [/\b(?:buy|sell|order|swap|long|short|execute|cancel|bridge|bet|dca|limit)\b/i, 'trading'],
   [/\b(?:pool|liquidity|farm|lp|harvest|stake)\b/i, 'defi'],
+  [/\b(?:positions?|balances?|portfolio|pnl|margin|leverage)\b/i, 'portfolio'],
+  [/\b(?:price|quote|chart|orderbook|ticker|volume|spread)\b/i, 'market_data'],
   [/\b(?:credential|api.key|setup|login|connect)\b/i, 'admin'],
   [/\b(?:file|shell|docker|email|sms|sql|webhook|deploy)\b/i, 'infrastructure'],
+  [/\b(?:alert|watch|whale|notification|news)\b/i, 'alerts'],
 ];
 
 /**
