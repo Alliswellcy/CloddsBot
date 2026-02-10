@@ -1,5 +1,5 @@
 /**
- * Skill Executor - Central registry for all 118 bundled CLI skill handlers.
+ * Skill Executor - Central registry for all 119 bundled CLI skill handlers.
  *
  * ARCHITECTURE:
  * - Each skill lives in src/skills/bundled/<name>/index.ts
@@ -147,6 +147,7 @@ const SKILL_MANIFEST: string[] = [
   'voice',
   'weather',
   'webhooks',
+  'x-research',
   'whale-tracking',
   'yoink',
   // ── New features (Feb 2026) ──
@@ -295,6 +296,7 @@ const SKILL_CATEGORIES: Record<string, SkillCategory> = {
   'tweet-ideas': 'Social & Identity',
   'voice': 'Social & Identity',
   'tts': 'Social & Identity',
+  'x-research': 'Social & Identity',
 
   // Utilities
   'doctor': 'Utilities',
@@ -351,6 +353,8 @@ const COMMAND_ALIASES: Record<string, string> = {
   '/onboard': '/setup',
   '/start': '/setup',
   '/mrg': '/marginfi',
+  '/twitter': '/x',
+  '/x-research': '/x',
 };
 
 // =============================================================================
@@ -444,6 +448,16 @@ const ENV_VAR_DOCS: Record<string, { description: string; example: string; url?:
   CLODDS_CREDENTIAL_KEY: {
     description: 'Encryption key for credential storage (AES-256-GCM)',
     example: 'export CLODDS_CREDENTIAL_KEY="your-32-char-key"',
+  },
+  COMPOSIO_API_KEY: {
+    description: 'Composio API key for X/Twitter research (free tier available)',
+    example: 'export COMPOSIO_API_KEY="your-composio-key"',
+    url: 'https://composio.dev',
+  },
+  COMPOSIO_CONNECTION_ID: {
+    description: 'Composio X/Twitter connection ID for authenticated requests',
+    example: 'export COMPOSIO_CONNECTION_ID="your-connection-id"',
+    url: 'https://composio.dev',
   },
 };
 

@@ -1,4 +1,4 @@
-# Skills Catalog (118 Skills)
+# Skills Catalog (119 Skills)
 
 Complete reference of all bundled skills organized by category. Use `/skills` in chat to browse interactively, or `/skills search <query>` to find skills by keyword.
 
@@ -139,7 +139,7 @@ Complete reference of all bundled skills organized by category. Use `/skills` in
 | search-config | `/search-config` | Vector/BM25 search weights configuration |
 | setup | `/setup` | Interactive setup wizard for skill configuration |
 
-## Social & Identity (8 skills)
+## Social & Identity (9 skills)
 
 | Skill | Command | Description |
 |-------|---------|-------------|
@@ -151,6 +151,7 @@ Complete reference of all bundled skills organized by category. Use `/skills` in
 | tweet-ideas | `/tweet-ideas` | Generate tweets from market trends |
 | voice | `/voice` | Voice recognition and audio input |
 | tts | `/tts` | Text-to-speech via ElevenLabs |
+| x-research | `/x` | X/Twitter research via Composio — search, threads, profiles, watchlists |
 
 ## Utilities (13 skills)
 
@@ -214,3 +215,4 @@ Complete reference of all bundled skills organized by category. Use `/skills` in
 | `/mrg` | `/marginfi` |
 | `/audit` | `/security` |
 | `/config`, `/onboard` | `/setup` |
+| `/twitter`, `/x-research` | `/x` |
