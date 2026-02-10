@@ -27,7 +27,7 @@ import {
   ExecutionServiceRef,
 } from '../types';
 import { logger } from '../utils/logger';
-import { ToolRegistry, inferToolMetadata, CORE_TOOL_NAMES } from './tool-registry.js';
+import { ToolRegistry, inferToolMetadata, CORE_TOOL_NAMES, detectToolHints } from './tool-registry.js';
 import { createSkillManager, SkillManager } from '../skills/loader';
 import { FeedManager } from '../feeds';
 import { Database } from '../db';
@@ -17239,6 +17239,35 @@ export async function createAgentManager(
 
       // Dynamic tool loading: tools discovered via tool_search during this request
       const discoveredTools: ToolDefinition[] = [];
+
+      // Preload platform/category tools based on user message keywords
+      if (TOOL_SEARCH_ENABLED && processedMessage.text) {
+        const hints = detectToolHints(processedMessage.text);
+        const preloaded = new Set<string>();
+        for (const platform of hints.platforms) {
+          for (const t of toolRegistry.searchByPlatform(platform)) {
+            if (!preloaded.has(t.name)) {
+              discoveredTools.push(t);
+              preloaded.add(t.name);
+            }
+          }
+        }
+        for (const category of hints.categories) {
+          for (const t of toolRegistry.searchByCategory(category)) {
+            if (!preloaded.has(t.name)) {
+              discoveredTools.push(t);
+              preloaded.add(t.name);
+            }
+          }
+        }
+        if (discoveredTools.length > 0) {
+          logger.info({
+            platforms: hints.platforms,
+            categories: hints.categories,
+            preloaded: discoveredTools.length,
+          }, 'Preloaded tools from message keywords');
+        }
+      }
 
       // Add all messages to context manager for tracking
       for (const msg of messages) {

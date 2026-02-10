@@ -261,6 +261,76 @@ export function inferToolMetadata(toolName: string, description: string): ToolMe
 }
 
 /**
+ * Keyword → platform mapping for preloading tools from user messages.
+ * Matches common ways users refer to platforms.
+ */
+const PLATFORM_KEYWORDS: [RegExp, string][] = [
+  [/\bpoly(?:market)?\b/i, 'polymarket'],
+  [/\bkalshi\b/i, 'kalshi'],
+  [/\bmanifold\b/i, 'manifold'],
+  [/\bmetaculus\b/i, 'metaculus'],
+  [/\bpredictit\b/i, 'predictit'],
+  [/\bpredict\.?fun\b/i, 'predictfun'],
+  [/\bdrift\b/i, 'drift'],
+  [/\bopinion(?:\.trade)?\b/i, 'opinion'],
+  [/\bbinance\b/i, 'binance'],
+  [/\bbybit\b/i, 'bybit'],
+  [/\bmexc\b/i, 'mexc'],
+  [/\bhyper(?:liquid)?\b/i, 'hyperliquid'],
+  [/\b(?:solana|sol)\b/i, 'solana'],
+  [/\bjupiter|jup\b/i, 'solana'],
+  [/\bpump\.?fun\b/i, 'pumpfun'],
+  [/\bbags\b/i, 'bags'],
+  [/\bmeteora\b/i, 'meteora'],
+  [/\braydium\b/i, 'raydium'],
+  [/\borca\b/i, 'orca'],
+  [/\bcoingecko\b/i, 'coingecko'],
+  [/\byahoo\b/i, 'yahoo'],
+  [/\bacp\b/i, 'acp'],
+  [/\bswarm\b/i, 'swarm'],
+  [/\bwormhole\b/i, 'wormhole'],
+  [/\bdocker\b/i, 'docker'],
+  [/\bgit\b/i, 'git'],
+  [/\bevm|ethereum|eth\b/i, 'evm'],
+];
+
+/**
+ * Category keywords for preloading tools from user messages.
+ */
+const CATEGORY_KEYWORDS: [RegExp, string][] = [
+  [/\b(?:buy|sell|order|trade|swap|long|short|execute)\b/i, 'trading'],
+  [/\b(?:pool|liquidity|farm|lp|harvest|stake)\b/i, 'defi'],
+  [/\b(?:credential|api.key|setup|login|connect)\b/i, 'admin'],
+  [/\b(?:file|shell|docker|email|sms|sql|webhook|deploy)\b/i, 'infrastructure'],
+];
+
+/**
+ * Analyze a user message and return platform/category hints for tool preloading.
+ * Returns the detected platforms and categories to preload tools for.
+ */
+export function detectToolHints(message: string): { platforms: string[]; categories: string[] } {
+  const platforms = new Set<string>();
+  const categories = new Set<string>();
+
+  for (const [pattern, platform] of PLATFORM_KEYWORDS) {
+    if (pattern.test(message)) {
+      platforms.add(platform);
+    }
+  }
+
+  for (const [pattern, category] of CATEGORY_KEYWORDS) {
+    if (pattern.test(message)) {
+      categories.add(category);
+    }
+  }
+
+  return {
+    platforms: Array.from(platforms),
+    categories: Array.from(categories),
+  };
+}
+
+/**
  * Core tool names that are always sent with every API call.
  * These cover the most common use cases without needing tool_search.
  */
