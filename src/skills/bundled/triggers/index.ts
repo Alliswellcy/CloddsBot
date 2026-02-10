@@ -26,7 +26,9 @@ async function getCronService() {
       sendMessage: async () => null,
     });
     return cronInstance;
-  } catch {
+  } catch (error) {
+    const { logger } = await import('../../../utils/logger');
+    logger.error({ error }, 'Failed to initialize cron service');
     return null;
   }
 }

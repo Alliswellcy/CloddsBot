@@ -46,8 +46,16 @@ async function execute(args: string): Promise<string> {
         // follow() only accepts address; apply size/delay via updateConfig
         service.follow(addr);
         const configUpdates: Record<string, unknown> = {};
-        if (sizeIdx >= 0) configUpdates.fixedSize = parseFloat(size);
-        if (delayIdx >= 0) configUpdates.copyDelayMs = parseInt(delay, 10);
+        if (sizeIdx >= 0) {
+          const parsedSize = parseFloat(size);
+          if (isNaN(parsedSize)) return 'Size must be a number. Usage: /copy follow <address> [--size <amount>]';
+          configUpdates.fixedSize = parsedSize;
+        }
+        if (delayIdx >= 0) {
+          const parsedDelay = parseInt(delay, 10);
+          if (isNaN(parsedDelay)) return 'Delay must be a number. Usage: /copy follow <address> [--delay <ms>]';
+          configUpdates.copyDelayMs = parsedDelay;
+        }
         if (Object.keys(configUpdates).length > 0) service.updateConfig(configUpdates);
         return `**Following Wallet**\n\nAddress: \`${addr}\`\nSize: $${size}\nDelay: ${delay}ms\nStatus: Active\nMode: Dry run (use /copy config set dryRun false to go live)`;
       }
@@ -84,7 +92,8 @@ async function execute(args: string): Promise<string> {
       }
 
       case 'trades': {
-        const limit = parseInt(parts[1] || '10', 10);
+        const parsedLimit = parseInt(parts[1] || '10', 10);
+        const limit = isNaN(parsedLimit) ? 10 : parsedLimit;
         const trades = service.getCopiedTrades(limit);
         if (!trades.length) return 'No copied trades yet.';
         let output = `**Recent Copied Trades** (last ${trades.length})\n\n`;

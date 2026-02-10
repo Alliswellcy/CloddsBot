@@ -108,7 +108,7 @@ async function handleQuote(args: string[]): Promise<string> {
       `Input: ${amount} ${from.toUpperCase()}`,
       `Output: ${formatNumber(parseFloat(quote.outputAmount))} ${to.toUpperCase()}`,
       `Min Output: ${formatNumber(parseFloat(quote.outputAmountMin))} (0.5% slippage)`,
-      `Fee Tier: ${(quote.feeTier || 0) / 10000}%`,
+      `Fee Tier: ${(quote.feeTier ?? 0) / 10000}%`,
       quote.gasEstimate ? `Gas Est: ${quote.gasEstimate}` : '',
     ].filter(Boolean).join('\n');
   } catch (error) {

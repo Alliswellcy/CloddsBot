@@ -27,7 +27,8 @@ async function execute(args: string): Promise<string> {
     switch (cmd) {
       case 'status': {
         const platforms = Object.keys(PLATFORM_FEES);
-        const avgExec = Object.values(EXECUTION_TIMES).reduce((a, b) => a + (b ?? 0), 0) / Object.keys(EXECUTION_TIMES).length;
+        const execKeys = Object.keys(EXECUTION_TIMES);
+        const avgExec = execKeys.length > 0 ? Object.values(EXECUTION_TIMES).reduce((a, b) => a + (b ?? 0), 0) / execKeys.length : 0;
         return `**Smart Order Router**\n\n` +
           `Mode: ${routerConfig.mode}\n` +
           `Enabled platforms: ${platforms.join(', ')}\n` +

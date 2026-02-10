@@ -177,6 +177,7 @@ export async function execute(args: string): Promise<string> {
 
       if (command === 'whale') {
         const amount = parseFloat(parts[1] || '10000');
+        if (isNaN(amount)) return 'Invalid whale amount. Usage: /alert whale <amount>';
         const market = parts.slice(2).join(' ') || 'all';
         return handleCreateVolumeAlert(market, amount);
       }
@@ -205,7 +206,8 @@ export async function execute(args: string): Promise<string> {
         if (action === 'change' && remainder[1]) {
           const pct = parseFloat(remainder[1].replace('%', ''));
           if (isNaN(pct)) return 'Invalid percentage.';
-          const window = remainder[2] ? parseInt(remainder[2], 10) : 300;
+          const parsedWindow = remainder[2] ? parseInt(remainder[2], 10) : 300;
+          const window = isNaN(parsedWindow) ? 300 : parsedWindow;
           return handleCreateChangeAlert(market, pct, window);
         }
 

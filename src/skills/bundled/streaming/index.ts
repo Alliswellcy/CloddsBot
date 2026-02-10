@@ -49,8 +49,16 @@ async function execute(args: string): Promise<string> {
         const updates: Record<string, unknown> = {};
 
         if (key === 'enabled') updates.enabled = value === 'true';
-        else if (key === 'minChunkSize') updates.minChunkSize = parseInt(value, 10);
-        else if (key === 'flushIntervalMs') updates.flushIntervalMs = parseInt(value, 10);
+        else if (key === 'minChunkSize') {
+          const parsed = parseInt(value, 10);
+          if (isNaN(parsed)) return 'minChunkSize must be a valid number.';
+          updates.minChunkSize = parsed;
+        }
+        else if (key === 'flushIntervalMs') {
+          const parsed = parseInt(value, 10);
+          if (isNaN(parsed)) return 'flushIntervalMs must be a valid number.';
+          updates.flushIntervalMs = parsed;
+        }
         else if (key === 'typingIndicator') updates.typingIndicator = value === 'true';
         else return `Unknown config key: ${key}. Valid keys: enabled, minChunkSize, flushIntervalMs, typingIndicator`;
 

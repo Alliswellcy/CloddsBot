@@ -81,9 +81,9 @@ async function execute(args: string): Promise<string> {
       default: {
         const edge = parseFloat(parts[0]);
         const winRate = parseFloat(parts[1]);
-        const bankroll = parseFloat(parts[2]) || 1000;
+        const bankroll = parts[2] !== undefined ? parseFloat(parts[2]) : 1000;
 
-        if (isNaN(edge) || isNaN(winRate)) {
+        if (isNaN(edge) || isNaN(winRate) || isNaN(bankroll)) {
           return 'Usage: /sizing <edge%> <winrate%> [bankroll]\n\nExample: /sizing 5 60 10000';
         }
 

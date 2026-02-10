@@ -38,8 +38,8 @@ async function execute(args: string): Promise<string> {
       default:
         return helpText();
     }
-  } catch {
-    return helpText();
+  } catch (error) {
+    return `Metrics error: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 

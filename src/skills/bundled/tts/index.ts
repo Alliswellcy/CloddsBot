@@ -100,8 +100,8 @@ async function execute(args: string): Promise<string> {
           `Voice: ${voiceId || 'default (Bella)'}`;
       }
     }
-  } catch {
-    return helpText();
+  } catch (error) {
+    return `TTS error: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 

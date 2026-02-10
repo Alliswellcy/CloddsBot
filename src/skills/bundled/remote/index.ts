@@ -45,8 +45,10 @@ async function execute(args: string): Promise<string> {
 
         const sshHost = parts[1];
         const localPort = parseInt(getFlag(parts, '--local') || getFlag(parts, '--port') || '8080', 10);
+        if (isNaN(localPort)) return 'Local port must be a number.';
         const remoteHost = getFlag(parts, '--remote-host') || 'localhost';
         const remotePort = parseInt(getFlag(parts, '--remote-port') || '80', 10);
+        if (isNaN(remotePort)) return 'Remote port must be a number.';
         const sshUser = getFlag(parts, '--user');
         const sshKey = getFlag(parts, '--key');
 

@@ -98,8 +98,8 @@ function getConfigFromEnv() {
     matcherProgram: process.env.PERCOLATOR_MATCHER_PROGRAM,
     matcherContext: process.env.PERCOLATOR_MATCHER_CONTEXT,
     oracleAddress: process.env.PERCOLATOR_ORACLE,
-    lpIndex: process.env.PERCOLATOR_LP_INDEX ? (parseInt(process.env.PERCOLATOR_LP_INDEX, 10) || 0) : 0,
-    spreadBps: process.env.PERCOLATOR_SPREAD_BPS ? (parseInt(process.env.PERCOLATOR_SPREAD_BPS, 10) || 50) : 50,
+    lpIndex: process.env.PERCOLATOR_LP_INDEX ? (isNaN(parseInt(process.env.PERCOLATOR_LP_INDEX, 10)) ? 0 : parseInt(process.env.PERCOLATOR_LP_INDEX, 10)) : 0,
+    spreadBps: process.env.PERCOLATOR_SPREAD_BPS ? (isNaN(parseInt(process.env.PERCOLATOR_SPREAD_BPS, 10)) ? 50 : parseInt(process.env.PERCOLATOR_SPREAD_BPS, 10)) : 50,
     dryRun: process.env.PERCOLATOR_DRY_RUN !== 'false',
     pollIntervalMs: 2000,
   };

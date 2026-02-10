@@ -74,7 +74,7 @@ async function execute(args: string): Promise<string> {
     }
 
     case 'errors': {
-      const n = parseInt(parts[1] || '10', 10);
+      const n = parseInt(parts[1] || '10', 10) || 10;
       try {
         const { alertManager } = await import('../../../monitoring/alerts');
         const errors = alertManager.getHistory({ level: 'critical', limit: n });

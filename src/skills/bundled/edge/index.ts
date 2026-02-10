@@ -78,7 +78,7 @@ async function execute(args: string): Promise<string> {
         const odds = parseFloat(parts[2] || '');
         const bankroll = parseFloat(parts[3] || '100');
 
-        if (isNaN(probability) || isNaN(odds)) {
+        if (isNaN(probability) || isNaN(odds) || isNaN(bankroll)) {
           return 'Usage: /edge kelly <probability> <odds> [bankroll]\n\n' +
             'probability: Your estimated win probability (0-1 or 0-100)\n' +
             'odds: Decimal odds (e.g., 2.0 = even money)\n' +
@@ -123,8 +123,8 @@ async function execute(args: string): Promise<string> {
       default:
         return helpText();
     }
-  } catch {
-    return helpText();
+  } catch (error) {
+    return `Edge error: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 

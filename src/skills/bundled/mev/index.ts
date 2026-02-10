@@ -45,7 +45,7 @@ async function execute(args: string): Promise<string> {
 
       case 'slippage': {
         const amt = parseFloat(parts[1]);
-        const liquidity = parseFloat(parts[2]) || 100000;
+        const liquidity = isNaN(parseFloat(parts[2])) ? 100000 : parseFloat(parts[2]);
         if (isNaN(amt)) return 'Usage: /mev slippage <amount> [liquidity]';
         const slippage = mev.calculateSafeSlippage(amt, liquidity);
         return `**Safe Slippage for $${amt}**\n\nRecommended: ${slippage} bps (${(slippage / 100).toFixed(2)}%)\nLiquidity: $${liquidity.toLocaleString()}`;
