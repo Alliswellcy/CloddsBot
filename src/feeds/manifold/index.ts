@@ -68,7 +68,7 @@ export async function createManifoldFeed(): Promise<ManifoldFeed> {
     marketTypeCache.set(m.id, m.outcomeType);
 
     if (m.outcomeType === 'BINARY' || m.outcomeType === 'PSEUDO_NUMERIC') {
-      const prob = m.probability || 0.5;
+      const prob = m.probability ?? 0.5;
       outcomes = [
         {
           id: `${m.id}-yes`,

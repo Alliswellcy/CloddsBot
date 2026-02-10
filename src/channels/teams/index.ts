@@ -93,11 +93,19 @@ export async function createTeamsChannel(
   const allowFrom = new Set(config.allowFrom || []);
   const teamAllowlist = new Set(config.teamAllowlist || []);
 
-  // Store service URLs for sending messages
+  // Store service URLs for sending messages (bounded to prevent memory leaks)
   const serviceUrls = new Map<string, string>();
+  const MAX_SERVICE_URLS = 10000;
 
-  /** Get access token for Bot Framework */
+  /** Get access token for Bot Framework (cached with expiry) */
+  let cachedToken: { token: string; expiresAt: number } | null = null;
+
   async function getAccessToken(): Promise<string> {
+    // Return cached token if still valid (with 60s safety margin)
+    if (cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {
+      return cachedToken.token;
+    }
+
     const response = await fetch(
       'https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token',
       {
@@ -118,7 +126,9 @@ export async function createTeamsChannel(
       throw new Error(`Failed to get access token: ${response.status}`);
     }
 
-    const data = await response.json() as { access_token: string };
+    const data = await response.json() as { access_token: string; expires_in?: number };
+    const expiresInMs = (data.expires_in ?? 3600) * 1000;
+    cachedToken = { token: data.access_token, expiresAt: Date.now() + expiresInMs };
     return data.access_token;
   }
 
@@ -165,7 +175,11 @@ export async function createTeamsChannel(
 
   /** Handle incoming activity */
   async function handleActivity(activity: TeamsActivity): Promise<OutgoingActivity | null> {
-    // Store service URL for this conversation
+    // Store service URL for this conversation (evict oldest if at capacity)
+    if (serviceUrls.size >= MAX_SERVICE_URLS) {
+      const oldest = serviceUrls.keys().next().value as string | undefined;
+      if (oldest) serviceUrls.delete(oldest);
+    }
     serviceUrls.set(activity.conversation.id, activity.serviceUrl);
 
     // Only handle message activities
@@ -391,6 +405,10 @@ export async function createTeamsChannel(
     },
 
     // Expose activity handler for webhook integration
+    // WARNING: Teams webhook events should be verified at the gateway layer by
+    // validating the JWT Bearer token in the Authorization header against
+    // the Bot Framework OpenID metadata. This adapter does not perform
+    // JWT verification itself — callers MUST validate before invoking.
     handleEvent: handleActivity as (event: unknown) => Promise<unknown>,
   };
 }

@@ -81,7 +81,7 @@ export class Counter {
 
   get(labels: MetricLabels = {}): number {
     const key = this.getKey(labels);
-    return this.values.get(key)?.value || 0;
+    return this.values.get(key)?.value ?? 0;
   }
 
   getAll(): MetricValue[] {
@@ -145,7 +145,7 @@ export class Gauge {
 
   get(labels: MetricLabels = {}): number {
     const key = this.getKey(labels);
-    return this.values.get(key)?.value || 0;
+    return this.values.get(key)?.value ?? 0;
   }
 
   getAll(): MetricValue[] {

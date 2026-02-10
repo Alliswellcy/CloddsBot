@@ -260,11 +260,20 @@ export function createHandleService(): HandleService {
       const database = getDb();
       const now = Date.now();
 
-      database.run(
-        `INSERT INTO acp_handles (handle, agent_id, owner_address, created_at)
-         VALUES (?, ?, ?, ?)`,
-        [normalized, agentId, ownerAddress, now]
-      );
+      try {
+        database.run(
+          `INSERT INTO acp_handles (handle, agent_id, owner_address, created_at)
+           VALUES (?, ?, ?, ?)`,
+          [normalized, agentId, ownerAddress, now]
+        );
+      } catch (err: unknown) {
+        // Handle PRIMARY KEY constraint violation from concurrent registration
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('UNIQUE') || msg.includes('PRIMARY KEY') || msg.includes('constraint')) {
+          throw new Error(`Handle @${normalized} is already taken`);
+        }
+        throw err;
+      }
 
       logger.info({ handle: normalized, agentId }, 'Handle registered');
 
@@ -558,7 +567,7 @@ export function createTakeoverService(): TakeoverService {
       const result = database.query<{ count: number }>(
         'SELECT changes() as count'
       );
-      const count = result[0]?.count || 0;
+      const count = result[0]?.count ?? 0;
 
       if (count > 0) {
         logger.info({ count }, 'Expired stale takeover bids');
@@ -930,8 +939,6 @@ export function createLeaderboardService(): LeaderboardService {
       database.run('DELETE FROM acp_leaderboard WHERE period = ?', [period]);
 
       // Compute rankings
-      let revenueRank = 0;
-      let lastRevenue = '';
       const entries: Array<{
         agentId: string;
         handle?: string;
@@ -946,7 +953,7 @@ export function createLeaderboardService(): LeaderboardService {
           handle: profile.handle || undefined,
           revenue: parseFloat(profile.total_revenue),
           transactions: profile.total_transactions,
-          rating: profile.average_rating || 0,
+          rating: profile.average_rating ?? 0,
         };
         entries.push(entry);
       }
@@ -1077,8 +1084,8 @@ function rowToHandle(row: HandleRow): Handle {
     agentId: row.agent_id,
     ownerAddress: row.owner_address,
     createdAt: row.created_at,
-    transferredAt: row.transferred_at || undefined,
-    previousOwner: row.previous_owner || undefined,
+    transferredAt: row.transferred_at ?? undefined,
+    previousOwner: row.previous_owner ?? undefined,
   };
 }
 
@@ -1089,11 +1096,11 @@ function rowToBid(row: BidRow): TakeoverBid {
     bidderAddress: row.bidder_address,
     amount: row.amount,
     currency: row.currency,
-    escrowId: row.escrow_id || undefined,
+    escrowId: row.escrow_id ?? undefined,
     status: row.status as TakeoverBid['status'],
     expiresAt: row.expires_at,
     createdAt: row.created_at,
-    resolvedAt: row.resolved_at || undefined,
+    resolvedAt: row.resolved_at ?? undefined,
   };
 }
 
@@ -1132,9 +1139,9 @@ function rowToLeaderboard(row: LeaderboardRow): LeaderboardEntry {
   return {
     agentId: row.agent_id,
     handle: row.handle || undefined,
-    rankRevenue: row.rank_revenue || undefined,
-    rankTransactions: row.rank_transactions || undefined,
-    rankRating: row.rank_rating || undefined,
+    rankRevenue: row.rank_revenue ?? undefined,
+    rankTransactions: row.rank_transactions ?? undefined,
+    rankRating: row.rank_rating ?? undefined,
     score: row.score,
     period: row.period as LeaderboardEntry['period'],
     updatedAt: row.updated_at,

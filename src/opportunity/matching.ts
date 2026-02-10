@@ -428,11 +428,19 @@ export function createMarketMatcher(
     // Only flag if there are specific numbers that differ significantly
     const uniqueToA = [...setA].filter((n) => {
       // Check if there's a close number in B
-      return ![...setB].some((b) => Math.abs(n - b) / Math.max(n, b) < 0.1);
+      return ![...setB].some((b) => {
+        const maxVal = Math.max(Math.abs(n), Math.abs(b));
+        if (maxVal === 0) return true; // Both zero = same
+        return Math.abs(n - b) / maxVal < 0.1;
+      });
     });
 
     const uniqueToB = [...setB].filter((n) => {
-      return ![...setA].some((a) => Math.abs(n - a) / Math.max(n, a) < 0.1);
+      return ![...setA].some((a) => {
+        const maxVal = Math.max(Math.abs(n), Math.abs(a));
+        if (maxVal === 0) return true; // Both zero = same
+        return Math.abs(n - a) / maxVal < 0.1;
+      });
     });
 
     if (uniqueToA.length > 0 && uniqueToB.length > 0) {

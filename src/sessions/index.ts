@@ -245,6 +245,8 @@ function generateSessionKey(
 export function createSessionManager(db: Database, configInput?: Config['session']): SessionManager {
   const sessions = new Map<string, Session>();
   const sessionsById = new Map<string, Session>();
+  /** Prevent concurrent getOrCreateSession from creating duplicate sessions for the same key */
+  const pendingCreates = new Map<string, Promise<Session>>();
 
   // Merge with defaults
   const config: SessionConfig = {
@@ -391,7 +393,10 @@ export function createSessionManager(db: Database, configInput?: Config['session
     const now = Date.now();
     const maxAgeMs = config.cleanup.maxAgeDays * 24 * 60 * 60 * 1000;
     const idleMs = config.cleanup.idleDays * 24 * 60 * 60 * 1000;
-    const cutoff = Math.min(now - maxAgeMs, now - idleMs);
+    // Use Math.max to pick the more recent cutoff (stricter threshold).
+    // With maxAgeDays=30 and idleDays=14, we want the 14-day cutoff so
+    // sessions idle for 14+ days are cleaned up, not only those idle 30+ days.
+    const cutoff = Math.max(now - maxAgeMs, now - idleMs);
 
     if (!Number.isFinite(cutoff)) return;
 
@@ -399,7 +404,8 @@ export function createSessionManager(db: Database, configInput?: Config['session
     let removed = 0;
     for (const [key, session] of sessions) {
       const updatedAt = session.updatedAt?.getTime?.() ?? 0;
-      if (updatedAt && updatedAt < cutoff) {
+      // Treat unparseable dates (updatedAt === 0) as stale so they get cleaned up
+      if (updatedAt === 0 || updatedAt < cutoff) {
         sessions.delete(key);
         sessionsById.delete(session.id);
         removed++;
@@ -423,61 +429,80 @@ export function createSessionManager(db: Database, configInput?: Config['session
         return session;
       }
 
-      // Check database
-      session = db.getSession(key);
-      if (session) {
-        sessions.set(key, session);
-        sessionsById.set(session.id, session);
-        return session;
+      // Deduplicate concurrent creates for the same key
+      const pending = pendingCreates.get(key);
+      if (pending) {
+        return pending;
       }
 
-      // Ensure user exists
-      let user = db.getUserByPlatformId(message.platform, message.userId);
-      if (!user) {
-        user = {
-          id: crypto.randomUUID(),
-          platform: message.platform,
-          platformUserId: message.userId,
-          settings: {
-            alertsEnabled: true,
-            digestEnabled: false,
-            defaultPlatforms: ['polymarket'],
-            notifyOnEdge: false,
-            edgeThreshold: 0.1,
-          },
-          createdAt: new Date(),
-          lastActiveAt: new Date(),
-        };
-        db.createUser(user);
-      }
+      const createPromise = (async (): Promise<Session> => {
+        try {
+          // Re-check cache after acquiring the "lock" (another caller may have resolved first)
+          let s = sessions.get(key);
+          if (s) return s;
 
-      // Create new session
-      session = {
-        id: crypto.randomUUID(),
-        key,
-        userId: user.id,
-        channel: message.platform,
-        accountId: message.accountId,
-        chatId: message.chatId,
-        chatType: message.chatType,
-        context: {
-          messageCount: 0,
-          lastMarkets: [],
-          preferences: {},
-          conversationHistory: [],
-        },
-        history: [],
-        lastActivity: new Date(),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+          // Check database
+          s = db.getSession(key);
+          if (s) {
+            sessions.set(key, s);
+            sessionsById.set(s.id, s);
+            return s;
+          }
 
-      db.createSession(session);
-      sessions.set(key, session);
-      sessionsById.set(session.id, session);
+          // Ensure user exists
+          let user = db.getUserByPlatformId(message.platform, message.userId);
+          if (!user) {
+            user = {
+              id: crypto.randomUUID(),
+              platform: message.platform,
+              platformUserId: message.userId,
+              settings: {
+                alertsEnabled: true,
+                digestEnabled: false,
+                defaultPlatforms: ['polymarket'],
+                notifyOnEdge: false,
+                edgeThreshold: 0.1,
+              },
+              createdAt: new Date(),
+              lastActiveAt: new Date(),
+            };
+            db.createUser(user);
+          }
 
-      logger.info({ key, scope: config.dmScope }, 'Created new session');
-      return session;
+          // Create new session
+          s = {
+            id: crypto.randomUUID(),
+            key,
+            userId: user.id,
+            channel: message.platform,
+            accountId: message.accountId,
+            chatId: message.chatId,
+            chatType: message.chatType,
+            context: {
+              messageCount: 0,
+              lastMarkets: [],
+              preferences: {},
+              conversationHistory: [],
+            },
+            history: [],
+            lastActivity: new Date(),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+
+          db.createSession(s);
+          sessions.set(key, s);
+          sessionsById.set(s.id, s);
+
+          logger.info({ key, scope: config.dmScope }, 'Created new session');
+          return s;
+        } finally {
+          pendingCreates.delete(key);
+        }
+      })();
+
+      pendingCreates.set(key, createPromise);
+      return createPromise;
     },
 
     getSession(key: string): Session | undefined {

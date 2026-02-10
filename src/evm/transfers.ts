@@ -95,7 +95,7 @@ export async function estimateNativeTransferGas(
   const gasLimit = await provider.estimateGas({ to, value });
   const feeData = await provider.getFeeData();
 
-  const gasPrice = feeData.gasPrice || BigInt(0);
+  const gasPrice = feeData.gasPrice ?? 0n;
   const estimatedCost = formatEther(gasLimit * gasPrice);
 
   return {
@@ -127,7 +127,7 @@ export async function estimateTokenTransferGas(
   const gasLimit = await token.transfer.estimateGas(to, value, { from: fromAddress });
   const feeData = await provider.getFeeData();
 
-  const gasPrice = feeData.gasPrice || BigInt(0);
+  const gasPrice = feeData.gasPrice ?? 0n;
   const estimatedCost = formatEther(gasLimit * gasPrice);
 
   return {
@@ -195,7 +195,7 @@ export async function sendNative(request: TransferRequest): Promise<TransferResu
       amount: `${amount} ${config.nativeCurrency.symbol}`,
     }, 'Sending native token');
 
-    const tx = await wallet.sendTransaction({ to, value });
+    const tx = await wallet.sendTransaction({ to, value, gasLimit: 21000n });
     const receipt = await tx.wait();
 
     return {
@@ -435,7 +435,10 @@ export async function speedUpTransaction(
       };
     }
 
-    const newGasPrice = BigInt(Math.floor(Number(originalTx.gasPrice || 0) * gasPriceMultiplier));
+    const origGasPrice = originalTx.gasPrice ?? 0n;
+    // Multiply using integer arithmetic to avoid precision loss on large bigints
+    const multiplierBps = BigInt(Math.round(gasPriceMultiplier * 10000));
+    const newGasPrice = (origGasPrice * multiplierBps) / 10000n;
 
     const tx = await wallet.sendTransaction({
       to: originalTx.to,
@@ -481,7 +484,9 @@ export async function cancelTransaction(
     const wallet = new Wallet(privateKey, provider);
     const feeData = await provider.getFeeData();
 
-    const gasPrice = BigInt(Math.floor(Number(feeData.gasPrice || 0) * gasPriceMultiplier));
+    const baseGasPrice = feeData.gasPrice ?? 0n;
+    const multiplierBps = BigInt(Math.round(gasPriceMultiplier * 10000));
+    const gasPrice = (baseGasPrice * multiplierBps) / 10000n;
 
     const tx = await wallet.sendTransaction({
       to: wallet.address,

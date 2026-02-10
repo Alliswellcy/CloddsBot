@@ -57,6 +57,7 @@ export async function createMattermostChannel(
   let ws: WebSocket | null = null;
   let botUserId: string | null = null;
   let reconnectTimer: NodeJS.Timeout | null = null;
+  let running = false;
   let seq = 1;
 
   const baseUrl = config.serverUrl.replace(/\/$/, '');
@@ -240,6 +241,7 @@ export async function createMattermostChannel(
     });
 
     ws.on('close', () => {
+      if (!running) return;
       logger.warn('Mattermost WebSocket closed, reconnecting...');
       reconnectTimer = setTimeout(connect, 5000);
     });
@@ -253,6 +255,7 @@ export async function createMattermostChannel(
     platform: 'mattermost',
 
     async start() {
+      running = true;
       logger.info('Starting Mattermost bot');
       try {
         const me = await apiRequest<MattermostUser>('/users/me');
@@ -266,6 +269,7 @@ export async function createMattermostChannel(
     },
 
     async stop() {
+      running = false;
       logger.info('Stopping Mattermost bot');
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

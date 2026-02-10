@@ -8,6 +8,9 @@ import { join, resolve } from 'path';
 import JSON5 from 'json5';
 import { config as dotenvConfig } from 'dotenv';
 import type { Config } from '../types';
+import { createLogger } from './logger';
+
+const logger = createLogger('config');
 
 // Load .env file
 dotenvConfig();
@@ -384,7 +387,7 @@ export async function loadConfig(customPath?: string): Promise<Config> {
       const content = readFileSync(configPath, 'utf-8');
       fileConfig = JSON5.parse(content) as Partial<Config>;
     } catch (err) {
-      console.error(`Failed to parse config file: ${configPath}`, err);
+      logger.error({ configPath, error: err }, 'Failed to parse config file');
     }
   }
 
@@ -452,8 +455,7 @@ export async function loadConfig(customPath?: string): Promise<Config> {
         (config.channels as Record<string, any>)[channel] = channelConfig;
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.warn('Failed to parse CLODDS_GROUP_POLICIES', error);
+      logger.warn({ error }, 'Failed to parse CLODDS_GROUP_POLICIES');
     }
   }
 

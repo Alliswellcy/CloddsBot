@@ -81,6 +81,8 @@ interface BackgroundProcess {
 }
 
 const backgroundProcesses = new Map<number, BackgroundProcess>();
+const MAX_BACKGROUND_PROCESSES = 50;
+const MAX_BG_OUTPUT_BYTES = 512 * 1024; // 512KB per stream
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 const DEFAULT_MAX_OUTPUT = 1024 * 1024; // 1MB
@@ -393,8 +395,30 @@ export function createExecTool(workspaceDir: string, defaultAgentId: string = 'd
 
         // Handle background mode
         if (options.background) {
+          if (child.pid === undefined) {
+            resolve({
+              stdout: '',
+              stderr: 'Failed to spawn background process (no PID)',
+              exitCode: 1,
+              signal: null,
+              timedOut: false,
+            });
+            return;
+          }
+
+          // Evict completed background processes if at capacity.
+          if (backgroundProcesses.size >= MAX_BACKGROUND_PROCESSES) {
+            for (const [pid, bp] of backgroundProcesses) {
+              if (bp.process.killed || bp.process.exitCode !== null) {
+                backgroundProcesses.delete(pid);
+              }
+            }
+          }
+
+          let bgStdoutBytes = 0;
+          let bgStderrBytes = 0;
           const bgProcess: BackgroundProcess = {
-            pid: child.pid!,
+            pid: child.pid,
             command,
             startedAt: new Date(),
             process: child,
@@ -403,14 +427,22 @@ export function createExecTool(workspaceDir: string, defaultAgentId: string = 'd
           };
 
           child.stdout?.on('data', (data) => {
-            bgProcess.stdout.push(data.toString());
+            const chunk = data.toString();
+            if (bgStdoutBytes < MAX_BG_OUTPUT_BYTES) {
+              bgProcess.stdout.push(chunk);
+              bgStdoutBytes += chunk.length;
+            }
           });
 
           child.stderr?.on('data', (data) => {
-            bgProcess.stderr.push(data.toString());
+            const chunk = data.toString();
+            if (bgStderrBytes < MAX_BG_OUTPUT_BYTES) {
+              bgProcess.stderr.push(chunk);
+              bgStderrBytes += chunk.length;
+            }
           });
 
-          backgroundProcesses.set(child.pid!, bgProcess);
+          backgroundProcesses.set(child.pid, bgProcess);
 
           resolve({
             stdout: '',

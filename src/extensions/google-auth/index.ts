@@ -256,7 +256,7 @@ export async function createGoogleAuthExtension(
       const data = (await response.json()) as { access_token: string; expires_in?: number };
       return {
         accessToken: data.access_token,
-        expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
+        expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
         tokenType: 'Bearer',
       };
     } catch (error) {
@@ -393,7 +393,10 @@ export async function createGoogleAuthExtension(
     },
 
     getVertexClient(): VertexClient {
-            const projectId = config.projectId;
+      if (!config.projectId) {
+        throw new Error('Vertex AI requires projectId in GoogleAuthConfig');
+      }
+      const projectId = config.projectId;
       const region = config.region || 'us-central1';
 
       return {

@@ -54,8 +54,8 @@ export async function createMetaculusFeed(): Promise<MetaculusFeed> {
   let pollInterval: NodeJS.Timeout | null = null;
 
   function convertToMarket(q: MetaculusQuestion): Market {
-    const probability = q.community_prediction?.full?.q2 ||
-                       q.community_prediction?.recent?.q2 ||
+    const probability = q.community_prediction?.full?.q2 ??
+                       q.community_prediction?.recent?.q2 ??
                        0.5;
 
     return {

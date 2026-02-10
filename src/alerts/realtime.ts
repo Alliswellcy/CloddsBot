@@ -140,6 +140,16 @@ export function createRealtimeAlertsService(
     const now = Date.now();
     if (last && now - last < cooldownMs) return false;
     cooldowns.set(key, now);
+
+    // Prune expired cooldown entries to prevent unbounded growth
+    if (cooldowns.size > 500) {
+      for (const [k, ts] of cooldowns) {
+        if (now - ts > cooldownMs * 2) {
+          cooldowns.delete(k);
+        }
+      }
+    }
+
     return true;
   }
 

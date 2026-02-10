@@ -185,7 +185,7 @@ export function createTradingSystem(db: Database, config: TradingSystemConfig = 
         outcome: signal.outcome,
         side: signal.type === 'buy' ? 'buy' : 'sell',
         price: signal.price || 0.5,
-        size: signal.size || signal.sizePct
+        size: (signal.size || signal.sizePct)
           ? Math.floor((config.portfolioValue || 10000) * (signal.sizePct || 5) / 100 / (signal.price || 0.5))
           : 100,
         orderType: signal.price ? 'GTC' : 'FOK',

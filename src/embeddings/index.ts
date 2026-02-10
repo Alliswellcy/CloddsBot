@@ -165,8 +165,24 @@ export function createEmbeddingsService(
     ON embeddings_cache(contentHash)
   `);
 
-  // In-memory cache for frequently accessed embeddings
+  // In-memory LRU cache for frequently accessed embeddings (bounded)
+  const MAX_MEMORY_CACHE_SIZE = 2000;
   const memoryCache = new Map<string, EmbeddingVector>();
+
+  /** Evict oldest entries when cache exceeds max size */
+  function memoryCacheSet(key: string, value: EmbeddingVector): void {
+    // If key already exists, delete first so re-insert moves it to end (most recent)
+    if (memoryCache.has(key)) {
+      memoryCache.delete(key);
+    } else if (memoryCache.size >= MAX_MEMORY_CACHE_SIZE) {
+      // Evict oldest entry (first key in Map iteration order)
+      const oldest = memoryCache.keys().next().value;
+      if (oldest !== undefined) {
+        memoryCache.delete(oldest);
+      }
+    }
+    memoryCache.set(key, value);
+  }
 
   /**
    * Generate embedding using OpenAI API
@@ -197,6 +213,10 @@ export function createEmbeddingsService(
     const data = (await response.json()) as {
       data: Array<{ embedding: number[] }>;
     };
+
+    if (!data.data?.[0]?.embedding) {
+      throw new Error('OpenAI API returned unexpected response: missing embedding data');
+    }
 
     return data.data[0].embedding;
   }
@@ -232,6 +252,10 @@ export function createEmbeddingsService(
     const data = (await response.json()) as {
       data: Array<{ embedding: number[]; index: number }>;
     };
+
+    if (!data.data || data.data.length === 0) {
+      throw new Error('OpenAI API returned unexpected response: missing embedding data');
+    }
 
     // Sort by index to maintain order
     return data.data
@@ -351,7 +375,7 @@ export function createEmbeddingsService(
       // Check database cache
       const cached = this.getCached(contentHash);
       if (cached) {
-        memoryCache.set(contentHash, cached);
+        memoryCacheSet(contentHash, cached);
         return cached;
       }
 
@@ -361,8 +385,13 @@ export function createEmbeddingsService(
       const hasOpenAIKey = !!(config.apiKey || process.env.OPENAI_API_KEY);
 
       if (config.provider === 'openai' && hasOpenAIKey) {
-        vector = await generateOpenAIEmbedding(text);
-        logger.debug('Generated OpenAI embedding');
+        try {
+          vector = await generateOpenAIEmbedding(text);
+          logger.debug('Generated OpenAI embedding');
+        } catch (error) {
+          logger.warn({ error }, 'OpenAI embedding failed, falling back to local');
+          vector = await generateLocalEmbedding(text);
+        }
       } else {
         // Default: local embeddings using transformers.js (no API key needed)
         vector = await generateLocalEmbedding(text);
@@ -371,7 +400,7 @@ export function createEmbeddingsService(
 
       // Cache the result
       this.cache(contentHash, text, vector);
-      memoryCache.set(contentHash, vector);
+      memoryCacheSet(contentHash, vector);
 
       return vector;
     },
@@ -385,7 +414,7 @@ export function createEmbeddingsService(
         }
         const cached = this.getCached(contentHash);
         if (cached) {
-          memoryCache.set(contentHash, cached);
+          memoryCacheSet(contentHash, cached);
           return cached;
         }
         return null;
@@ -404,9 +433,16 @@ export function createEmbeddingsService(
         const hasOpenAIKey = !!(config.apiKey || process.env.OPENAI_API_KEY);
 
         if (config.provider === 'openai' && hasOpenAIKey) {
-          newEmbeddings = await generateOpenAIEmbeddingBatch(
-            needsEmbedding.map((item) => item.text)
-          );
+          try {
+            newEmbeddings = await generateOpenAIEmbeddingBatch(
+              needsEmbedding.map((item) => item.text)
+            );
+          } catch (error) {
+            logger.warn({ error }, 'OpenAI batch embedding failed, falling back to local');
+            newEmbeddings = await generateLocalEmbeddingBatch(
+              needsEmbedding.map((item) => item.text)
+            );
+          }
         } else {
           // Default: local embeddings using transformers.js
           newEmbeddings = await generateLocalEmbeddingBatch(
@@ -422,7 +458,7 @@ export function createEmbeddingsService(
 
           const contentHash = hashContent(text);
           this.cache(contentHash, text, vector);
-          memoryCache.set(contentHash, vector);
+          memoryCacheSet(contentHash, vector);
         }
       }
 

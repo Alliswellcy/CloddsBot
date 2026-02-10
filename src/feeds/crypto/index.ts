@@ -303,6 +303,8 @@ export function createCryptoFeed(): CryptoFeed {
   let reconnectTimer: NodeJS.Timeout | null = null;
   let pingInterval: NodeJS.Timeout | null = null;
   let connected = false;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT_DELAY = 60000; // 60s max
 
   // Store latest prices and full price data
   const prices = new Map<string, number>();
@@ -327,6 +329,7 @@ export function createCryptoFeed(): CryptoFeed {
     ws.on('open', () => {
       logger.info('Binance WebSocket connected');
       connected = true;
+      reconnectAttempts = 0; // Reset backoff on successful connection
 
       // Start ping interval to keep connection alive
       pingInterval = setInterval(() => {
@@ -368,16 +371,16 @@ export function createCryptoFeed(): CryptoFeed {
           // Emit combined prices if we have the major ones
           if (prices.has('BTC') && prices.has('ETH') && prices.has('XRP')) {
             const combined: CryptoPrices = {
-              BTC: prices.get('BTC') || 0,
-              ETH: prices.get('ETH') || 0,
-              SOL: prices.get('SOL') || 0,
-              XRP: prices.get('XRP') || 0,
-              DOGE: prices.get('DOGE') || 0,
-              ADA: prices.get('ADA') || 0,
-              AVAX: prices.get('AVAX') || 0,
-              MATIC: prices.get('MATIC') || 0,
-              DOT: prices.get('DOT') || 0,
-              LINK: prices.get('LINK') || 0,
+              BTC: prices.get('BTC') ?? 0,
+              ETH: prices.get('ETH') ?? 0,
+              SOL: prices.get('SOL') ?? 0,
+              XRP: prices.get('XRP') ?? 0,
+              DOGE: prices.get('DOGE') ?? 0,
+              ADA: prices.get('ADA') ?? 0,
+              AVAX: prices.get('AVAX') ?? 0,
+              MATIC: prices.get('MATIC') ?? 0,
+              DOT: prices.get('DOT') ?? 0,
+              LINK: prices.get('LINK') ?? 0,
               timestamp: lastUpdate,
             };
             emitter.emit('prices', combined);
@@ -398,8 +401,11 @@ export function createCryptoFeed(): CryptoFeed {
         pingInterval = null;
       }
 
-      // Reconnect after delay
-      reconnectTimer = setTimeout(connect, 5000);
+      // Reconnect with exponential backoff
+      const delay = Math.min(5000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+      reconnectAttempts++;
+      logger.info({ delay, attempt: reconnectAttempts }, 'Binance reconnecting...');
+      reconnectTimer = setTimeout(connect, delay);
     });
 
     ws.on('error', (err) => {
@@ -438,51 +444,51 @@ export function createCryptoFeed(): CryptoFeed {
     },
 
     getBTCPrice() {
-      return prices.get('BTC') || null;
+      return prices.get('BTC') ?? null;
     },
 
     getETHPrice() {
-      return prices.get('ETH') || null;
+      return prices.get('ETH') ?? null;
     },
 
     getSOLPrice() {
-      return prices.get('SOL') || null;
+      return prices.get('SOL') ?? null;
     },
 
     getXRPPrice() {
-      return prices.get('XRP') || null;
+      return prices.get('XRP') ?? null;
     },
 
     getDOGEPrice() {
-      return prices.get('DOGE') || null;
+      return prices.get('DOGE') ?? null;
     },
 
     getPrices() {
       if (!prices.has('BTC')) return null;
 
       return {
-        BTC: prices.get('BTC') || 0,
-        ETH: prices.get('ETH') || 0,
-        SOL: prices.get('SOL') || 0,
-        XRP: prices.get('XRP') || 0,
-        DOGE: prices.get('DOGE') || 0,
-        ADA: prices.get('ADA') || 0,
-        AVAX: prices.get('AVAX') || 0,
-        MATIC: prices.get('MATIC') || 0,
-        DOT: prices.get('DOT') || 0,
-        LINK: prices.get('LINK') || 0,
-        timestamp: lastUpdate || new Date(),
+        BTC: prices.get('BTC') ?? 0,
+        ETH: prices.get('ETH') ?? 0,
+        SOL: prices.get('SOL') ?? 0,
+        XRP: prices.get('XRP') ?? 0,
+        DOGE: prices.get('DOGE') ?? 0,
+        ADA: prices.get('ADA') ?? 0,
+        AVAX: prices.get('AVAX') ?? 0,
+        MATIC: prices.get('MATIC') ?? 0,
+        DOT: prices.get('DOT') ?? 0,
+        LINK: prices.get('LINK') ?? 0,
+        timestamp: lastUpdate ?? new Date(),
       };
     },
 
     getPrice(symbol: string) {
       const normalized = normalizeSymbol(symbol);
-      return prices.get(normalized) || null;
+      return prices.get(normalized) ?? null;
     },
 
     getPriceData(symbol: string) {
       const normalized = normalizeSymbol(symbol);
-      return priceData.get(normalized) || null;
+      return priceData.get(normalized) ?? null;
     },
 
     subscribePrices(callback) {
@@ -549,6 +555,7 @@ export function createCryptoFeed(): CryptoFeed {
     getDivergence(symbol, targetPrice) {
       const spot = emitter.getPrice(symbol);
       if (spot === null) return null;
+      if (targetPrice === 0) return null;
 
       const diff = spot - targetPrice;
       const diffPct = (diff / targetPrice) * 100;

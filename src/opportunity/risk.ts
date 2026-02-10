@@ -193,6 +193,8 @@ export function createRiskModeler(): RiskModeler {
    * Estimate slippage for a given size
    */
   function estimateSlippage(leg: ArbitrageLeg, size: number): number {
+    if (size <= 0) return 0;
+
     if (leg.orderbook) {
       // Calculate slippage from orderbook
       const book = leg.side === 'buy' ? leg.orderbook.asks : leg.orderbook.bids;
@@ -213,7 +215,7 @@ export function createRiskModeler(): RiskModeler {
       }
 
       const avgPrice = totalCost / size;
-      return Math.abs(avgPrice - leg.price) / leg.price;
+      return leg.price > 0 ? Math.abs(avgPrice - leg.price) / leg.price : 0;
     }
 
     // Estimate from liquidity ratio

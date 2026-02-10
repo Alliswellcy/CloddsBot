@@ -337,7 +337,7 @@ export function adaptiveStopLoss(
   features: CombinedFeatures | null,
   multiplier = 1.0
 ): number {
-  if (!features?.tick?.volatilityPct) return baseStopPct;
+  if (!features?.tick || features.tick.volatilityPct == null) return baseStopPct;
 
   // Add volatility to base stop loss
   const volAdjustment = features.tick.volatilityPct * multiplier;
@@ -357,7 +357,7 @@ export function adaptiveTakeProfit(
   features: CombinedFeatures | null,
   multiplier = 1.0
 ): number {
-  if (!features?.tick?.volatilityPct) return baseTpPct;
+  if (!features?.tick || features.tick.volatilityPct == null) return baseTpPct;
 
   // In high volatility, use wider TP; in trending markets, extend TP
   const volAdjustment = features.tick.volatilityPct * 0.5 * multiplier;

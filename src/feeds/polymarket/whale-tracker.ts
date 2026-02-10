@@ -319,7 +319,7 @@ export function createWhaleTracker(config: WhaleConfig = {}): WhaleTracker {
           throw new Error(`HTTP ${response.status}`);
         }
 
-        const json = await response.json() as { data?: any[]; next_cursor?: string } | any[];
+        const json = await response.json() as { data?: Array<Record<string, any>>; next_cursor?: string } | Array<Record<string, any>>;
 
         // Handle both array response and paginated response
         const data = Array.isArray(json) ? json : (json.data || []);
@@ -375,13 +375,13 @@ export function createWhaleTracker(config: WhaleConfig = {}): WhaleTracker {
           throw new Error(`HTTP ${response.status}`);
         }
 
-        const data = await response.json() as any[];
+        const data = await response.json() as Array<Record<string, any>>;
         const positions = data
-          .filter((p: any) => {
+          .filter((p) => {
             const usdValue = parseFloat(p.currentValue || p.size * p.price || 0);
             return usdValue >= cfg.minPositionSize;
           })
-          .map((p: any) => ({
+          .map((p) => ({
             id: `${address}_${p.market}_${p.outcome}`,
             address,
             marketId: p.market || p.conditionId,
@@ -421,7 +421,7 @@ export function createWhaleTracker(config: WhaleConfig = {}): WhaleTracker {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const data = await response.json() as any[];
+      const data = await response.json() as Array<Record<string, any>>;
       return data.map((t) => t.address || t.user);
     } catch (error) {
       logger.error({ error }, 'Failed to fetch top traders');
@@ -939,7 +939,7 @@ export async function getMarketWhaleActivity(
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const trades = await response.json() as any[];
+    const trades = await response.json() as Array<Record<string, any>>;
 
     let buyVolume = 0;
     let sellVolume = 0;

@@ -637,6 +637,18 @@ export const DEFAULT_CONFIG: CloddsConfig = {
 // ENV SUBSTITUTION
 // =============================================================================
 
+/** Safe integer parse — returns undefined on NaN so invalid env vars don't corrupt config */
+function safeParseInt(raw: string): number | undefined {
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Safe float parse — returns undefined on NaN */
+function safeParseFloat(raw: string): number | undefined {
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 /** Environment variables that can be used in config */
 const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   ANTHROPIC_API_KEY: () => {}, // Used directly by agent
@@ -667,7 +679,7 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   POSITIONS_PRICE_UPDATE_INTERVAL_MS: (cfg) => {
     if (!cfg.positions) cfg.positions = {};
     const raw = process.env.POSITIONS_PRICE_UPDATE_INTERVAL_MS;
-    if (raw) cfg.positions.priceUpdateIntervalMs = Number.parseInt(raw, 10);
+    if (raw) cfg.positions.priceUpdateIntervalMs = safeParseInt(raw) ?? cfg.positions.priceUpdateIntervalMs;
   },
   POSITIONS_PRICE_UPDATE_ENABLED: (cfg) => {
     if (!cfg.positions) cfg.positions = {};
@@ -682,7 +694,7 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   POSITIONS_PNL_HISTORY_DAYS: (cfg) => {
     if (!cfg.positions) cfg.positions = {};
     const raw = process.env.POSITIONS_PNL_HISTORY_DAYS;
-    if (raw) cfg.positions.pnlHistoryDays = Number.parseInt(raw, 10);
+    if (raw) cfg.positions.pnlHistoryDays = safeParseInt(raw) ?? cfg.positions.pnlHistoryDays;
   },
   SESSION_CLEANUP_ENABLED: (cfg) => {
     if (!cfg.session) cfg.session = {};
@@ -694,13 +706,13 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
     if (!cfg.session) cfg.session = {};
     if (!cfg.session.cleanup) cfg.session.cleanup = {};
     const raw = process.env.SESSION_CLEANUP_MAX_AGE_DAYS;
-    if (raw) cfg.session.cleanup.maxAgeDays = Number.parseInt(raw, 10);
+    if (raw) cfg.session.cleanup.maxAgeDays = safeParseInt(raw) ?? cfg.session.cleanup.maxAgeDays;
   },
   SESSION_CLEANUP_IDLE_DAYS: (cfg) => {
     if (!cfg.session) cfg.session = {};
     if (!cfg.session.cleanup) cfg.session.cleanup = {};
     const raw = process.env.SESSION_CLEANUP_IDLE_DAYS;
-    if (raw) cfg.session.cleanup.idleDays = Number.parseInt(raw, 10);
+    if (raw) cfg.session.cleanup.idleDays = safeParseInt(raw) ?? cfg.session.cleanup.idleDays;
   },
   MARKET_CACHE_ENABLED: (cfg) => {
     if (!cfg.marketCache) cfg.marketCache = {};
@@ -710,12 +722,12 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   MARKET_CACHE_TTL_MS: (cfg) => {
     if (!cfg.marketCache) cfg.marketCache = {};
     const raw = process.env.MARKET_CACHE_TTL_MS;
-    if (raw) cfg.marketCache.ttlMs = Number.parseInt(raw, 10);
+    if (raw) cfg.marketCache.ttlMs = safeParseInt(raw) ?? cfg.marketCache.ttlMs;
   },
   MARKET_CACHE_CLEANUP_INTERVAL_MS: (cfg) => {
     if (!cfg.marketCache) cfg.marketCache = {};
     const raw = process.env.MARKET_CACHE_CLEANUP_INTERVAL_MS;
-    if (raw) cfg.marketCache.cleanupIntervalMs = Number.parseInt(raw, 10);
+    if (raw) cfg.marketCache.cleanupIntervalMs = safeParseInt(raw) ?? cfg.marketCache.cleanupIntervalMs;
   },
   MARKET_INDEX_ENABLED: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
@@ -725,17 +737,17 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   MARKET_INDEX_SYNC_INTERVAL_MS: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
     const raw = process.env.MARKET_INDEX_SYNC_INTERVAL_MS;
-    if (raw) cfg.marketIndex.syncIntervalMs = Number.parseInt(raw, 10);
+    if (raw) cfg.marketIndex.syncIntervalMs = safeParseInt(raw) ?? cfg.marketIndex.syncIntervalMs;
   },
   MARKET_INDEX_STALE_AFTER_MS: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
     const raw = process.env.MARKET_INDEX_STALE_AFTER_MS;
-    if (raw) cfg.marketIndex.staleAfterMs = Number.parseInt(raw, 10);
+    if (raw) cfg.marketIndex.staleAfterMs = safeParseInt(raw) ?? cfg.marketIndex.staleAfterMs;
   },
   MARKET_INDEX_LIMIT_PER_PLATFORM: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
     const raw = process.env.MARKET_INDEX_LIMIT_PER_PLATFORM;
-    if (raw) cfg.marketIndex.limitPerPlatform = Number.parseInt(raw, 10);
+    if (raw) cfg.marketIndex.limitPerPlatform = safeParseInt(raw) ?? cfg.marketIndex.limitPerPlatform;
   },
   MARKET_INDEX_STATUS: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
@@ -760,22 +772,22 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   MARKET_INDEX_MIN_VOLUME_24H: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
     const raw = process.env.MARKET_INDEX_MIN_VOLUME_24H;
-    if (raw) cfg.marketIndex.minVolume24h = Number.parseFloat(raw);
+    if (raw) cfg.marketIndex.minVolume24h = safeParseFloat(raw) ?? cfg.marketIndex.minVolume24h;
   },
   MARKET_INDEX_MIN_LIQUIDITY: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
     const raw = process.env.MARKET_INDEX_MIN_LIQUIDITY;
-    if (raw) cfg.marketIndex.minLiquidity = Number.parseFloat(raw);
+    if (raw) cfg.marketIndex.minLiquidity = safeParseFloat(raw) ?? cfg.marketIndex.minLiquidity;
   },
   MARKET_INDEX_MIN_OPEN_INTEREST: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
     const raw = process.env.MARKET_INDEX_MIN_OPEN_INTEREST;
-    if (raw) cfg.marketIndex.minOpenInterest = Number.parseFloat(raw);
+    if (raw) cfg.marketIndex.minOpenInterest = safeParseFloat(raw) ?? cfg.marketIndex.minOpenInterest;
   },
   MARKET_INDEX_MIN_PREDICTIONS: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
     const raw = process.env.MARKET_INDEX_MIN_PREDICTIONS;
-    if (raw) cfg.marketIndex.minPredictions = Number.parseInt(raw, 10);
+    if (raw) cfg.marketIndex.minPredictions = safeParseInt(raw) ?? cfg.marketIndex.minPredictions;
   },
   MARKET_INDEX_EXCLUDE_RESOLVED: (cfg) => {
     if (!cfg.marketIndex) cfg.marketIndex = {};
@@ -809,25 +821,25 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
     if (!cfg.memory) cfg.memory = {};
     if (!cfg.memory.auto) cfg.memory.auto = {};
     const raw = process.env.MEMORY_AUTO_MIN_INTERVAL_MS;
-    if (raw) cfg.memory.auto.minIntervalMs = Number.parseInt(raw, 10);
+    if (raw) cfg.memory.auto.minIntervalMs = safeParseInt(raw) ?? cfg.memory.auto.minIntervalMs;
   },
   MEMORY_AUTO_MAX_ITEMS_PER_TYPE: (cfg) => {
     if (!cfg.memory) cfg.memory = {};
     if (!cfg.memory.auto) cfg.memory.auto = {};
     const raw = process.env.MEMORY_AUTO_MAX_ITEMS_PER_TYPE;
-    if (raw) cfg.memory.auto.maxItemsPerType = Number.parseInt(raw, 10);
+    if (raw) cfg.memory.auto.maxItemsPerType = safeParseInt(raw) ?? cfg.memory.auto.maxItemsPerType;
   },
   MEMORY_AUTO_PROFILE_UPDATE_EVERY: (cfg) => {
     if (!cfg.memory) cfg.memory = {};
     if (!cfg.memory.auto) cfg.memory.auto = {};
     const raw = process.env.MEMORY_AUTO_PROFILE_UPDATE_EVERY;
-    if (raw) cfg.memory.auto.profileUpdateEvery = Number.parseInt(raw, 10);
+    if (raw) cfg.memory.auto.profileUpdateEvery = safeParseInt(raw) ?? cfg.memory.auto.profileUpdateEvery;
   },
   MEMORY_AUTO_SEMANTIC_TOPK: (cfg) => {
     if (!cfg.memory) cfg.memory = {};
     if (!cfg.memory.auto) cfg.memory.auto = {};
     const raw = process.env.MEMORY_AUTO_SEMANTIC_TOPK;
-    if (raw) cfg.memory.auto.semanticSearchTopK = Number.parseInt(raw, 10);
+    if (raw) cfg.memory.auto.semanticSearchTopK = safeParseInt(raw) ?? cfg.memory.auto.semanticSearchTopK;
   },
   MEMORY_AUTO_INCLUDE_CONTEXT: (cfg) => {
     if (!cfg.memory) cfg.memory = {};
@@ -1027,12 +1039,12 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   BITTENSOR_EARNINGS_POLL_INTERVAL_MS: (cfg) => {
     if (!cfg.bittensor) cfg.bittensor = {};
     const raw = process.env.BITTENSOR_EARNINGS_POLL_INTERVAL_MS;
-    if (raw) cfg.bittensor.earningsPollIntervalMs = Number.parseInt(raw, 10);
+    if (raw) cfg.bittensor.earningsPollIntervalMs = safeParseInt(raw) ?? cfg.bittensor.earningsPollIntervalMs;
   },
   BITTENSOR_TAO_PRICE_USD: (cfg) => {
     if (!cfg.bittensor) cfg.bittensor = {};
     const raw = process.env.BITTENSOR_TAO_PRICE_USD;
-    if (raw) cfg.bittensor.taoPriceUsd = Number.parseFloat(raw);
+    if (raw) cfg.bittensor.taoPriceUsd = safeParseFloat(raw) ?? cfg.bittensor.taoPriceUsd;
   },
   ALT_DATA_ENABLED: (cfg) => {
     if (!cfg.altData) cfg.altData = {};
@@ -1042,12 +1054,12 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   ALT_DATA_MIN_SENTIMENT_CONFIDENCE: (cfg) => {
     if (!cfg.altData) cfg.altData = {};
     const raw = process.env.ALT_DATA_MIN_SENTIMENT_CONFIDENCE;
-    if (raw) cfg.altData.minSentimentConfidence = Number.parseFloat(raw);
+    if (raw) cfg.altData.minSentimentConfidence = safeParseFloat(raw) ?? cfg.altData.minSentimentConfidence;
   },
   ALT_DATA_MIN_MARKET_RELEVANCE: (cfg) => {
     if (!cfg.altData) cfg.altData = {};
     const raw = process.env.ALT_DATA_MIN_MARKET_RELEVANCE;
-    if (raw) cfg.altData.minMarketRelevance = Number.parseFloat(raw);
+    if (raw) cfg.altData.minMarketRelevance = safeParseFloat(raw) ?? cfg.altData.minMarketRelevance;
   },
   ALT_DATA_FEAR_GREED_ENABLED: (cfg) => {
     if (!cfg.altData) cfg.altData = {};
@@ -1082,32 +1094,32 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   SIGNAL_ROUTER_MIN_STRENGTH: (cfg) => {
     if (!cfg.signalRouter) cfg.signalRouter = {};
     const raw = process.env.SIGNAL_ROUTER_MIN_STRENGTH;
-    if (raw) cfg.signalRouter.minStrength = parseFloat(raw);
+    if (raw) cfg.signalRouter.minStrength = safeParseFloat(raw) ?? cfg.signalRouter.minStrength;
   },
   SIGNAL_ROUTER_DEFAULT_SIZE_USD: (cfg) => {
     if (!cfg.signalRouter) cfg.signalRouter = {};
     const raw = process.env.SIGNAL_ROUTER_DEFAULT_SIZE_USD;
-    if (raw) cfg.signalRouter.defaultSizeUsd = parseInt(raw, 10);
+    if (raw) cfg.signalRouter.defaultSizeUsd = safeParseInt(raw) ?? cfg.signalRouter.defaultSizeUsd;
   },
   SIGNAL_ROUTER_MAX_SIZE_USD: (cfg) => {
     if (!cfg.signalRouter) cfg.signalRouter = {};
     const raw = process.env.SIGNAL_ROUTER_MAX_SIZE_USD;
-    if (raw) cfg.signalRouter.maxSizeUsd = parseInt(raw, 10);
+    if (raw) cfg.signalRouter.maxSizeUsd = safeParseInt(raw) ?? cfg.signalRouter.maxSizeUsd;
   },
   SIGNAL_ROUTER_MAX_DAILY_LOSS: (cfg) => {
     if (!cfg.signalRouter) cfg.signalRouter = {};
     const raw = process.env.SIGNAL_ROUTER_MAX_DAILY_LOSS;
-    if (raw) cfg.signalRouter.maxDailyLoss = parseInt(raw, 10);
+    if (raw) cfg.signalRouter.maxDailyLoss = safeParseInt(raw) ?? cfg.signalRouter.maxDailyLoss;
   },
   SIGNAL_ROUTER_MAX_CONCURRENT_POSITIONS: (cfg) => {
     if (!cfg.signalRouter) cfg.signalRouter = {};
     const raw = process.env.SIGNAL_ROUTER_MAX_CONCURRENT_POSITIONS;
-    if (raw) cfg.signalRouter.maxConcurrentPositions = parseInt(raw, 10);
+    if (raw) cfg.signalRouter.maxConcurrentPositions = safeParseInt(raw) ?? cfg.signalRouter.maxConcurrentPositions;
   },
   SIGNAL_ROUTER_COOLDOWN_MS: (cfg) => {
     if (!cfg.signalRouter) cfg.signalRouter = {};
     const raw = process.env.SIGNAL_ROUTER_COOLDOWN_MS;
-    if (raw) cfg.signalRouter.cooldownMs = parseInt(raw, 10);
+    if (raw) cfg.signalRouter.cooldownMs = safeParseInt(raw) ?? cfg.signalRouter.cooldownMs;
   },
   SIGNAL_ROUTER_ORDER_MODE: (cfg) => {
     if (!cfg.signalRouter) cfg.signalRouter = {};
@@ -1119,7 +1131,7 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   SIGNAL_ROUTER_SIGNAL_TYPES: (cfg) => {
     if (!cfg.signalRouter) cfg.signalRouter = {};
     const raw = process.env.SIGNAL_ROUTER_SIGNAL_TYPES;
-    if (raw) cfg.signalRouter.signalTypes = raw.split(',').map((s) => s.trim()).filter(Boolean) as any[];
+    if (raw) cfg.signalRouter.signalTypes = raw.split(',').map((s) => s.trim()).filter(Boolean) as import('../types/signal-bus').TradingSignal['type'][];
   },
   ML_PIPELINE_ENABLED: (cfg) => {
     if (!cfg.mlPipeline) cfg.mlPipeline = {};
@@ -1136,12 +1148,12 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   ML_PIPELINE_TRAIN_INTERVAL_MS: (cfg) => {
     if (!cfg.mlPipeline) cfg.mlPipeline = {};
     const raw = process.env.ML_PIPELINE_TRAIN_INTERVAL_MS;
-    if (raw) cfg.mlPipeline.trainIntervalMs = parseInt(raw, 10);
+    if (raw) cfg.mlPipeline.trainIntervalMs = safeParseInt(raw) ?? cfg.mlPipeline.trainIntervalMs;
   },
   ML_PIPELINE_MIN_SAMPLES: (cfg) => {
     if (!cfg.mlPipeline) cfg.mlPipeline = {};
     const raw = process.env.ML_PIPELINE_MIN_SAMPLES;
-    if (raw) cfg.mlPipeline.minTrainingSamples = parseInt(raw, 10);
+    if (raw) cfg.mlPipeline.minTrainingSamples = safeParseInt(raw) ?? cfg.mlPipeline.minTrainingSamples;
   },
   ML_PIPELINE_MODEL_TYPE: (cfg) => {
     if (!cfg.mlPipeline) cfg.mlPipeline = {};
@@ -1158,7 +1170,7 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   ML_PIPELINE_CLEANUP_DAYS: (cfg) => {
     if (!cfg.mlPipeline) cfg.mlPipeline = {};
     const raw = process.env.ML_PIPELINE_CLEANUP_DAYS;
-    if (raw) cfg.mlPipeline.cleanupDays = parseInt(raw, 10);
+    if (raw) cfg.mlPipeline.cleanupDays = safeParseInt(raw) ?? cfg.mlPipeline.cleanupDays;
   },
   CLODDS_GROUP_POLICIES: (cfg) => {
     if (!process.env.CLODDS_GROUP_POLICIES) return;
@@ -1224,8 +1236,8 @@ function parseJson5(text: string): unknown {
     .replace(/\/\/.*$/gm, '') // Line comments
     .replace(/,(\s*[}\]])/g, '$1'); // Trailing commas
 
-  // Handle unquoted keys
-  cleaned = cleaned.replace(/(\s*)(\w+)(\s*):/g, '$1"$2"$3:');
+  // Handle unquoted keys (only if not already quoted — skip keys inside "...")
+  cleaned = cleaned.replace(/(?<=^|[,{\s])(\w+)(?=\s*:)/gm, '"$1"');
 
   try {
     return JSON.parse(cleaned);

@@ -404,9 +404,11 @@ export function createAgreementPersistence(): AgreementPersistence {
     async list(partyAddress: string): Promise<Agreement[]> {
       const database = getDb();
       // Search for agreements where party address is in the JSON parties array
+      // Escape LIKE wildcards in user input to prevent pattern injection
+      const escapedAddress = partyAddress.replace(/%/g, '\\%').replace(/_/g, '\\_');
       const rows = database.query<AgreementRow>(
-        `SELECT * FROM acp_agreements WHERE parties LIKE ? ORDER BY created_at DESC`,
-        [`%"address":"${partyAddress}"%`]
+        `SELECT * FROM acp_agreements WHERE parties LIKE ? ESCAPE '\\' ORDER BY created_at DESC`,
+        [`%"address":"${escapedAddress}"%`]
       );
       return rows.map(rowToAgreement);
     },
@@ -743,8 +745,8 @@ function rowToService(row: ServiceRow): ServiceListing {
     sla: row.sla_availability
       ? {
           availabilityPercent: row.sla_availability,
-          maxResponseTimeMs: row.sla_response_time || 0,
-          maxThroughput: row.sla_throughput || undefined,
+          maxResponseTimeMs: row.sla_response_time ?? 0,
+          maxThroughput: row.sla_throughput ?? undefined,
         }
       : undefined,
     enabled: row.enabled === 1,
@@ -763,8 +765,8 @@ function rowToAgreement(row: AgreementRow): Agreement {
     terms: JSON.parse(row.terms) as AgreementTerm[],
     totalValue: row.total_value || undefined,
     currency: row.currency || undefined,
-    startDate: row.start_date || undefined,
-    endDate: row.end_date || undefined,
+    startDate: row.start_date ?? undefined,
+    endDate: row.end_date ?? undefined,
     escrowId: row.escrow_id || undefined,
     status: row.status as AgreementStatus,
     version: row.version,
@@ -792,8 +794,8 @@ function rowToEscrow(row: EscrowRow): Escrow {
     status: row.status as EscrowStatus,
     escrowAddress: row.escrow_address || '',
     txSignatures: JSON.parse(row.tx_signatures) as string[],
-    fundedAt: row.funded_at || undefined,
-    completedAt: row.completed_at || undefined,
+    fundedAt: row.funded_at ?? undefined,
+    completedAt: row.completed_at ?? undefined,
     createdAt: row.created_at,
   };
 }

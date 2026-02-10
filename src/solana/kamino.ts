@@ -9,6 +9,9 @@ import { Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
 import { signAndSendTransaction } from './wallet';
 import BN from 'bn.js';
 import Decimal from 'decimal.js';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('solana:kamino');
 
 // ============================================
 // LENDING INTERFACES
@@ -189,7 +192,7 @@ export async function getKaminoMarkets(
       reserves,
     }];
   } catch (error) {
-    console.error('Failed to get Kamino markets:', error);
+    logger.error({ error }, 'Failed to get Kamino markets');
     return [];
   }
 }
@@ -289,7 +292,7 @@ export async function getKaminoObligation(
       ltv: ltvNum * 100,
     };
   } catch (error) {
-    console.error('Failed to get Kamino obligation:', error);
+    logger.error({ error }, 'Failed to get Kamino obligation');
     return null;
   }
 }
@@ -572,7 +575,7 @@ export async function getKaminoStrategies(
 
     return results;
   } catch (error) {
-    console.error('Failed to get Kamino strategies:', error);
+    logger.error({ error }, 'Failed to get Kamino strategies');
     return [];
   }
 }
@@ -612,7 +615,7 @@ export async function getKaminoStrategy(
       status: 'active',
     };
   } catch (error) {
-    console.error('Failed to get Kamino strategy:', error);
+    logger.error({ error }, 'Failed to get Kamino strategy');
     return null;
   }
 }
@@ -687,7 +690,7 @@ export async function getKaminoUserShares(
 
     return results;
   } catch (error) {
-    console.error('Failed to get Kamino user shares:', error);
+    logger.error({ error }, 'Failed to get Kamino user shares');
     return [];
   }
 }
@@ -809,7 +812,7 @@ export async function getKaminoSharePrice(
     const price = strategy ? await kamino.getStrategySharePrice(new PublicKey(strategyAddress)) : null;
     return price?.toString() || '0';
   } catch (error) {
-    console.error('Failed to get share price:', error);
+    logger.error({ error }, 'Failed to get share price');
     return '0';
   }
 }

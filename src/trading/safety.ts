@@ -128,6 +128,9 @@ export interface SafetyManager extends EventEmitter {
 
   /** Clear alerts */
   clearAlerts(): void;
+
+  /** Destroy the safety manager and clean up timers */
+  destroy(): void;
 }
 
 // =============================================================================
@@ -531,6 +534,13 @@ export function createSafetyManager(db: Database, config: Partial<SafetyConfig> 
     clearAlerts() {
       state.alerts = [];
     },
+
+    destroy() {
+      if (dailyResetTimeout) clearTimeout(dailyResetTimeout);
+      if (dailyResetInterval) clearInterval(dailyResetInterval);
+      dailyResetTimeout = null;
+      dailyResetInterval = null;
+    },
   } as Partial<SafetyManager>);
 
   // Schedule daily reset at midnight
@@ -540,10 +550,13 @@ export function createSafetyManager(db: Database, config: Partial<SafetyConfig> 
   tomorrow.setHours(0, 0, 0, 0);
   const msUntilMidnight = tomorrow.getTime() - now.getTime();
 
-  setTimeout(() => {
+  let dailyResetTimeout: ReturnType<typeof setTimeout> | null = null;
+  let dailyResetInterval: ReturnType<typeof setInterval> | null = null;
+
+  dailyResetTimeout = setTimeout(() => {
     emitter.resetDaily();
     // Then reset every 24 hours
-    setInterval(() => emitter.resetDaily(), 24 * 60 * 60 * 1000);
+    dailyResetInterval = setInterval(() => emitter.resetDaily(), 24 * 60 * 60 * 1000);
   }, msUntilMidnight);
 
   logger.info({ config: cfg }, 'Safety manager initialized');

@@ -64,7 +64,7 @@ export function createChutesMinerManager(
       args.push('--image', config.dockerImage);
     }
 
-    if (config.maxConcurrentInvocations) {
+    if (config.maxConcurrentInvocations != null) {
       args.push('--max-concurrent', String(config.maxConcurrentInvocations));
     }
 

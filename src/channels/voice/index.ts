@@ -222,6 +222,11 @@ export async function createVoiceChannel(
       const port = config.webhookPort || 3001;
       logger.info({ port }, 'Starting Voice webhook server');
 
+      // WARNING: Twilio webhook requests should be validated using the X-Twilio-Signature
+      // header and your auth token. Without validation, attackers can forge requests.
+      // Validate at the reverse proxy/gateway layer, or add validation here with:
+      //   const twilio = require('twilio');
+      //   twilio.validateRequest(config.authToken, signature, url, params)
       server = createServer(async (req, res) => {
         if (req.method !== 'POST') {
           res.writeHead(405);
@@ -237,6 +242,16 @@ export async function createVoiceChannel(
             await handleIncomingCall(params, res);
           } else if (url === '/speech') {
             await handleSpeech(params, res);
+          } else if (url === '/status') {
+            // Call status callback - clean up completed calls
+            const callSid = params.CallSid;
+            const callStatus = params.CallStatus;
+            if (callSid && (callStatus === 'completed' || callStatus === 'failed' || callStatus === 'busy' || callStatus === 'no-answer' || callStatus === 'canceled')) {
+              activeCalls.delete(callSid);
+              logger.debug({ callSid, callStatus }, 'Voice call ended, cleaned up');
+            }
+            res.writeHead(200);
+            res.end();
           } else {
             res.writeHead(404);
             res.end();

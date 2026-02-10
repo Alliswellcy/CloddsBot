@@ -93,6 +93,7 @@ export function createCanvasTool(): CanvasTool {
   const DEFAULT_SEND_RETRIES = 3;
   const DEFAULT_SEND_RETRY_DELAY_MS = 200;
   const DEFAULT_RESPONSE_TIMEOUT_MS = 30_000;
+  const MAX_QUEUE_SIZE = 100;
 
   function isWsOpen(ws: WebSocket): boolean {
     // 1 === WebSocket.OPEN
@@ -103,11 +104,20 @@ export function createCanvasTool(): CanvasTool {
     if (!nodeQueues.has(nodeId)) {
       nodeQueues.set(nodeId, []);
     }
-    nodeQueues.get(nodeId)!.push({ message, attempts });
+    const queue = nodeQueues.get(nodeId)!;
+    queue.push({ message, attempts });
+    // Evict oldest messages if queue exceeds max size
+    if (queue.length > MAX_QUEUE_SIZE) {
+      queue.splice(0, queue.length - MAX_QUEUE_SIZE);
+    }
   }
 
   function enqueueBroadcast(message: Record<string, unknown>, attempts = 0): void {
     broadcastQueue.push({ message, attempts });
+    // Evict oldest messages if queue exceeds max size
+    if (broadcastQueue.length > MAX_QUEUE_SIZE) {
+      broadcastQueue.splice(0, broadcastQueue.length - MAX_QUEUE_SIZE);
+    }
   }
 
   async function sendWithRetry(
@@ -147,7 +157,8 @@ export function createCanvasTool(): CanvasTool {
 
   async function flushBroadcastQueue(node: CanvasNode): Promise<void> {
     if (broadcastQueue.length === 0) return;
-    for (const entry of broadcastQueue) {
+    const pending = broadcastQueue.splice(0, broadcastQueue.length);
+    for (const entry of pending) {
       const payload = JSON.stringify(entry.message);
       await sendWithRetry(node, payload, entry.message, entry.attempts);
     }
@@ -373,6 +384,17 @@ export function createCanvasTool(): CanvasTool {
   return tool;
 }
 
+// HTML escape to prevent XSS in user-provided template content
+function escapeHtml(str: unknown): string {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 /**
  * Create HTML for common canvas displays
  */
@@ -387,13 +409,13 @@ export const CanvasTemplates = {
         align-items: center;
         justify-content: center;
         height: 100vh;
-        font-size: ${fontSize};
-        color: ${color};
+        font-size: ${escapeHtml(fontSize)};
+        color: ${escapeHtml(color)};
         font-family: -apple-system, system-ui, sans-serif;
         padding: 20px;
         text-align: center;
       ">
-        ${text}
+        ${escapeHtml(text)}
       </div>
     `;
   },
@@ -431,6 +453,8 @@ export const CanvasTemplates = {
   /** Image display */
   image(src: string, options?: { fit?: 'contain' | 'cover' | 'fill' }): string {
     const fit = options?.fit || 'contain';
+    // Only allow http/https/data:image URLs
+    const safeSrc = /^(https?:|data:image\/)/.test(src) ? escapeHtml(src) : '';
     return `
       <div style="
         width: 100vw;
@@ -440,10 +464,10 @@ export const CanvasTemplates = {
         justify-content: center;
         background: #000;
       ">
-        <img src="${src}" style="
+        <img src="${safeSrc}" style="
           max-width: 100%;
           max-height: 100%;
-          object-fit: ${fit};
+          object-fit: ${escapeHtml(fit)};
         " />
       </div>
     `;
@@ -469,7 +493,7 @@ export const CanvasTemplates = {
           border-radius: 50%;
           animation: spin 1s linear infinite;
         "></div>
-        ${message ? `<p style="margin-top: 16px">${message}</p>` : ''}
+        ${message ? `<p style="margin-top: 16px">${escapeHtml(message)}</p>` : ''}
       </div>
       <style>
         @keyframes spin {

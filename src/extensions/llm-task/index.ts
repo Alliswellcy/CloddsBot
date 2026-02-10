@@ -83,10 +83,11 @@ export interface TaskStats {
 }
 
 export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLMTaskExtension> {
-  const maxConcurrent = config.maxConcurrent || 3;
-  const taskTimeoutMs = config.taskTimeoutMs || 300000; // 5 minutes
-  const maxRetries = config.maxRetries || 3;
+  const maxConcurrent = config.maxConcurrent ?? 3;
+  const taskTimeoutMs = config.taskTimeoutMs ?? 300000; // 5 minutes
+  const maxRetries = config.maxRetries ?? 3;
 
+  const MAX_COMPLETED_TASKS = 1000;
   const tasks = new Map<string, Task>();
   const pendingQueue: string[] = [];
   const runningTasks = new Set<string>();
@@ -111,10 +112,11 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
 
     logger.info({ taskId, name: task.name, attempt: task.attempts }, 'Starting task');
 
+    let timeoutTimer: NodeJS.Timeout | null = null;
     try {
       // Set up timeout
       const timeoutPromise = new Promise<{ error: string }>((resolve) => {
-        setTimeout(() => resolve({ error: 'Task timed out' }), taskTimeoutMs);
+        timeoutTimer = setTimeout(() => resolve({ error: 'Task timed out' }), taskTimeoutMs);
       });
 
       const executionPromise = executor(task);
@@ -163,7 +165,9 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
         });
       }
     } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
       runningTasks.delete(taskId);
+      evictOldTasks();
     }
   }
 
@@ -174,6 +178,17 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
         resolve(result);
       }
       taskWaiters.delete(taskId);
+    }
+  }
+
+  function evictOldTasks(): void {
+    if (tasks.size <= MAX_COMPLETED_TASKS) return;
+    const completedTasks = Array.from(tasks.entries())
+      .filter(([, t]) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled')
+      .sort(([, a], [, b]) => (a.completedAt ?? 0) - (b.completedAt ?? 0));
+    const toRemove = completedTasks.slice(0, tasks.size - MAX_COMPLETED_TASKS);
+    for (const [id] of toRemove) {
+      tasks.delete(id);
     }
   }
 
@@ -307,20 +322,22 @@ export async function createLLMTaskExtension(config: LLMTaskConfig): Promise<LLM
 
       // Wait for completion
       return new Promise((resolve, reject) => {
-        const timeout = timeoutMs || taskTimeoutMs;
-        const timer = setTimeout(() => {
-          const waiters = taskWaiters.get(taskId);
-          if (waiters) {
-            const idx = waiters.indexOf(resolve);
-            if (idx >= 0) waiters.splice(idx, 1);
-          }
-          reject(new Error('Wait timeout'));
-        }, timeout);
+        const timeout = timeoutMs ?? taskTimeoutMs;
 
         const wrappedResolve = (result: TaskResult) => {
           clearTimeout(timer);
           resolve(result);
         };
+
+        const timer = setTimeout(() => {
+          const waiters = taskWaiters.get(taskId);
+          if (waiters) {
+            const idx = waiters.indexOf(wrappedResolve);
+            if (idx >= 0) waiters.splice(idx, 1);
+            if (waiters.length === 0) taskWaiters.delete(taskId);
+          }
+          reject(new Error('Wait timeout'));
+        }, timeout);
 
         if (!taskWaiters.has(taskId)) {
           taskWaiters.set(taskId, []);

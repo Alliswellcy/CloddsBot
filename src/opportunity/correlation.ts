@@ -286,8 +286,8 @@ export function createCorrelationFinder(
     const rule = findMatchingRule(marketA, marketB);
     if (!rule) return null;
 
-    const priceA = marketA.outcomes[0]?.price || 0.5;
-    const priceB = marketB.outcomes[0]?.price || 0.5;
+    const priceA = marketA.outcomes[0]?.price ?? 0.5;
+    const priceB = marketB.outcomes[0]?.price ?? 0.5;
 
     const { expectedB, mispricing } = calculateTheoreticalProbability(priceA, priceB, rule);
 

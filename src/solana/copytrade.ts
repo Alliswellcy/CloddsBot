@@ -335,8 +335,8 @@ export class CopyTrader extends EventEmitter {
 
     for (const post of targetPost) {
       const pre = targetPre.find(p => p.mint === post.mint);
-      const preAmount = pre?.uiTokenAmount?.uiAmount || 0;
-      const postAmount = post.uiTokenAmount?.uiAmount || 0;
+      const preAmount = pre?.uiTokenAmount?.uiAmount ?? 0;
+      const postAmount = post.uiTokenAmount?.uiAmount ?? 0;
       const tokenChange = postAmount - preAmount;
 
       if (post.mint === SOL_MINT) continue;
@@ -507,9 +507,9 @@ export class CopyTrader extends EventEmitter {
 
       const tokenAmount = tokenAccounts.value[0].account.data.parsed.info.tokenAmount;
       return {
-        uiAmount: tokenAmount.uiAmount || 0,
-        rawAmount: tokenAmount.amount || '0',
-        decimals: tokenAmount.decimals || 0,
+        uiAmount: tokenAmount.uiAmount ?? 0,
+        rawAmount: tokenAmount.amount ?? '0',
+        decimals: tokenAmount.decimals ?? 0,
       };
     } catch {
       return { uiAmount: 0, rawAmount: '0', decimals: 0 };

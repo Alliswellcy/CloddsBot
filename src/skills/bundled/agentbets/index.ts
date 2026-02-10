@@ -129,7 +129,7 @@ async function handleOpportunities(): Promise<string> {
     const response = await fetch(`${API_URL}/opportunities`);
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
-    const data = await response.json() as { opportunities?: any[] };
+    const data = await response.json() as { opportunities?: Array<Record<string, any>> };
     const opps = data.opportunities || [];
 
     if (opps.length === 0) return 'No +EV opportunities found on AgentBets right now.';

@@ -219,6 +219,13 @@ export async function createiMessageChannel(
   async function sendMessage(message: OutgoingMessage): Promise<string | null> {
     const chatId = message.chatId;
 
+    // Validate chatId to prevent AppleScript injection
+    // Only allow phone numbers, emails, and chat identifiers
+    if (/["\\\x00-\x1f]/.test(chatId)) {
+      logger.warn({ chatId }, 'iMessage: Rejecting chatId with dangerous characters');
+      return null;
+    }
+
     // Determine if phone number or email
     const isPhone = /^\+?[0-9\s-]+$/.test(chatId);
     const service = isPhone ? 'SMS' : 'iMessage';

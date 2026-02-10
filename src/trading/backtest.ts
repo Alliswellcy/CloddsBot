@@ -306,15 +306,15 @@ export function createBacktestEngine(db: Database): BacktestEngine {
 
     // Average trade
     const avgTradePct = closedTrades.length > 0
-      ? closedTrades.reduce((sum, t) => sum + ((t.pnl || 0) / t.price / t.size) * 100, 0) / closedTrades.length
+      ? closedTrades.reduce((sum, t) => sum + (t.price > 0 && t.size > 0 ? ((t.pnl || 0) / t.price / t.size) * 100 : 0), 0) / closedTrades.length
       : 0;
 
     const avgWinPct = wins.length > 0
-      ? wins.reduce((sum, t) => sum + ((t.pnl || 0) / t.price / t.size) * 100, 0) / wins.length
+      ? wins.reduce((sum, t) => sum + (t.price > 0 && t.size > 0 ? ((t.pnl || 0) / t.price / t.size) * 100 : 0), 0) / wins.length
       : 0;
 
     const avgLossPct = losses.length > 0
-      ? losses.reduce((sum, t) => sum + ((t.pnl || 0) / t.price / t.size) * 100, 0) / losses.length
+      ? losses.reduce((sum, t) => sum + (t.price > 0 && t.size > 0 ? ((t.pnl || 0) / t.price / t.size) * 100 : 0), 0) / losses.length
       : 0;
 
     // Drawdown

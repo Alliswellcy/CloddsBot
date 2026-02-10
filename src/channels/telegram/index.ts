@@ -537,6 +537,9 @@ export async function createTelegramChannel(
       });
 
       // Provide default results (search across platforms)
+      // Escape Markdown special characters in user-supplied query to prevent injection
+      const safeQuery = query.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+
       const results = [
         {
           type: 'article' as const,
@@ -544,7 +547,7 @@ export async function createTelegramChannel(
           title: `🔮 Search Polymarket: "${query}"`,
           description: 'Search Polymarket for this query',
           input_message_content: {
-            message_text: `🔮 Searching Polymarket for: *${query}*\n\nUse \`/search ${query}\` in chat for full results.`,
+            message_text: `🔮 Searching Polymarket for: *${safeQuery}*\n\nUse \`/search ${safeQuery}\` in chat for full results.`,
             parse_mode: 'Markdown' as const,
           },
         },
@@ -554,7 +557,7 @@ export async function createTelegramChannel(
           title: `📊 Search Kalshi: "${query}"`,
           description: 'Search Kalshi for this query',
           input_message_content: {
-            message_text: `📊 Searching Kalshi for: *${query}*\n\nUse \`/search ${query}\` in chat for full results.`,
+            message_text: `📊 Searching Kalshi for: *${safeQuery}*\n\nUse \`/search ${safeQuery}\` in chat for full results.`,
             parse_mode: 'Markdown' as const,
           },
         },
@@ -564,7 +567,7 @@ export async function createTelegramChannel(
           title: `🎲 Search All Platforms: "${query}"`,
           description: 'Search all prediction markets',
           input_message_content: {
-            message_text: `🎲 Searching all platforms for: *${query}*\n\nUse \`/search ${query}\` in DM for full results.`,
+            message_text: `🎲 Searching all platforms for: *${safeQuery}*\n\nUse \`/search ${safeQuery}\` in DM for full results.`,
             parse_mode: 'Markdown' as const,
           },
         },
@@ -634,6 +637,10 @@ export async function createTelegramChannel(
 
     async sendMessage(message: OutgoingMessage): Promise<string | null> {
       const chatId = parseInt(message.chatId, 10);
+      if (!Number.isFinite(chatId)) {
+        logger.warn({ chatId: message.chatId }, 'Invalid Telegram chat ID');
+        return null;
+      }
 
       // Build reply markup for buttons
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -727,6 +734,10 @@ export async function createTelegramChannel(
     async editMessage(message: OutgoingMessage & { messageId: string }) {
       const chatId = parseInt(message.chatId, 10);
       const messageId = parseInt(message.messageId, 10);
+      if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) {
+        logger.warn({ chatId: message.chatId, messageId: message.messageId }, 'Invalid Telegram edit target');
+        return;
+      }
       await callTelegramApi(chatId, 'editMessageText', () =>
         bot.api.editMessageText(chatId, messageId, message.text, {
           parse_mode: message.parseMode === 'HTML'
@@ -744,6 +755,9 @@ export async function createTelegramChannel(
      */
     createDraftStream(chatId: string) {
       const numericChatId = parseInt(chatId, 10);
+      if (!Number.isFinite(numericChatId)) {
+        throw new Error(`Invalid Telegram chat ID for draft stream: ${chatId}`);
+      }
       let messageId: number | null = null;
       let currentText = '';
       let lastUpdateTime = 0;
@@ -873,6 +887,10 @@ export async function createTelegramChannel(
     async deleteMessage(message: OutgoingMessage & { messageId: string }) {
       const chatId = parseInt(message.chatId, 10);
       const messageId = parseInt(message.messageId, 10);
+      if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) {
+        logger.warn({ chatId: message.chatId, messageId: message.messageId }, 'Invalid Telegram delete target');
+        return;
+      }
       await callTelegramApi(chatId, 'deleteMessage', () => bot.api.deleteMessage(chatId, messageId));
     },
 

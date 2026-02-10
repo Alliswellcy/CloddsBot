@@ -5,7 +5,7 @@
  * Finds best routes and executes swaps.
  */
 
-import { JsonRpcProvider, Wallet, Contract, parseUnits, formatUnits, MaxUint256 } from 'ethers';
+import { JsonRpcProvider, Wallet, Contract, parseUnits, formatUnits } from 'ethers';
 import { getProvider, getChainConfig, ChainName, CHAINS } from './multichain';
 import { logger } from '../utils/logger';
 
@@ -214,7 +214,7 @@ async function ensureApproval(
 
   logger.info({ token: tokenAddress, spender, amount: amount.toString() }, 'Approving token');
 
-  const tx = await token.approve(spender, MaxUint256);
+  const tx = await token.approve(spender, amount);
   const receipt = await tx.wait();
 
   return receipt.hash;

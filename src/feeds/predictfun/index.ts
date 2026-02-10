@@ -225,8 +225,8 @@ export async function createPredictFunFeed(config?: {
         .filter(([price, size]: [number, number]) => !isNaN(price) && !isNaN(size) && price > 0 && size > 0)
         .sort((a: [number, number], b: [number, number]) => a[0] - b[0]);
 
-      const bestBid = bids[0]?.[0] || 0;
-      const bestAsk = asks[0]?.[0] || 1;
+      const bestBid = bids[0]?.[0] ?? 0;
+      const bestAsk = asks[0]?.[0] ?? 1;
       const midPrice = (bestBid + bestAsk) / 2;
       const spread = bestAsk - bestBid;
 

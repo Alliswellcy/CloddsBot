@@ -139,6 +139,7 @@ export function createRateLimiter(
   };
 
   const endpoints = new Map<string, EndpointState>();
+  const MAX_TRACKED_ENDPOINTS = 1000;
 
   /**
    * Get or create endpoint state
@@ -147,6 +148,19 @@ export function createRateLimiter(
     let state = endpoints.get(endpoint);
 
     if (!state) {
+      // Evict least-recently-used endpoints if over limit
+      if (endpoints.size >= MAX_TRACKED_ENDPOINTS) {
+        let oldestKey: string | undefined;
+        let oldestTime = Infinity;
+        endpoints.forEach((val, key) => {
+          if (val.stats.lastRequestAt < oldestTime) {
+            oldestTime = val.stats.lastRequestAt;
+            oldestKey = key;
+          }
+        });
+        if (oldestKey) endpoints.delete(oldestKey);
+      }
+
       // Find matching config from defaults
       const defaultLimit = DEFAULT_RATE_LIMITS[endpoint] || DEFAULT_RATE_LIMITS['default'];
       // User config (baseConfig) takes precedence over defaults
@@ -295,22 +309,23 @@ export function createRateLimiter(
    * Wait until request can be made
    */
   async function waitForSlot(endpoint: string): Promise<void> {
-    const status = getStatus(endpoint);
+    const maxWaitAttempts = 20; // Prevent infinite loops
+    for (let i = 0; i < maxWaitAttempts; i++) {
+      const status = getStatus(endpoint);
 
-    if (!status.isLimited) {
-      return;
+      if (!status.isLimited) {
+        return;
+      }
+
+      const waitTime = Math.max(status.retryAfterMs, getEndpoint(endpoint).config.retryAfterMs || 1000);
+
+      logger.debug({ endpoint, waitTime, attempt: i }, 'Waiting for rate limit slot');
+
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
 
-    const waitTime = Math.max(status.retryAfterMs, getEndpoint(endpoint).config.retryAfterMs || 1000);
-
-    logger.debug({ endpoint, waitTime }, 'Waiting for rate limit slot');
-
-    await new Promise((resolve) => setTimeout(resolve, waitTime));
-
-    // Recursive check in case still limited
-    if (!canRequest(endpoint)) {
-      await waitForSlot(endpoint);
-    }
+    // If still limited after max attempts, log warning but return to avoid infinite block
+    logger.warn({ endpoint, maxWaitAttempts }, 'Rate limit wait exceeded max attempts');
   }
 
   /**

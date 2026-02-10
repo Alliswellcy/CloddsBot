@@ -59,7 +59,7 @@ export class CopilotAuthClient {
     try {
       const dir = path.dirname(this.tokenStorePath);
       if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
       fs.writeFileSync(this.tokenStorePath, JSON.stringify(this.tokens, null, 2), {
         mode: 0o600,
@@ -286,22 +286,19 @@ export class CopilotAuthClient {
 export async function interactiveCopilotAuth(config?: CopilotConfig): Promise<CopilotTokens> {
   const client = new CopilotAuthClient(config);
 
-  console.log('\n=== GitHub Copilot Authentication ===');
+  logger.info('Starting GitHub Copilot authentication');
 
   const deviceCode = await client.startDeviceCodeFlow();
 
-  console.log(`\nOpen this URL in your browser:\n  ${deviceCode.verificationUri}`);
-  console.log(`\nEnter this code: ${deviceCode.userCode}`);
-  console.log('\nWaiting for authorization...');
+  logger.info({ verificationUri: deviceCode.verificationUri, userCode: deviceCode.userCode }, 'Open URL in browser and enter code');
 
   const githubToken = await client.pollDeviceCode(deviceCode.deviceCode, deviceCode.interval);
 
-  console.log('\nGitHub authentication successful!');
-  console.log('Fetching Copilot token...');
+  logger.info('GitHub authentication successful, fetching Copilot token');
 
   await client.getCopilotToken();
 
-  console.log('Copilot authentication complete!');
+  logger.info('Copilot authentication complete');
 
   return {
     githubToken,
@@ -349,7 +346,7 @@ export class CopilotCompletionClient {
       choices: Array<{ text: string }>;
     };
 
-    return data.choices[0]?.text || '';
+    return data.choices?.[0]?.text || '';
   }
 
   async chat(messages: Array<{ role: string; content: string }>, options: {
@@ -379,6 +376,6 @@ export class CopilotCompletionClient {
       choices: Array<{ message: { content: string } }>;
     };
 
-    return data.choices[0]?.message?.content || '';
+    return data.choices?.[0]?.message?.content || '';
   }
 }

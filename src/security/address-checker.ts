@@ -15,7 +15,8 @@ const DEFAULT_EVM_RPC = 'https://eth.llamarpc.com';
 // ── Chain detection (matches token-security pattern) ─────────────────────────
 
 export function detectChain(address: string): ChainType {
-  if (address.startsWith('0x') && address.length === 42) return 'evm';
+  const trimmed = address.trim();
+  if (trimmed.toLowerCase().startsWith('0x') && trimmed.length === 42) return 'evm';
   return 'solana';
 }
 
@@ -32,27 +33,41 @@ function scoreToLevel(score: number): RiskLevel {
 // ── Solana RPC helper ────────────────────────────────────────────────────────
 
 async function solanaRpc(rpcUrl: string, method: string, params: unknown[]): Promise<any> {
-  const res = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
-  const json = await res.json() as any;
-  if (json.error) throw new Error(json.error.message || JSON.stringify(json.error));
-  return json.result;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal: controller.signal,
+    });
+    const json = await res.json() as any;
+    if (json.error) throw new Error(json.error.message || JSON.stringify(json.error));
+    return json.result;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ── EVM RPC helper ───────────────────────────────────────────────────────────
 
 async function evmRpc(rpcUrl: string, method: string, params: unknown[]): Promise<any> {
-  const res = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
-  const json = await res.json() as any;
-  if (json.error) throw new Error(json.error.message || JSON.stringify(json.error));
-  return json.result;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal: controller.signal,
+    });
+    const json = await res.json() as any;
+    if (json.error) throw new Error(json.error.message || JSON.stringify(json.error));
+    return json.result;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ── Solana address check ─────────────────────────────────────────────────────
@@ -137,6 +152,8 @@ async function checkSolana(address: string, rpcUrl: string): Promise<AddressChec
     }
   } catch (err) {
     flags.push(`RPC check failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    // Fail-closed: if we can't verify on-chain, treat as medium risk minimum
+    score = Math.max(score, 50);
   }
 
   score = Math.max(0, Math.min(100, score));
@@ -205,6 +222,8 @@ async function checkEvm(address: string, rpcUrl: string): Promise<AddressCheckRe
     }
   } catch (err) {
     flags.push(`RPC check failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    // Fail-closed: if we can't verify on-chain, treat as medium risk minimum
+    score = Math.max(score, 50);
   }
 
   score = Math.max(0, Math.min(100, score));

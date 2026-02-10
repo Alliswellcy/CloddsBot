@@ -7,19 +7,20 @@
 
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../utils/logger.js';
+import type { Market, NewsItem } from '../types.js';
 
 /** Minimal FeedManager shape (avoids importing the full module) */
 export interface FeedManagerLike {
-  searchMarkets(query: string, platform?: string): Promise<any[]>;
-  getMarket(marketId: string, platform?: string): Promise<any | null>;
+  searchMarkets(query: string, platform?: string): Promise<Market[]>;
+  getMarket(marketId: string, platform?: string): Promise<Market | null>;
   getPrice(platform: string, marketId: string): Promise<number | null>;
-  getOrderbook(platform: string, marketId: string): Promise<any | null>;
-  getRecentNews(limit?: number): any[];
-  searchNews(query: string): any[];
-  getNewsForMarket(marketQuestion: string): any[];
+  getOrderbook(platform: string, marketId: string): Promise<Record<string, unknown> | null>;
+  getRecentNews(limit?: number): NewsItem[];
+  searchNews(query: string): NewsItem[];
+  getNewsForMarket(marketQuestion: string): NewsItem[];
   getCacheStats(): { hits: number; misses: number; size: number; hitRate: number };
   clearCache(): void;
-  analyzeEdge(marketId: string, question: string, price: number, category: string): Promise<any>;
+  analyzeEdge(marketId: string, question: string, price: number, category: string): Promise<Record<string, unknown>>;
   calculateKelly(price: number, estimate: number, bankroll: number): { fullKelly: number; halfKelly: number; quarterKelly: number };
 }
 

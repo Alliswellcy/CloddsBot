@@ -7,6 +7,9 @@
 import { Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
 import { signAndSendTransaction } from './wallet';
 import BN from 'bn.js';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('solana:marginfi');
 
 // ============================================
 // INTERFACES
@@ -158,7 +161,7 @@ export async function getMarginfiAccount(
       ltv: ltv * 100,
     };
   } catch (error) {
-    console.error('Failed to get MarginFi account:', error);
+    logger.error({ error }, 'Failed to get MarginFi account');
     return null;
   }
 }
@@ -209,7 +212,7 @@ export async function getMarginfiBanks(
 
     return banks;
   } catch (error) {
-    console.error('Failed to get MarginFi banks:', error);
+    logger.error({ error }, 'Failed to get MarginFi banks');
     return [];
   }
 }

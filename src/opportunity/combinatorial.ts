@@ -880,14 +880,17 @@ export async function scanCombinatorialArbitrage(
 
       for (const m of markets.slice(0, 200)) {
         // Convert to MarketCondition format
+        // Use actual YES/NO prices from outcomes (not assumed complement)
+        // This is critical: rebalance arb detection depends on YES + NO != 1.0
         const yesPrice = m.outcomes?.[0]?.price ?? 0.5;
+        const noPrice = m.outcomes?.[1]?.price ?? (1 - yesPrice);
         allMarkets.push({
           platform,
           marketId: m.id,
           conditionId: m.id,
           question: m.question,
           yesPrice,
-          noPrice: 1 - yesPrice,
+          noPrice,
           endDate: m.endDate ? new Date(m.endDate) : undefined,
           volume24h: m.volume24h,
           liquidity: m.liquidity,

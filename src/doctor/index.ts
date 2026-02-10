@@ -12,11 +12,14 @@
 import { exec, execSync } from 'child_process';
 import { existsSync, accessSync, constants } from 'fs';
 import { promisify } from 'util';
-import { platform, homedir, cpus, totalmem, freemem } from 'os';
+import { platform, totalmem, freemem } from 'os';
 import { logger } from '../utils/logger';
 import { resolveStateDir } from '../utils/config';
 
 const execAsync = promisify(exec);
+
+/** Default timeout for shell commands (10 seconds) */
+const EXEC_TIMEOUT_MS = 10_000;
 
 // =============================================================================
 // TYPES
@@ -102,7 +105,7 @@ const checks: Record<string, Check> = {
     if (platform() === 'win32') {
       try {
         const drive = (process.env.SystemDrive || 'C:').toUpperCase();
-        const { stdout } = await execAsync('wmic logicaldisk get size,freespace,caption');
+        const { stdout } = await execAsync('wmic logicaldisk get size,freespace,caption', { timeout: EXEC_TIMEOUT_MS });
         const lines = stdout
           .split(/\r?\n/)
           .slice(1)
@@ -129,7 +132,7 @@ const checks: Record<string, Check> = {
     }
 
     try {
-      const { stdout } = await execAsync('df -h / | tail -1');
+      const { stdout } = await execAsync('df -h / | tail -1', { timeout: EXEC_TIMEOUT_MS });
       const parts = stdout.trim().split(/\s+/);
       const usePercent = parseInt(parts[4]?.replace('%', '') || '0', 10);
 
@@ -178,7 +181,7 @@ const checks: Record<string, Check> = {
   // Dependency checks
   async git(): Promise<CheckResult> {
     try {
-      const { stdout } = await execAsync('git --version');
+      const { stdout } = await execAsync('git --version', { timeout: EXEC_TIMEOUT_MS });
       return {
         name: 'Git',
         status: 'pass',
@@ -196,8 +199,10 @@ const checks: Record<string, Check> = {
   },
 
   async python(): Promise<CheckResult> {
+    // On Windows, the command is typically "python" not "python3"
+    const cmd = platform() === 'win32' ? 'python --version' : 'python3 --version';
     try {
-      const { stdout } = await execAsync('python3 --version');
+      const { stdout } = await execAsync(cmd, { timeout: EXEC_TIMEOUT_MS });
       return {
         name: 'Python',
         status: 'pass',
@@ -303,7 +308,7 @@ const checks: Record<string, Check> = {
 
     try {
       // Try to run a basic AppleScript
-      execSync('osascript -e "return 1"', { stdio: 'pipe' });
+      execSync('osascript -e "return 1"', { stdio: 'pipe', timeout: EXEC_TIMEOUT_MS });
       return {
         name: 'macOS Permissions',
         status: 'pass',
@@ -322,7 +327,7 @@ const checks: Record<string, Check> = {
   // Docker check
   async docker(): Promise<CheckResult> {
     try {
-      const { stdout } = await execAsync('docker --version');
+      const { stdout } = await execAsync('docker --version', { timeout: EXEC_TIMEOUT_MS });
       return {
         name: 'Docker',
         status: 'pass',
@@ -343,6 +348,9 @@ const checks: Record<string, Check> = {
 // DOCTOR
 // =============================================================================
 
+/** Per-check timeout (15 seconds) to prevent any single check from blocking */
+const CHECK_TIMEOUT_MS = 15_000;
+
 export async function runDoctor(options: CheckOptions = {}): Promise<DoctorReport> {
   const results: CheckResult[] = [];
   const categories = options.categories || Object.keys(checks);
@@ -354,7 +362,12 @@ export async function runDoctor(options: CheckOptions = {}): Promise<DoctorRepor
 
     try {
       const start = Date.now();
-      const result = await check();
+      const result = await Promise.race([
+        check(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Check "${name}" timed out after ${CHECK_TIMEOUT_MS}ms`)), CHECK_TIMEOUT_MS)
+        ),
+      ]);
       result.duration = result.duration || (Date.now() - start);
       results.push(result);
 

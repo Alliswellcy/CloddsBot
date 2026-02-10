@@ -331,9 +331,15 @@ class StdioMcpClient implements McpClient {
       proc.on('exit', (code) => {
         logger.info({ server: this.config.name, code }, 'MCP server exited');
         this.connected = false;
-        if (this.config.restartOnExit) {
-          void this.scheduleReconnect();
-        } else if (this.config.retryOnFailure !== false) {
+
+        // Reject pending requests since the process is gone
+        for (const [id, pending] of this.pendingRequests) {
+          pending.reject(new Error(`MCP server exited with code ${code}`));
+        }
+        this.pendingRequests.clear();
+
+        // Only reconnect when explicitly configured
+        if (this.config.restartOnExit || (code !== 0 && this.config.retryOnFailure === true)) {
           void this.scheduleReconnect();
         }
       });
@@ -352,12 +358,18 @@ class StdioMcpClient implements McpClient {
   }
 
   async disconnect(): Promise<void> {
+    this.connected = false;
+
+    // Reject all pending requests so callers don't hang forever
+    for (const [id, pending] of this.pendingRequests) {
+      pending.reject(new Error('MCP client disconnected'));
+    }
+    this.pendingRequests.clear();
+
     if (this.process) {
       this.process.kill();
       this.process = null;
     }
-    this.connected = false;
-    this.pendingRequests.clear();
   }
 
   private async scheduleReconnect(): Promise<void> {
@@ -452,7 +464,13 @@ class StdioMcpClient implements McpClient {
         },
       });
 
-      this.process!.stdin!.write(JSON.stringify(request) + '\n');
+      try {
+        this.process!.stdin!.write(JSON.stringify(request) + '\n');
+      } catch (writeErr) {
+        this.pendingRequests.delete(id);
+        clearTimeout(timer);
+        reject(writeErr instanceof Error ? writeErr : new Error('Failed to write to MCP stdin'));
+      }
     });
   }
 
@@ -586,7 +604,15 @@ class SseMcpClient implements McpClient {
     this.readStream(response.body).catch((error) => {
       logger.warn({ server: this.config.name, error }, 'SSE stream ended');
       this.connected = false;
-      if (this.config.retryOnFailure !== false) {
+
+      // Reject pending requests since the stream is gone
+      for (const [id, pending] of this.pendingRequests) {
+        pending.reject(new Error('SSE stream ended'));
+      }
+      this.pendingRequests.clear();
+
+      // Only reconnect when explicitly configured
+      if (this.config.restartOnExit || this.config.retryOnFailure === true) {
         void this.scheduleReconnect();
       }
     });
@@ -598,10 +624,16 @@ class SseMcpClient implements McpClient {
   }
 
   async disconnect(): Promise<void> {
+    this.connected = false;
+
+    // Reject all pending requests so callers don't hang forever
+    for (const [id, pending] of this.pendingRequests) {
+      pending.reject(new Error('MCP client disconnected'));
+    }
+    this.pendingRequests.clear();
+
     this.abortController?.abort();
     this.abortController = null;
-    this.connected = false;
-    this.pendingRequests.clear();
   }
 
   private async scheduleReconnect(): Promise<void> {
@@ -747,7 +779,19 @@ class SseMcpClient implements McpClient {
       capabilities: {},
     });
 
-    await this.request('notifications/initialized');
+    // Send as a notification (no id) — per MCP spec notifications must not have an id
+    const endpoint = this.config.messageEndpoint || this.inferMessageEndpoint();
+    if (endpoint) {
+      const notification = { jsonrpc: '2.0' as const, method: 'notifications/initialized' };
+      await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(this.config.headers || {}) },
+        body: JSON.stringify(notification),
+      }).catch((err) => {
+        logger.warn({ server: this.config.name, error: err }, 'Failed to send initialized notification');
+      });
+    }
+
     return result.serverInfo;
   }
 
@@ -822,6 +866,26 @@ export function createMcpRegistry(): McpRegistry {
   const clients: Map<string, McpClient> = new Map();
   const promptCache = new Map<string, { content: McpContent[]; expiresAt: number }>();
   const promptTtlMs = Number(process.env.CLODDS_MCP_PROMPT_CACHE_TTL_MS || 5 * 60 * 1000);
+  const PROMPT_CACHE_MAX_SIZE = 500;
+
+  // Evict expired entries (called periodically)
+  function evictPromptCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of promptCache) {
+      if (entry.expiresAt <= now) {
+        promptCache.delete(key);
+      }
+    }
+    // Hard cap to prevent unbounded growth
+    if (promptCache.size > PROMPT_CACHE_MAX_SIZE) {
+      const excess = promptCache.size - PROMPT_CACHE_MAX_SIZE;
+      const keys = promptCache.keys();
+      for (let i = 0; i < excess; i++) {
+        const next = keys.next();
+        if (!next.done) promptCache.delete(next.value);
+      }
+    }
+  }
 
   return {
     register(config) {
@@ -979,6 +1043,9 @@ export function createMcpRegistry(): McpRegistry {
       const [serverName, promptName] = qualifiedName.includes(':')
         ? qualifiedName.split(':', 2)
         : [null, qualifiedName];
+
+      // Periodically evict expired/excess cache entries
+      evictPromptCache();
 
       const key = `${serverName || 'any'}:${promptName}:${JSON.stringify(args || {})}`;
       const cached = promptCache.get(key);

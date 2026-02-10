@@ -89,6 +89,8 @@ function generateId(length: number = 16): string {
 export async function createOTelExtension(config: OTelConfig): Promise<OTelExtension> {
   const serviceName = config.serviceName || 'clodds';
   const sampleRate = config.sampleRate ?? 1.0;
+  const MAX_BUFFERED_SPANS = 10000;
+  const MAX_BUFFERED_METRICS = 10000;
   const spans: Span[] = [];
   const metrics: Metric[] = [];
   const counters = new Map<string, number>();
@@ -314,12 +316,18 @@ export async function createOTelExtension(config: OTelConfig): Promise<OTelExten
 
         end() {
           span.endTime = Date.now();
+          if (spans.length >= MAX_BUFFERED_SPANS) {
+            spans.splice(0, Math.floor(MAX_BUFFERED_SPANS / 2));
+          }
           spans.push(span);
         },
       };
     },
 
     recordMetric(name: string, value: number, labels?: Record<string, string>) {
+      if (metrics.length >= MAX_BUFFERED_METRICS) {
+        metrics.splice(0, Math.floor(MAX_BUFFERED_METRICS / 2));
+      }
       metrics.push({
         name,
         type: 'gauge',

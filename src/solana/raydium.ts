@@ -232,8 +232,10 @@ export async function listRaydiumPools(filters?: {
     throw new Error(`Raydium pool list error: ${response.status}`);
   }
 
-  const data = await response.json() as any;
-  const pools: any[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data = await response.json() as Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const pools: Array<Record<string, any>> = [];
 
   if (Array.isArray(data)) {
     pools.push(...data);
@@ -475,7 +477,7 @@ export async function createClmmPosition(
     epochInfo,
   });
 
-  const slippage = params.slippage || 0.01;
+  const slippage = params.slippage ?? 0.01;
 
   const { execute, extInfo } = await raydium.clmm.openPositionFromBase({
     poolInfo,
@@ -527,7 +529,7 @@ export async function increaseClmmLiquidity(
 
   if (!position) throw new Error(`Position not found: ${params.positionNftMint}`);
 
-  const slippage = params.slippage || 0.05;
+  const slippage = params.slippage ?? 0.05;
   const inputAmount = params.amountA || params.amountB || '0';
   const inputA = !!params.amountA;
 
@@ -592,6 +594,37 @@ export async function decreaseClmmLiquidity(
   }
 
   const closePosition = params.closePosition || liquidityToRemove.eq(position.liquidity);
+  const slippage = params.slippage ?? 0.02;
+
+  // Compute expected amounts from liquidity removal for slippage protection
+  const { PoolUtils } = await import('@raydium-io/raydium-sdk-v2');
+  const epochInfo = await raydium.fetchEpochInfo();
+  let amountMinA = new BN(0);
+  let amountMinB = new BN(0);
+  try {
+    const res = await PoolUtils.getLiquidityAmountOutFromAmountIn({
+      poolInfo,
+      slippage: 0,
+      inputA: true,
+      tickUpper: Math.max(position.tickLower, position.tickUpper),
+      tickLower: Math.min(position.tickLower, position.tickUpper),
+      amount: new BN(1), // dummy
+      add: false,
+      amountHasFee: false,
+      epochInfo,
+    });
+    // Use slippage-adjusted minimums instead of zero
+    if (res.amountA?.amount) {
+      const estA = liquidityToRemove.mul(res.amountA.amount).div(res.liquidity.isZero() ? new BN(1) : res.liquidity);
+      amountMinA = new BN(new Decimal(estA.toString()).mul(1 - slippage).toFixed(0));
+    }
+    if (res.amountB?.amount) {
+      const estB = liquidityToRemove.mul(res.amountB.amount).div(res.liquidity.isZero() ? new BN(1) : res.liquidity);
+      amountMinB = new BN(new Decimal(estB.toString()).mul(1 - slippage).toFixed(0));
+    }
+  } catch {
+    // Fallback to zero if estimation fails (better to execute than fail)
+  }
 
   const { execute } = await raydium.clmm.decreaseLiquidity({
     poolInfo,
@@ -601,8 +634,8 @@ export async function decreaseClmmLiquidity(
       closePosition,
     },
     liquidity: liquidityToRemove,
-    amountMinA: new BN(0),
-    amountMinB: new BN(0),
+    amountMinA,
+    amountMinB,
     txVersion: TxVersion.V0,
   });
 
@@ -723,7 +756,7 @@ export async function addAmmLiquidity(
 
   const inputAmount = params.amountA || params.amountB || '0';
   const baseIn = !!params.amountA;
-  const slippage = params.slippage || 0.01;
+  const slippage = params.slippage ?? 0.01;
 
   const pairAmount = raydium.liquidity.computePairAmount({
     poolInfo,
@@ -774,12 +807,15 @@ export async function removeAmmLiquidity(
   const poolInfo = data[0] as any;
 
   const lpAmount = new BN(params.lpAmount);
-  const slippage = params.slippage || 0.1;
+  const slippage = params.slippage ?? 0.1;
 
-  const lpMintDecimals = poolInfo.lpMint?.decimals || 9;
+  const lpMintDecimals = poolInfo.lpMint?.decimals ?? 9;
   const mintAmountA = poolInfo.mintAmountA || poolInfo.baseReserve || 0;
   const mintAmountB = poolInfo.mintAmountB || poolInfo.quoteReserve || 0;
-  const lpTotalAmount = poolInfo.lpAmount || poolInfo.lpSupply || 1;
+  const lpTotalAmount = poolInfo.lpAmount || poolInfo.lpSupply;
+  if (!lpTotalAmount || Number(lpTotalAmount) === 0) {
+    throw new Error('Cannot remove liquidity: LP total supply is zero');
+  }
 
   const [baseRatio, quoteRatio] = [
     new Decimal(mintAmountA).div(lpTotalAmount),
@@ -846,7 +882,7 @@ export async function swapClmm(
 
   const baseIn = params.inputMint === poolInfo.mintA.address;
   const inputAmount = new BN(params.amountIn);
-  const slippage = params.slippage || 0.01;
+  const slippage = params.slippage ?? 0.01;
 
   const { minAmountOut, remainingAccounts } = await PoolUtils.computeAmountOutFormat({
     poolInfo: clmmPoolInfo,
@@ -902,7 +938,7 @@ export async function createClmmPool(
   const mint2 = await raydium.token.getTokenInfo(params.mintB);
 
   const clmmConfigs = await raydium.api.getClmmConfigs();
-  const configIndex = params.configIndex || 0;
+  const configIndex = params.configIndex ?? 0;
   const config = clmmConfigs[configIndex];
 
   const { execute, extInfo } = await raydium.clmm.createPool({

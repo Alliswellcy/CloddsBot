@@ -246,8 +246,12 @@ export async function createChannelManager(
 
     async stop() {
       for (const [name, channel] of channels) {
-        logger.info({ channel: name }, 'Stopping channel');
-        await channel.stop();
+        try {
+          logger.info({ channel: name }, 'Stopping channel');
+          await channel.stop();
+        } catch (error) {
+          logger.error({ error, channel: name }, `Failed to stop ${name} channel — continuing`);
+        }
       }
       if (webchat) {
         webchat.stop();

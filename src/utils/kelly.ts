@@ -121,7 +121,7 @@ export function calculateKelly(input: KellyInput): KellyResult {
     return createZeroResult(bankroll);
   }
 
-  if (odds <= 0) {
+  if (odds <= 1) {
     return createZeroResult(bankroll);
   }
 
@@ -342,9 +342,10 @@ export function calculatePortfolioKelly(input: PortfolioKellyInput): PortfolioKe
     let adjustedFraction = kelly.kelly * scaleFactor;
 
     // Reduce for correlated bets
-    if (opp.correlations) {
-      const avgCorrelation = Object.values(opp.correlations).reduce((a, b) => a + Math.abs(b), 0) /
-        Object.values(opp.correlations).length;
+    if (opp.correlations && Object.keys(opp.correlations).length > 0) {
+      const correlationValues = Object.values(opp.correlations);
+      const avgCorrelation = correlationValues.reduce((a, b) => a + Math.abs(b), 0) /
+        correlationValues.length;
       adjustedFraction *= 1 - avgCorrelation * 0.3; // Reduce by up to 30% for high correlation
     }
 
@@ -378,6 +379,7 @@ export function calculatePortfolioKelly(input: PortfolioKellyInput): PortfolioKe
  * Convert American odds to decimal odds
  */
 export function americanToDecimal(american: number): number {
+  if (american === 0) return 1; // Even money edge case
   if (american > 0) {
     return american / 100 + 1;
   } else {
@@ -396,6 +398,7 @@ export function oddsToProb(odds: number): number {
  * Convert probability to decimal odds
  */
 export function probToOdds(prob: number): number {
+  if (prob <= 0 || prob > 1) return Infinity;
   return 1 / prob;
 }
 
@@ -413,6 +416,7 @@ export function edgeToKelly(edge: number, odds: number): number {
   if (edge <= 0) return 0;
   // Simplified: edge / (odds - 1)
   const b = odds - 1;
+  if (b <= 0) return 0;
   return edge / b;
 }
 
@@ -445,7 +449,8 @@ export function calculateSafePositionSize(
   // Use recommended (half Kelly) as base
   let size = kellyResult.recommendedSize;
 
-  // Apply max % of bankroll
+  // Apply max % of bankroll (guard against division by zero when kellyFraction is 0)
+  if (kellyResult.kellyFraction === 0) return 0;
   const bankroll = kellyResult.fullKelly / kellyResult.kellyFraction;
   size = Math.min(size, bankroll * maxPositionPct);
 

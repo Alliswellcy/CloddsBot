@@ -495,9 +495,14 @@ export function createBrowserService(): BrowserService {
       }
       pages.length = 0;
 
-      // Kill browser process
+      // Kill browser process - use SIGKILL for reliable cleanup
+      // Chrome can ignore SIGTERM in some states
       if (process) {
-        process.kill();
+        try {
+          process.kill('SIGKILL');
+        } catch {
+          // Process may already be dead
+        }
         process = null;
       }
 

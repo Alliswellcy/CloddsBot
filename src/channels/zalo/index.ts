@@ -73,7 +73,8 @@ export async function createZaloChannel(
   function verifyWebhook(body: string, signature: string): boolean {
     if (!config.secretKey) return true; // Skip verification if no secret
     const hash = crypto.createHmac('sha256', config.secretKey).update(body).digest('hex');
-    return hash === signature;
+    if (hash.length !== signature.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(signature));
   }
 
   async function sendTextMessage(userId: string, text: string): Promise<string | null> {
@@ -173,7 +174,7 @@ export async function createZaloChannel(
       chatType: 'dm',
       text,
       attachments: attachments.length > 0 ? attachments : undefined,
-      timestamp: new Date(parseInt(event.timestamp)),
+      timestamp: new Date(parseInt(event.timestamp) || Date.now()),
     };
 
     logger.info({ userId }, 'Received Zalo message');

@@ -38,7 +38,7 @@ export interface AgentBetsFeed extends EventEmitter {
   disconnect: () => void;
   searchMarkets: (query?: string) => Promise<Market[]>;
   getMarket: (id: string) => Promise<Market | null>;
-  getOpportunities: () => Promise<any[]>;
+  getOpportunities: () => Promise<Record<string, unknown>[]>;
 }
 
 export async function createAgentBetsFeed(): Promise<AgentBetsFeed> {
@@ -122,7 +122,7 @@ export async function createAgentBetsFeed(): Promise<AgentBetsFeed> {
     }
   }
 
-  async function getOpportunities(): Promise<any[]> {
+  async function getOpportunities(): Promise<Record<string, unknown>[]> {
     try {
       const response = await fetch(`${API_URL}/opportunities`);
       

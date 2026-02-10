@@ -9,7 +9,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import { Database } from '../db/index';
+import { Database, type SqlBindValue } from '../db/index';
 import { logger } from '../utils/logger';
 import type { Platform } from '../types';
 
@@ -253,7 +253,7 @@ export function createTradeLogger(db: Database): TradeLogger {
       cost: row.cost,
       fees: row.fees,
       isMaker: row.is_maker === 1,
-      makerRebate: row.maker_rebate || 0,
+      makerRebate: row.maker_rebate ?? 0,
       orderId: row.order_id,
       status: row.status,
       strategyId: row.strategy_id,
@@ -290,9 +290,9 @@ export function createTradeLogger(db: Database): TradeLogger {
         trade.size,
         trade.filled,
         trade.cost,
-        trade.fees || null,
+        trade.fees ?? null,
         trade.isMaker ? 1 : 0,
-        trade.makerRebate || 0,
+        trade.makerRebate ?? 0,
         trade.orderId || null,
         trade.status,
         trade.strategyId || null,
@@ -300,8 +300,8 @@ export function createTradeLogger(db: Database): TradeLogger {
         trade.tags ? JSON.stringify(trade.tags) : null,
         trade.exitTradeId || null,
         trade.entryTradeId || null,
-        trade.realizedPnL || null,
-        trade.realizedPnLPct || null,
+        trade.realizedPnL ?? null,
+        trade.realizedPnLPct ?? null,
         trade.createdAt.toISOString(),
         trade.filledAt?.toISOString() || null,
         trade.meta ? JSON.stringify(trade.meta) : null,
@@ -437,7 +437,7 @@ export function createTradeLogger(db: Database): TradeLogger {
 
     getTrades(filter = {}) {
       let sql = 'SELECT * FROM trades WHERE 1=1';
-      const params: any[] = [];
+      const params: SqlBindValue[] = [];
 
       if (filter.platform) {
         sql += ' AND platform = ?';
@@ -501,12 +501,12 @@ export function createTradeLogger(db: Database): TradeLogger {
       const allTrades = emitter.getTrades(filter);
       const closedTrades = allTrades.filter((t) => t.realizedPnL !== undefined);
 
-      const wins = closedTrades.filter((t) => (t.realizedPnL || 0) > 0);
-      const losses = closedTrades.filter((t) => (t.realizedPnL || 0) < 0);
+      const wins = closedTrades.filter((t) => (t.realizedPnL ?? 0) > 0);
+      const losses = closedTrades.filter((t) => (t.realizedPnL ?? 0) < 0);
 
-      const totalPnL = closedTrades.reduce((sum, t) => sum + (t.realizedPnL || 0), 0);
-      const totalWins = wins.reduce((sum, t) => sum + (t.realizedPnL || 0), 0);
-      const totalLosses = Math.abs(losses.reduce((sum, t) => sum + (t.realizedPnL || 0), 0));
+      const totalPnL = closedTrades.reduce((sum, t) => sum + (t.realizedPnL ?? 0), 0);
+      const totalWins = wins.reduce((sum, t) => sum + (t.realizedPnL ?? 0), 0);
+      const totalLosses = Math.abs(losses.reduce((sum, t) => sum + (t.realizedPnL ?? 0), 0));
 
       // By platform
       const byPlatform: Record<string, { trades: number; pnl: number }> = {};
@@ -515,7 +515,7 @@ export function createTradeLogger(db: Database): TradeLogger {
           byPlatform[trade.platform] = { trades: 0, pnl: 0 };
         }
         byPlatform[trade.platform].trades++;
-        byPlatform[trade.platform].pnl += trade.realizedPnL || 0;
+        byPlatform[trade.platform].pnl += trade.realizedPnL ?? 0;
       }
 
       // By strategy
@@ -526,20 +526,20 @@ export function createTradeLogger(db: Database): TradeLogger {
           byStrategy[key] = { trades: 0, pnl: 0, winRate: 0 };
         }
         byStrategy[key].trades++;
-        byStrategy[key].pnl += trade.realizedPnL || 0;
+        byStrategy[key].pnl += trade.realizedPnL ?? 0;
       }
       // Calculate win rates
       for (const key of Object.keys(byStrategy)) {
         const stratTrades = closedTrades.filter((t) => (t.strategyId || 'manual') === key);
-        const stratWins = stratTrades.filter((t) => (t.realizedPnL || 0) > 0);
+        const stratWins = stratTrades.filter((t) => (t.realizedPnL ?? 0) > 0);
         byStrategy[key].winRate = stratTrades.length > 0 ? (stratWins.length / stratTrades.length) * 100 : 0;
       }
 
       // Calculate maker/taker stats
       const makerTrades = allTrades.filter((t) => t.isMaker);
       const takerTrades = allTrades.filter((t) => !t.isMaker);
-      const totalMakerRebates = allTrades.reduce((sum, t) => sum + (t.makerRebate || 0), 0);
-      const totalFees = allTrades.reduce((sum, t) => sum + (t.fees || 0), 0);
+      const totalMakerRebates = allTrades.reduce((sum, t) => sum + (t.makerRebate ?? 0), 0);
+      const totalFees = allTrades.reduce((sum, t) => sum + (t.fees ?? 0), 0);
 
       return {
         totalTrades: allTrades.length,
@@ -556,7 +556,7 @@ export function createTradeLogger(db: Database): TradeLogger {
         totalVolume: allTrades.reduce((sum, t) => sum + t.cost, 0),
         totalFees,
         totalMakerRebates,
-        netFees: totalFees - totalMakerRebates,
+        netFees: totalFees + totalMakerRebates,
         makerTrades: makerTrades.length,
         takerTrades: takerTrades.length,
         byPlatform: byPlatform as any,
@@ -590,13 +590,21 @@ export function createTradeLogger(db: Database): TradeLogger {
         'realized_pnl', 'realized_pnl_pct', 'created_at', 'filled_at',
       ];
 
+      function csvEscape(val: unknown): string {
+        const s = val == null ? '' : String(val);
+        if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+          return `"${s.replace(/"/g, '""')}"`;
+        }
+        return s;
+      }
+
       const rows = allTrades.map((t) => [
-        t.id, t.platform, t.marketId, t.marketQuestion || '', t.outcome, t.side, t.orderType,
-        t.price, t.size, t.filled, t.cost, t.fees || '', t.status, t.strategyId || '', t.strategyName || '',
-        t.realizedPnL || '', t.realizedPnLPct || '', t.createdAt.toISOString(), t.filledAt?.toISOString() || '',
+        t.id, t.platform, t.marketId, t.marketQuestion ?? '', t.outcome, t.side, t.orderType,
+        t.price, t.size, t.filled, t.cost, t.fees ?? '', t.status, t.strategyId ?? '', t.strategyName ?? '',
+        t.realizedPnL ?? '', t.realizedPnLPct ?? '', t.createdAt.toISOString(), t.filledAt?.toISOString() ?? '',
       ]);
 
-      return [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+      return [headers.join(','), ...rows.map((r) => r.map(csvEscape).join(','))].join('\n');
     },
 
     cleanup(olderThanDays) {

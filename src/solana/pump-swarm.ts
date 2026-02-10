@@ -20,6 +20,9 @@ import {
 } from '@solana/web3.js';
 import { EventEmitter } from 'events';
 import bs58 from 'bs58';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('solana:pump-swarm');
 
 // ============================================================================
 // Types
@@ -262,7 +265,7 @@ export function loadWalletsFromEnv(): SwarmWallet[] {
       const keypair = loadKeypairFromString(mainKey);
       wallets.push(createWallet('wallet_0', keypair));
     } catch (e) {
-      console.error('Failed to load SOLANA_PRIVATE_KEY:', e);
+      logger.error({ error: e }, 'Failed to load SOLANA_PRIVATE_KEY');
     }
   }
 
@@ -275,7 +278,7 @@ export function loadWalletsFromEnv(): SwarmWallet[] {
       const keypair = loadKeypairFromString(key);
       wallets.push(createWallet(`wallet_${i}`, keypair));
     } catch (e) {
-      console.error(`Failed to load SOLANA_SWARM_KEY_${i}:`, e);
+      logger.error({ error: e, keyIndex: i }, `Failed to load SOLANA_SWARM_KEY_${i}`);
     }
   }
 

@@ -240,7 +240,8 @@ export function createOpportunityScorer(
     size: number,
     spreadPct?: number
   ): number {
-    if (liquidity <= 0 || size <= 0) return 0;
+    if (size <= 0) return 0;
+    if (liquidity <= 0) return 50; // Max slippage for illiquid markets
 
     // Base slippage from size/liquidity ratio
     const sizeRatio = size / liquidity;

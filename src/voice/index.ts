@@ -12,13 +12,29 @@
 import { EventEmitter } from 'events';
 import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
-import { createWriteStream, existsSync, unlinkSync } from 'fs';
+import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { tmpdir, platform } from 'os';
 import { randomBytes } from 'crypto';
 import { logger } from '../utils/logger';
 
 const execAsync = promisify(exec);
+
+/** Sanitize a string for safe shell interpolation by escaping single quotes and wrapping in single quotes */
+function shellEscape(str: string): string {
+  return "'" + str.replace(/'/g, "'\\''") + "'";
+}
+
+/** Safely remove a temp file, logging errors */
+function safeUnlink(filePath: string): void {
+  try {
+    if (existsSync(filePath)) {
+      unlinkSync(filePath);
+    }
+  } catch (err) {
+    logger.warn(`Failed to clean up temp file ${filePath}: ${err}`);
+  }
+}
 
 // =============================================================================
 // TYPES
@@ -128,19 +144,21 @@ export class VoiceRecognition extends EventEmitter {
       this.process = recordProcess;
 
       recordProcess.on('close', async () => {
-        if (existsSync(tempFile)) {
-          const result = await this.transcribe(tempFile);
-          this.emit('transcription', result);
+        try {
+          if (existsSync(tempFile)) {
+            const result = await this.transcribe(tempFile);
+            this.emit('transcription', result);
 
-          // Check for wake word
-          if (result.text.toLowerCase().includes(this.config.wakeWord.toLowerCase())) {
-            this.emit('wakeword', result);
+            // Check for wake word
+            if (result.text.toLowerCase().includes(this.config.wakeWord.toLowerCase())) {
+              this.emit('wakeword', result);
+            }
           }
-
-          // Clean up
-          try {
-            unlinkSync(tempFile);
-          } catch {}
+        } catch (error) {
+          this.emit('error', error);
+        } finally {
+          // Always clean up temp file
+          safeUnlink(tempFile);
         }
 
         // Continue listening if still enabled
@@ -150,6 +168,7 @@ export class VoiceRecognition extends EventEmitter {
       });
 
       recordProcess.on('error', (error) => {
+        safeUnlink(tempFile);
         this.emit('error', error);
         this.isListening = false;
       });
@@ -163,7 +182,7 @@ export class VoiceRecognition extends EventEmitter {
   stopListening(): void {
     this.isListening = false;
     if (this.process) {
-      this.process.kill();
+      this.process.kill('SIGKILL');
       this.process = null;
     }
     this.emit('listening:stop');
@@ -186,8 +205,9 @@ export class VoiceRecognition extends EventEmitter {
 
   private async transcribeWithWhisper(audioPath: string, startTime: number): Promise<STTResult> {
     try {
+      const lang = this.config.language.split('-')[0].replace(/[^a-zA-Z]/g, '');
       const { stdout } = await execAsync(
-        `whisper "${audioPath}" --language ${this.config.language.split('-')[0]} --output_format txt --output_dir ${tmpdir()} 2>/dev/null`
+        `whisper ${shellEscape(audioPath)} --language ${shellEscape(lang)} --output_format txt --output_dir ${shellEscape(tmpdir())} 2>/dev/null`
       );
 
       return {
@@ -207,7 +227,7 @@ export class VoiceRecognition extends EventEmitter {
 
   private async transcribeWithVosk(audioPath: string, startTime: number): Promise<STTResult> {
     try {
-      const { stdout } = await execAsync(`vosk-transcriber -l ${this.config.language} -i "${audioPath}"`);
+      const { stdout } = await execAsync(`vosk-transcriber -l ${shellEscape(this.config.language)} -i ${shellEscape(audioPath)}`);
       const result = JSON.parse(stdout);
 
       return {
@@ -225,13 +245,17 @@ export class VoiceRecognition extends EventEmitter {
     }
   }
 
-  /** Record audio for a specific duration */
+  /**
+   * Record audio for a specific duration.
+   * Returns the path to the recorded WAV file.
+   * IMPORTANT: Caller is responsible for deleting the returned temp file.
+   */
   async record(durationMs: number): Promise<string> {
     const tempFile = join(tmpdir(), `clodds-recording-${randomBytes(4).toString('hex')}.wav`);
-    const durationSec = durationMs / 1000;
+    const durationSec = Math.max(0, Math.floor(durationMs / 1000));
 
     await execAsync(
-      `sox -d -r ${this.config.sampleRate} -c 1 -b 16 "${tempFile}" trim 0 ${durationSec}`
+      `sox -d -r ${Number(this.config.sampleRate)} -c 1 -b 16 ${shellEscape(tempFile)} trim 0 ${durationSec}`
     );
 
     return tempFile;
@@ -248,11 +272,13 @@ export class TextToSpeech extends EventEmitter {
 
   constructor(config: VoiceConfig = {}) {
     super();
+    // Default to 'say' on macOS, 'espeak' on Linux/other
+    const defaultTtsEngine = platform() === 'darwin' ? 'say' : 'espeak';
     this.config = {
       wakeWord: config.wakeWord || 'hey clodds',
       language: config.language || 'en-US',
       sttEngine: config.sttEngine || 'whisper',
-      ttsEngine: config.ttsEngine || 'say',
+      ttsEngine: config.ttsEngine || defaultTtsEngine,
       sampleRate: config.sampleRate || 16000,
       sensitivity: config.sensitivity || 0.5,
       silenceThreshold: config.silenceThreshold || 500,
@@ -380,7 +406,7 @@ export class TextToSpeech extends EventEmitter {
   /** Stop speaking */
   stop(): void {
     if (this.speakingProcess) {
-      this.speakingProcess.kill();
+      this.speakingProcess.kill('SIGKILL');
       this.speakingProcess = null;
       this.emit('speaking:stop');
     }
@@ -405,7 +431,8 @@ export class TextToSpeech extends EventEmitter {
         return stdout.split('\n')
           .slice(1)
           .filter(Boolean)
-          .map(line => line.split(/\s+/)[4]);
+          .map(line => line.split(/\s+/)[4])
+          .filter((v): v is string => v !== undefined && v !== '');
       }
       default:
         return [];
@@ -420,15 +447,25 @@ export class TextToSpeech extends EventEmitter {
         if (options?.voice) args.push('-v', options.voice);
         if (options?.rate) args.push('-r', String(options.rate));
         args.push(text);
-        await execAsync(`say ${args.join(' ')}`);
+        // Use spawn (no shell) to avoid command injection via text
+        await new Promise<void>((resolve, reject) => {
+          const proc = spawn('say', args, { stdio: 'inherit' });
+          proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`say exited with code ${code}`)));
+          proc.on('error', reject);
+        });
         break;
       }
       case 'espeak': {
         const args = ['-w', outputPath];
         if (options?.voice) args.push('-v', options.voice);
         if (options?.rate) args.push('-s', String(options.rate));
-        args.push(`"${text}"`);
-        await execAsync(`espeak ${args.join(' ')}`);
+        args.push(text);
+        // Use spawn (no shell) to avoid command injection via text
+        await new Promise<void>((resolve, reject) => {
+          const proc = spawn('espeak', args, { stdio: 'inherit' });
+          proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`espeak exited with code ${code}`)));
+          proc.on('error', reject);
+        });
         break;
       }
     }
@@ -472,10 +509,12 @@ export class VoiceAssistant extends EventEmitter {
       this.state = 'idle';
     });
 
+    // Note: speaking:end is emitted by TTS on completion.
+    // Listening restart is handled by say() and onTranscription() directly,
+    // so we only update state here to avoid double-starting the recognition process.
     this.tts.on('speaking:end', () => {
-      if (this.isEnabled) {
+      if (this.isEnabled && this.state === 'speaking') {
         this.state = 'listening';
-        this.recognition.startListening();
       }
     });
   }

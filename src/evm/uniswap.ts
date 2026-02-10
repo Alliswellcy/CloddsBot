@@ -5,7 +5,7 @@
  * Uses Uniswap Universal Router for optimal execution
  */
 
-import { ethers, Wallet, JsonRpcProvider, Contract, parseUnits, formatUnits, MaxUint256 } from 'ethers';
+import { ethers, Wallet, JsonRpcProvider, Contract, parseUnits, formatUnits } from 'ethers';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -340,7 +340,7 @@ export async function executeUniswapSwap(
 
       if (allowance < amountIn) {
         logger.info({ token: quote.inputToken, router: config.swapRouter }, 'Approving token');
-        const approveTx = await token.approve(config.swapRouter, MaxUint256);
+        const approveTx = await token.approve(config.swapRouter, amountIn);
         await approveTx.wait();
       }
     }

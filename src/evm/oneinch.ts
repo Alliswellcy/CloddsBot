@@ -288,8 +288,7 @@ export async function executeOneInchSwap(
 
       if (allowance < fromAmountWei) {
         logger.info({ token: fromAddress, router: routerAddress }, 'Approving 1inch router');
-        const { MaxUint256 } = await import('ethers');
-        const approveTx = await token.approve(routerAddress, MaxUint256);
+        const approveTx = await token.approve(routerAddress, fromAmountWei);
         await approveTx.wait();
       }
     }
@@ -442,10 +441,14 @@ export async function compareDexRoutes(
 
     if (oneInchOut > uniOut) {
       results.best = '1inch';
-      results.savings = ((oneInchOut - uniOut) / uniOut * 100).toFixed(2) + '%';
+      results.savings = uniOut > 0
+        ? ((oneInchOut - uniOut) / uniOut * 100).toFixed(2) + '%'
+        : 'N/A';
     } else {
       results.best = 'uniswap';
-      results.savings = ((uniOut - oneInchOut) / oneInchOut * 100).toFixed(2) + '%';
+      results.savings = oneInchOut > 0
+        ? ((uniOut - oneInchOut) / oneInchOut * 100).toFixed(2) + '%'
+        : 'N/A';
     }
   } else if (results.oneInchQuote && !results.uniswapQuote) {
     results.best = '1inch';

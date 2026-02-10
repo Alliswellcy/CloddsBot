@@ -183,7 +183,7 @@ function renderComponent(comp: CanvasComponent): string {
       return `<${tag} class="canvas-text" style="${sanitizeStyle(comp.props.style)}">${escapeHtml(comp.props.content)}</${tag}>`;
 
     case 'chart':
-      return `<div class="canvas-chart" id="${escapeHtml(comp.id)}" data-type="${escapeHtml(comp.props.chartType) || 'line'}" data-values='${JSON.stringify(comp.props.data || [])}'></div>`;
+      return `<div class="canvas-chart" id="${escapeHtml(comp.id)}" data-type="${escapeHtml(comp.props.chartType) || 'line'}" data-values="${escapeHtml(JSON.stringify(comp.props.data || []))}"></div>`;
 
     case 'table':
       const headers = (comp.props.headers as string[]) || [];
@@ -244,6 +244,9 @@ function renderComponent(comp: CanvasComponent): string {
 // SERVICE IMPLEMENTATION
 // =============================================================================
 
+// Maximum number of components kept in canvas history
+const MAX_COMPONENTS = 500;
+
 export function createCanvasService(): CanvasService {
   const emitter = new EventEmitter();
   let currentState: CanvasState = {};
@@ -275,6 +278,10 @@ export function createCanvasService(): CanvasService {
 
     pushComponent(component) {
       components.push(component);
+      // Prevent unbounded growth of component history
+      if (components.length > MAX_COMPONENTS) {
+        components = components.slice(-MAX_COMPONENTS);
+      }
       const html = components.map(c => renderComponent(c)).join('\n');
       this.push({ html });
       emitter.emit('component', component);
@@ -324,32 +331,42 @@ export function createCanvasService(): CanvasService {
     },
 
     async snapshot() {
-      // Ensure browser is running
-      if (!browser) {
-        browser = createBrowserService();
-        await browser.launch({ headless: true });
-      }
+      // Overall timeout to prevent hanging forever if browser stalls
+      const SNAPSHOT_TIMEOUT_MS = 30000;
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Canvas snapshot timed out')), SNAPSHOT_TIMEOUT_MS)
+      );
 
-      if (!page) {
-        page = await browser.newPage();
-        await page.setViewport(1200, 800);
-      }
+      const doSnapshot = async (): Promise<Buffer> => {
+        // Ensure browser is running
+        if (!browser) {
+          browser = createBrowserService();
+          await browser.launch({ headless: true });
+        }
 
-      // Navigate to canvas if server running, otherwise render directly
-      const url = this.getUrl();
-      if (url) {
-        await page.goto(url);
-        // Wait for render
-        await new Promise(r => setTimeout(r, 500));
-      } else {
-        // Render HTML directly
-        const html = generateHtml(currentState);
-        await page.evaluate(`document.documentElement.innerHTML = ${JSON.stringify(html)}`);
-      }
+        if (!page) {
+          page = await browser.newPage();
+          await page.setViewport(1200, 800);
+        }
 
-      const screenshot = await page.screenshot({ fullPage: true });
-      logger.debug('Canvas snapshot taken');
-      return screenshot;
+        // Navigate to canvas if server running, otherwise render directly
+        const url = this.getUrl();
+        if (url) {
+          await page.goto(url);
+          // Wait for render
+          await new Promise(r => setTimeout(r, 500));
+        } else {
+          // Render HTML directly
+          const html = generateHtml(currentState);
+          await page.evaluate(`document.documentElement.innerHTML = ${JSON.stringify(html)}`);
+        }
+
+        const screenshot = await page.screenshot({ fullPage: true });
+        logger.debug('Canvas snapshot taken');
+        return screenshot;
+      };
+
+      return Promise.race([doSnapshot(), timeoutPromise]);
     },
 
     getState() {
@@ -390,9 +407,18 @@ export function createCanvasService(): CanvasService {
             } catch {}
           });
 
-          ws.on('close', () => {
+          const removeClient = () => {
             clients = clients.filter(c => c !== ws);
+          };
+
+          ws.on('close', () => {
+            removeClient();
             logger.debug('Canvas client disconnected');
+          });
+
+          ws.on('error', (err) => {
+            removeClient();
+            logger.debug({ error: err }, 'Canvas client error');
           });
         });
 
@@ -411,6 +437,12 @@ export function createCanvasService(): CanvasService {
     },
 
     async stopServer() {
+      // Reject all pending eval callbacks so callers don't hang forever
+      for (const [id, cb] of evalCallbacks) {
+        cb.reject(new Error('Canvas server stopped'));
+      }
+      evalCallbacks.clear();
+
       if (wss) {
         wss.close();
         wss = null;
@@ -422,7 +454,11 @@ export function createCanvasService(): CanvasService {
       }
 
       if (browser) {
-        await browser.close();
+        try {
+          await browser.close();
+        } catch (err) {
+          logger.warn({ error: err }, 'Error closing browser during canvas stop');
+        }
         browser = null;
         page = null;
       }

@@ -98,6 +98,11 @@ export function createWebChatChannel(
 
     ws.on('message', async (data: Buffer) => {
       try {
+        // Guard against oversized messages (1MB limit)
+        if (data.length > 1024 * 1024) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Message too large' }));
+          return;
+        }
         const message = JSON.parse(data.toString());
         session.lastActivity = new Date();
 
@@ -269,7 +274,7 @@ export function createWebChatChannel(
           default:
             ws.send(JSON.stringify({
               type: 'error',
-              message: `Unknown message type: ${message.type}`,
+              message: `Unknown message type: ${typeof message.type === 'string' ? message.type.slice(0, 50) : 'invalid'}`,
             }));
         }
       } catch (error) {

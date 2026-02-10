@@ -234,7 +234,7 @@ export async function createFREDFeed(): Promise<FREDFeed> {
     if (cached) return cached;
 
     try {
-      const data = await fredFetch<{ seriess: any[] }>('series', {
+      const data = await fredFetch<{ seriess: Record<string, unknown>[] }>('series', {
         series_id: seriesId,
       });
 
@@ -277,7 +277,7 @@ export async function createFREDFeed(): Promise<FREDFeed> {
 
   emitter.search = async (query: string, limit = 20): Promise<FREDSeries[]> => {
     const data = await fredFetch<{
-      seriess: any[];
+      seriess: Record<string, unknown>[];
     }>('series/search', {
       search_text: query,
       limit: String(limit),

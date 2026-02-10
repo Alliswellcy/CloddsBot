@@ -242,12 +242,13 @@ export async function writeContract(request: ContractWriteRequest): Promise<Cont
     }
 
     // Build transaction options
+    const MAX_GAS_LIMIT = 5_000_000n; // Safety cap to prevent gas drainage
     const txOptions: { value?: bigint; gasLimit?: bigint } = {};
     if (value) {
       txOptions.value = parseUnits(value, 18);
     }
     if (gasLimit) {
-      txOptions.gasLimit = gasLimit;
+      txOptions.gasLimit = gasLimit > MAX_GAS_LIMIT ? MAX_GAS_LIMIT : gasLimit;
     }
 
     logger.info({
@@ -259,6 +260,13 @@ export async function writeContract(request: ContractWriteRequest): Promise<Cont
 
     const tx = await contract[method](...args, txOptions);
     const receipt = await tx.wait();
+
+    if (!receipt) {
+      return {
+        success: false,
+        error: 'Transaction was dropped or replaced (receipt is null)',
+      };
+    }
 
     return {
       success: true,

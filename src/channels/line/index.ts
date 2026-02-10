@@ -15,7 +15,7 @@ import type { IncomingMessage, OutgoingMessage, MessageAttachment } from '../../
 import type { PairingService } from '../../pairing/index';
 import * as http from 'http';
 import * as https from 'https';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { logger } from '../../utils/logger';
 
 // =============================================================================
@@ -233,12 +233,13 @@ export class LineClient extends EventEmitter {
     return response.json() as Promise<T>;
   }
 
-  /** Verify webhook signature */
+  /** Verify webhook signature (timing-safe comparison) */
   verifySignature(body: string, signature: string): boolean {
     const hash = createHmac('sha256', this.config.channelSecret)
       .update(body)
       .digest('base64');
-    return hash === signature;
+    if (hash.length !== signature.length) return false;
+    return timingSafeEqual(Buffer.from(hash), Buffer.from(signature));
   }
 
   /** Start webhook server */

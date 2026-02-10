@@ -68,6 +68,9 @@ export async function createHedgehogFeed(config: HedgehogFeedConfig = {}): Promi
   const subscribedMarkets = new Set<string>();
   const priceCache = new Map<string, number>();
   const marketCache = new Map<string, Market>();
+  const marketCacheTimestamps = new Map<string, number>();
+  const MARKET_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min TTL
+  const MARKET_CACHE_MAX_SIZE = 500;
   let lastRequestTime = 0;
   let usesFallbackApi = false;
 
@@ -490,6 +493,7 @@ export async function createHedgehogFeed(config: HedgehogFeedConfig = {}): Promi
       // Cache markets
       for (const market of converted) {
         marketCache.set(market.id, market);
+        marketCacheTimestamps.set(market.id, Date.now());
       }
 
       return converted;
@@ -503,9 +507,10 @@ export async function createHedgehogFeed(config: HedgehogFeedConfig = {}): Promi
    * Get single market by ID
    */
   async function getMarket(marketId: string): Promise<Market | null> {
-    // Check cache first
+    // Check cache first (with TTL)
     const cached = marketCache.get(marketId);
-    if (cached) {
+    const cachedAt = marketCacheTimestamps.get(marketId);
+    if (cached && cachedAt && (Date.now() - cachedAt) < MARKET_CACHE_TTL_MS) {
       return cached;
     }
 
@@ -520,6 +525,7 @@ export async function createHedgehogFeed(config: HedgehogFeedConfig = {}): Promi
         const apiMarket = 'market' in altData ? altData.market : altData;
         const market = convertToMarket(apiMarket);
         marketCache.set(marketId, market);
+        marketCacheTimestamps.set(marketId, Date.now());
         return market;
       }
 
@@ -616,6 +622,7 @@ export async function createHedgehogFeed(config: HedgehogFeedConfig = {}): Promi
         for (const m of markets) {
           const market = convertToMarket(m);
           marketCache.set(market.id, market);
+        marketCacheTimestamps.set(market.id, Date.now());
         }
       }
 
@@ -644,6 +651,7 @@ export async function createHedgehogFeed(config: HedgehogFeedConfig = {}): Promi
       subscribedMarkets.clear();
       priceCache.clear();
       marketCache.clear();
+      marketCacheTimestamps.clear();
 
       logger.info('Hedgehog: Feed stopped');
       emitter.emit('disconnected');

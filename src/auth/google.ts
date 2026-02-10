@@ -92,7 +92,7 @@ export class GoogleAuthClient {
     try {
       const dir = path.dirname(this.tokenStorePath);
       if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
       fs.writeFileSync(this.tokenStorePath, JSON.stringify(this.tokens, null, 2), {
         mode: 0o600,
@@ -338,6 +338,10 @@ export class GoogleAuthClient {
     if (this.tokens.expiresAt && Date.now() > this.tokens.expiresAt - 60000) {
       if (this.tokens.refreshToken) {
         await this.refreshAccessToken();
+        // Guard against refresh returning an already-expired token
+        if (this.tokens.expiresAt && Date.now() > this.tokens.expiresAt - 60000) {
+          throw new Error('Refreshed token is already expired');
+        }
       } else {
         throw new Error('Token expired and no refresh token available');
       }
@@ -416,17 +420,15 @@ interface ServiceAccountCredentials {
 export async function interactiveGoogleAuth(config?: GoogleAuthConfig): Promise<GoogleTokens> {
   const client = new GoogleAuthClient(config);
 
-  console.log('\n=== Google Authentication ===');
+  logger.info('Starting Google authentication');
 
   const deviceCode = await client.startDeviceCodeFlow();
 
-  console.log(`\nOpen this URL in your browser:\n  ${deviceCode.verificationUrl}`);
-  console.log(`\nEnter this code: ${deviceCode.userCode}`);
-  console.log('\nWaiting for authorization...');
+  logger.info({ verificationUrl: deviceCode.verificationUrl, userCode: deviceCode.userCode }, 'Open URL in browser and enter code');
 
   const tokens = await client.pollDeviceCode(deviceCode.deviceCode, deviceCode.interval);
 
-  console.log('Google authentication complete!');
+  logger.info('Google authentication complete');
 
   return tokens;
 }
@@ -570,6 +572,6 @@ export class GeminiClient {
       }>;
     };
 
-    return data.candidates[0]?.content?.parts?.[0]?.text || '';
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   }
 }

@@ -129,11 +129,11 @@ function validateStartupRequirements(): void {
 
   // Exit with errors if critical requirements missing
   if (errors.length > 0) {
-    console.error('\n=== Clodds Startup Failed ===\n');
+    logger.error('Clodds Startup Failed');
     for (const error of errors) {
-      console.error(`ERROR: ${error}\n`);
+      logger.error(error);
     }
-    console.error('Run "clodds doctor" for full diagnostics.\n');
+    logger.error('Run "clodds doctor" for full diagnostics.');
     process.exit(1);
   }
 }

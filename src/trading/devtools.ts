@@ -427,7 +427,7 @@ export function createDevTools(config: DevToolsConfig = {}): DevTools {
     }
 
     const dimTs = colorize(ts, 'dim', useColors);
-    console.log(`${dimTs} ${prefix} ${message}`);
+    logger.debug({ type: event.type }, `${prefix} ${message}`);
   }
 
   function broadcastToWs(event: DevToolsEvent): void {

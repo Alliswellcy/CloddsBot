@@ -200,7 +200,7 @@ export interface BotManagerConfig {
   /** Market data provider */
   getMarket?: (platform: Platform, marketId: string) => Promise<Market | null>;
   /** Portfolio provider */
-  getPortfolio?: () => Promise<{ value: number; balance: number; positions: any[] }>;
+  getPortfolio?: () => Promise<{ value: number; balance: number; positions: Array<{ platform: Platform; marketId: string; outcome: string; shares: number; avgPrice: number; currentPrice: number; [key: string]: unknown }> }>;
   /** External trade logger (shared with gateway); creates own if not provided */
   tradeLogger?: TradeLogger;
 }
@@ -606,6 +606,7 @@ export function createMeanReversionStrategy(config: Partial<StrategyConfig> = {}
         const variance = history.reduce((a, b) => a + (b - mean) ** 2, 0) / history.length;
         const stdDev = Math.sqrt(variance);
 
+        if (stdDev === 0) continue; // All prices identical, no signal
         const zScore = (position.currentPrice - mean) / stdDev;
 
         // Entry signals
@@ -713,6 +714,7 @@ export function createMomentumStrategy(config: Partial<StrategyConfig> = {}): St
         const shortMA = history.slice(-shortPeriod).reduce((a, b) => a + b, 0) / shortPeriod;
         const longMA = history.reduce((a, b) => a + b, 0) / history.length;
 
+        if (longMA === 0) continue; // Avoid division by zero
         const momentum = (shortMA - longMA) / longMA;
 
         // Entry: short MA crosses above long MA with sufficient momentum

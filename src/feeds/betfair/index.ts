@@ -230,6 +230,8 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
   const marketCache = new Map<string, BetfairMarket>();
   const priceCache = new Map<string, Map<number, number>>(); // marketId -> selectionId -> price
   let pingInterval: NodeJS.Timeout | null = null;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT_DELAY = 60000; // 60s max
 
   // Freshness tracking for WebSocket health monitoring
   const freshnessTracker: FreshnessTracker = getGlobalFreshnessTracker();
@@ -238,7 +240,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
   function convertToMarket(m: BetfairMarket, book?: BetfairMarketBook): Market {
     const outcomes: Outcome[] = m.runners.map((r) => {
       const runnerBook = book?.runners.find((rb) => rb.selectionId === r.selectionId);
-      const backPrice = runnerBook?.ex?.availableToBack?.[0]?.price || 0;
+      const backPrice = runnerBook?.ex?.availableToBack?.[0]?.price ?? 0;
       const price = backPrice > 0 ? 1 / backPrice : 0; // Convert odds to probability
 
       return {
@@ -279,6 +281,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
 
     ws.on('open', () => {
       logger.info('Betfair stream connected');
+      reconnectAttempts = 0; // Reset backoff on successful connection
 
       // Authenticate
       const authMsg = {
@@ -334,8 +337,11 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
         pingInterval = null;
       }
 
-      // Reconnect after delay
-      setTimeout(connectStream, 5000);
+      // Reconnect with exponential backoff
+      const delay = Math.min(5000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+      reconnectAttempts++;
+      logger.info({ delay, attempt: reconnectAttempts }, 'Betfair reconnecting...');
+      setTimeout(connectStream, delay);
     });
 
     ws.on('error', (err) => {
@@ -378,7 +384,7 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
             // Record message for freshness tracking
             freshnessTracker.recordMessage('betfair', marketId);
 
-            if (prevPrice !== ltp) {
+            if (prevPrice !== ltp && ltp > 0) {
               marketPrices.set(selectionId, ltp);
               priceCache.set(marketId, marketPrices);
 
@@ -610,8 +616,8 @@ export async function createBetfairFeed(config: BetfairConfig): Promise<BetfairF
           .map((p) => [1 / p.price, p.size] as [number, number])
           .slice(0, 10);
 
-        const bestBid = bids[0]?.[0] || 0;
-        const bestAsk = asks[0]?.[0] || 1;
+        const bestBid = bids[0]?.[0] ?? 0;
+        const bestAsk = asks[0]?.[0] ?? 1;
 
         return {
           platform: 'betfair' as Platform,

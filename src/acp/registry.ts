@@ -300,7 +300,11 @@ export function createRegistryService(): RegistryService {
         if (existingAgent) {
           throw new Error('Address already registered');
         }
-      } catch {
+      } catch (error) {
+        // Re-throw intentional validation errors; swallow persistence-not-ready errors
+        if (error instanceof Error && error.message === 'Address already registered') {
+          throw error;
+        }
         // Persistence not ready, continue with in-memory only
       }
 
@@ -538,8 +542,8 @@ export function createRegistryService(): RegistryService {
       return results.sort((a, b) => {
         const agentA = agentStore.get(a.agentId);
         const agentB = agentStore.get(b.agentId);
-        const ratingA = agentA?.reputation.averageRating || 0;
-        const ratingB = agentB?.reputation.averageRating || 0;
+        const ratingA = agentA?.reputation.averageRating ?? 0;
+        const ratingB = agentB?.reputation.averageRating ?? 0;
         return ratingB - ratingA;
       });
     },

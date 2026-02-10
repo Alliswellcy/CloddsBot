@@ -142,7 +142,9 @@ export function createTickStreamer(config: TickStreamerConfig = {}): TickStreame
    * Remove all subscriptions for a client
    */
   function removeAllSubscriptions(client: ClientConnection): void {
-    for (const [, sub] of client.subscriptions) {
+    // Snapshot keys to avoid mutating the map during iteration
+    const subs = [...client.subscriptions.values()];
+    for (const sub of subs) {
       removeSubscription(client, sub.platform, sub.marketId, sub.outcomeId);
     }
   }
@@ -252,7 +254,9 @@ export function createTickStreamer(config: TickStreamerConfig = {}): TickStreame
     pingInterval = setInterval(() => {
       const now = Date.now();
 
-      for (const client of clients) {
+      // Snapshot to avoid mutating Set during iteration
+      const snapshot = [...clients];
+      for (const client of snapshot) {
         // Check if connection has timed out
         if (now - client.lastPing > connectionTimeoutMs) {
           logger.warn('Client timed out, closing connection');

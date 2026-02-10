@@ -161,12 +161,11 @@ export function scanCode(code: string): CodeScanResult {
   const detections: CodeScanDetection[] = [];
   const seenCategories = new Set<CodeScanCategory>();
 
-  // Run all rules
+  // Run all rules — use global copy to find ALL matches per rule
   for (const rule of RULES) {
-    // Reset regex lastIndex for global patterns
-    rule.pattern.lastIndex = 0;
-    const match = rule.pattern.exec(code);
-    if (match) {
+    const globalPattern = new RegExp(rule.pattern.source, rule.pattern.flags.includes('g') ? rule.pattern.flags : rule.pattern.flags + 'g');
+    let match: RegExpExecArray | null;
+    while ((match = globalPattern.exec(code)) !== null) {
       // Find line number
       const beforeMatch = code.substring(0, match.index);
       const line = (beforeMatch.match(/\n/g) || []).length + 1;
@@ -178,6 +177,9 @@ export function scanCode(code: string): CodeScanResult {
         weight: rule.weight,
         line,
       });
+
+      // Prevent infinite loop on zero-length matches
+      if (match[0].length === 0) globalPattern.lastIndex++;
     }
   }
 

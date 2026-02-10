@@ -88,7 +88,7 @@ export class QwenAuthClient {
     try {
       const dir = path.dirname(this.credStorePath);
       if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
       fs.writeFileSync(this.credStorePath, JSON.stringify(this.credentials, null, 2), {
         mode: 0o600,
@@ -308,7 +308,7 @@ export class QwenClient {
       };
     };
 
-    return data.output.choices[0]?.message?.content || '';
+    return data.output?.choices?.[0]?.message?.content || '';
   }
 
   /**
@@ -340,7 +340,7 @@ export class QwenClient {
       };
     };
 
-    return data.output.embeddings.map(e => e.embedding);
+    return (data.output?.embeddings || []).map(e => e.embedding);
   }
 
   /**
@@ -388,7 +388,7 @@ export class QwenClient {
       };
     };
 
-    const content = data.output.choices[0]?.message?.content || [];
+    const content = data.output?.choices?.[0]?.message?.content || [];
     const textPart = content.find(c => c.text);
     return textPart?.text || '';
   }
@@ -400,10 +400,7 @@ export class QwenClient {
 export async function interactiveQwenSetup(): Promise<void> {
   const client = new QwenAuthClient();
 
-  console.log('\n=== Qwen/DashScope Setup ===');
-  console.log('\nOptions:');
-  console.log('1. Enter DashScope API key');
-  console.log('2. Enter Alibaba Cloud credentials');
+  logger.info('Starting Qwen/DashScope setup');
 
   // In real implementation, this would use inquirer or similar
   // For now, check environment
@@ -411,9 +408,8 @@ export async function interactiveQwenSetup(): Promise<void> {
 
   if (apiKey) {
     client.setApiKey(apiKey);
-    console.log('\nAPI key configured from environment!');
+    logger.info('Qwen API key configured from environment');
   } else {
-    console.log('\nPlease set DASHSCOPE_API_KEY or QWEN_API_KEY environment variable');
-    console.log('Get your API key at: https://dashscope.console.aliyun.com/');
+    logger.warn('No Qwen API key found. Set DASHSCOPE_API_KEY or QWEN_API_KEY environment variable (https://dashscope.console.aliyun.com/)');
   }
 }

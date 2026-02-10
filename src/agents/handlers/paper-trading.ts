@@ -55,7 +55,7 @@ async function paperBalanceHandler(
   }
 
   const pnl = settings.balance - settings.starting_balance;
-  const pnlPct = (pnl / settings.starting_balance) * 100;
+  const pnlPct = settings.starting_balance !== 0 ? (pnl / settings.starting_balance) * 100 : 0;
 
   return successResult({
     result: {

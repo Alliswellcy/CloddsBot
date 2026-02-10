@@ -142,14 +142,17 @@ export async function getOHLC(
     `;
   }
 
-  // For date_trunc, we need to convert interval to unit (minute, hour, day)
+  // For date_trunc, map to the closest supported truncation unit.
+  // Note: date_trunc only supports standard units (minute, hour, day).
+  // Multi-minute/multi-hour intervals (5m, 15m, 4h) will be bucketed at the
+  // base unit, which is less accurate but still functional without TimescaleDB.
   const intervalArg = hasTimeBucket
     ? pgInterval
-    : interval.endsWith('m')
-      ? 'minute'
+    : interval === '1d'
+      ? 'day'
       : interval.endsWith('h')
         ? 'hour'
-        : 'day';
+        : 'minute';
 
   const result = await client.query<{
     bucket: Date;
@@ -283,13 +286,14 @@ export async function getSpreadHistory(
     `;
   }
 
+  // See note in getOHLC: date_trunc fallback only supports base units
   const intervalArg = hasTimeBucket
     ? pgInterval
-    : interval.endsWith('m')
-      ? 'minute'
+    : interval === '1d'
+      ? 'day'
       : interval.endsWith('h')
         ? 'hour'
-        : 'day';
+        : 'minute';
 
   const result = await client.query<{
     bucket: Date;

@@ -66,6 +66,7 @@ interface CacheEntry {
 }
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHE_ENTRIES = 200;
 const cache = new Map<string, CacheEntry>();
 const ALLOWED_FRESHNESS = new Set(['day', 'week', 'month', 'year']);
 const ALLOWED_SAFESEARCH = new Set(['off', 'moderate', 'strict']);
@@ -225,7 +226,7 @@ export function createWebSearchTool(apiKey?: string): WebSearchTool {
         }
 
         const data = await response.json() as {
-          web?: { results?: any[]; total?: number };
+          web?: { results?: Array<{ title: string; url: string; description: string; age?: string }>; total?: number };
         };
 
         // Parse results
@@ -254,6 +255,18 @@ export function createWebSearchTool(apiKey?: string): WebSearchTool {
           hasMore,
           cached: false,
         };
+
+        // Evict stale entries if cache is at capacity.
+        if (cache.size >= MAX_CACHE_ENTRIES) {
+          const now = Date.now();
+          for (const [k, v] of cache) {
+            if (now - v.timestamp >= CACHE_TTL) cache.delete(k);
+          }
+        }
+        if (cache.size >= MAX_CACHE_ENTRIES) {
+          const oldest = cache.keys().next().value;
+          if (oldest !== undefined) cache.delete(oldest);
+        }
 
         // Cache results
         cache.set(cacheKey, {

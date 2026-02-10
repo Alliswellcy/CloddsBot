@@ -171,6 +171,7 @@ export function createOpportunityExecutor(
     skipReasons: {},
   };
 
+  let totalWins = 0;
   const recentExecutions: ExecutionResult[] = [];
   const openPositions = new Set<string>();
 
@@ -366,7 +367,9 @@ export function createOpportunityExecutor(
         };
 
         result.steps.push(stepResult);
-        result.totalCost += (orderResult.filledSize || size) * effectivePrice;
+        if (orderResult.success) {
+          result.totalCost += (orderResult.filledSize || size) * effectivePrice;
+        }
 
         if (!orderResult.success) {
           result.error = `Step ${step.order} failed: ${orderResult.error}`;
@@ -391,12 +394,17 @@ export function createOpportunityExecutor(
 
         // Calculate actual profit (simplified - would need settlement tracking)
         result.actualProfit = result.expectedProfit;
-        stats.totalProfit += result.actualProfit;
+        if (result.actualProfit >= 0) {
+          stats.totalProfit += result.actualProfit;
+          totalWins++;
+        } else {
+          stats.totalLoss += Math.abs(result.actualProfit);
+        }
         stats.currentDailyPnL += result.actualProfit;
 
-        // Update win rate
-        stats.winRate = stats.totalProfit > 0
-          ? (stats.totalExecuted / (stats.totalExecuted + stats.totalSkipped)) * 100
+        // Update win rate (wins / total executed)
+        stats.winRate = stats.totalExecuted > 0
+          ? (totalWins / stats.totalExecuted) * 100
           : 0;
 
         logger.info(

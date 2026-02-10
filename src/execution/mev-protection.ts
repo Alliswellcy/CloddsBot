@@ -333,6 +333,9 @@ export function checkPriceImpact(
   actualOutput: number,
   maxImpact: number
 ): { acceptable: boolean; impact: number } {
+  if (expectedOutput <= 0) {
+    return { acceptable: false, impact: 100 };
+  }
   const impact = ((expectedOutput - actualOutput) / expectedOutput) * 100;
   return {
     acceptable: impact <= maxImpact,
@@ -348,6 +351,9 @@ export function calculateSafeSlippage(
   liquidity: number,
   baseSlippage = 50 // 0.5%
 ): number {
+  // Guard against zero liquidity
+  if (liquidity <= 0) return baseSlippage * 5;
+
   // Increase slippage for larger orders relative to liquidity
   const ratio = amount / liquidity;
 

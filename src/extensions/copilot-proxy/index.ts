@@ -92,7 +92,7 @@ export async function createCopilotProxyExtension(
 
       return {
         token: data.token,
-        expiresAt: Date.now() + (data.expires_in || 1800) * 1000,
+        expiresAt: Date.now() + (data.expires_in ?? 1800) * 1000,
         endpoints: {
           api: data.endpoints?.api || 'https://api.githubcopilot.com',
           proxy: data.endpoints?.proxy || 'https://copilot-proxy.githubusercontent.com',
@@ -157,11 +157,11 @@ export async function createCopilotProxyExtension(
         method: 'POST',
         body: JSON.stringify({
           prompt,
-          max_tokens: options?.maxTokens || 256,
-          temperature: options?.temperature || 0.1,
-          top_p: options?.topP || 1,
-          stop: options?.stop || ['\n\n'],
-          n: options?.n || 1,
+          max_tokens: options?.maxTokens ?? 256,
+          temperature: options?.temperature ?? 0.1,
+          top_p: options?.topP ?? 1,
+          stop: options?.stop ?? ['\n\n'],
+          n: options?.n ?? 1,
         }),
       });
 
@@ -180,7 +180,7 @@ export async function createCopilotProxyExtension(
       }
 
       const http = await import('http');
-      const port = config.port || 3003;
+      const port = config.port ?? 3003;
 
       proxyServer = http.createServer(async (req, res) => {
         if (req.method === 'OPTIONS') {
@@ -203,6 +203,9 @@ export async function createCopilotProxyExtension(
 
           let body = '';
           req.on('data', (chunk) => (body += chunk));
+          req.on('error', (err) => {
+            logger.warn({ error: err }, 'Request stream error');
+          });
           req.on('end', async () => {
             try {
               const path = req.url || '/';
@@ -230,6 +233,9 @@ export async function createCopilotProxyExtension(
         }
       });
 
+      proxyServer.on('error', (err) => {
+        logger.error({ error: err, port }, 'Copilot proxy server error');
+      });
       proxyServer.listen(port);
       logger.info({ port }, 'Copilot proxy started');
     },

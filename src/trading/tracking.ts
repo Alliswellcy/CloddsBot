@@ -9,7 +9,7 @@
  * - Query and aggregate custom data
  */
 
-import { Database } from '../db/index';
+import { Database, type SqlBindValue } from '../db/index';
 import { logger } from '../utils/logger';
 import type { Platform } from '../types';
 
@@ -475,7 +475,7 @@ export function createTrackingManager(db: Database): TrackingManager {
 
     get(query) {
       let sql = `SELECT * FROM tracking_data WHERE 1=1`;
-      const params: any[] = [];
+      const params: SqlBindValue[] = [];
 
       if (query.entityType) {
         sql += ` AND entity_type = ?`;
@@ -537,7 +537,7 @@ export function createTrackingManager(db: Database): TrackingManager {
     getTimeSeries(entityType, entityId, column, startDate, endDate) {
       let sql = `SELECT created_at, value_number, meta_json FROM tracking_data
                  WHERE entity_type = ? AND entity_id = ? AND column_name = ?`;
-      const params: any[] = [entityType, entityId, column];
+      const params: SqlBindValue[] = [entityType, entityId, column];
 
       if (startDate) {
         sql += ` AND created_at >= ?`;
@@ -567,7 +567,7 @@ export function createTrackingManager(db: Database): TrackingManager {
         MIN(value_number) as min,
         MAX(value_number) as max
        FROM tracking_data WHERE column_name = ?`;
-      const params: any[] = [column];
+      const params: SqlBindValue[] = [column];
 
       if (entityType) {
         sql += ` AND entity_type = ?`;
@@ -693,7 +693,7 @@ export interface TrackingHooks {
   /** Called on each strategy evaluation */
   onEvaluate?: (context: {
     strategyId: string;
-    signals: any[];
+    signals: unknown[];
     duration: number;
     tracking: TrackingManager;
   }) => Record<string, unknown>;

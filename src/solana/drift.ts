@@ -343,7 +343,7 @@ export async function getDriftPositions(
 
       // Get unrealized PnL
       const oraclePrice = client.getOracleDataForPerpMarket(pos.marketIndex);
-      const currentPrice = oraclePrice?.price.toNumber() / 1e6 || 0;
+      const currentPrice = oraclePrice?.price ? oraclePrice.price.toNumber() / 1e6 : 0;
       const positionValue = Math.abs(baseAmount / 1e9) * currentPrice;
       const costBasis = Math.abs(quoteAmount / 1e6);
       const unrealizedPnl = baseAmount > 0
@@ -616,7 +616,7 @@ export function createDriftLiquidationMonitor(
 
         // Get oracle price
         const oraclePrice = client.getOracleDataForPerpMarket(marketIndex);
-        const currentPrice = oraclePrice?.price.toNumber() / 1e6 || 0;
+        const currentPrice = oraclePrice?.price ? oraclePrice.price.toNumber() / 1e6 : 0;
 
         // Calculate entry price
         const entryPrice = Math.abs(quoteAmount / baseAmount);

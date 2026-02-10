@@ -135,12 +135,14 @@ export class HealthChecker {
         }
 
         const start = Date.now();
+        let timeoutId: ReturnType<typeof setTimeout>;
         const result = await Promise.race([
           check.fn(),
-          new Promise<ComponentHealth>((_, reject) =>
-            setTimeout(() => reject(new Error('Health check timeout')), check.options.timeout)
-          ),
+          new Promise<ComponentHealth>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Health check timeout')), check.options.timeout);
+          }),
         ]);
+        clearTimeout(timeoutId!);
         result.latencyMs = Date.now() - start;
         result.lastCheck = now;
 
@@ -194,12 +196,14 @@ export class HealthChecker {
 
     for (const [name, check] of this.readinessChecks) {
       try {
+        let timeoutId: ReturnType<typeof setTimeout>;
         const passed = await Promise.race([
           check.fn(),
-          new Promise<boolean>((_, reject) =>
-            setTimeout(() => reject(new Error('Readiness check timeout')), check.options.timeout)
-          ),
+          new Promise<boolean>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Readiness check timeout')), check.options.timeout);
+          }),
         ]);
+        clearTimeout(timeoutId!);
         checks.push({ name, passed });
       } catch (error) {
         checks.push({
@@ -508,12 +512,14 @@ export function createApiHealthCheck(
 
     try {
       const start = Date.now();
+      let timeoutId: ReturnType<typeof setTimeout>;
       const ok = await Promise.race([
         checkFn(),
-        new Promise<boolean>((_, reject) =>
-          setTimeout(() => reject(new Error('API check timeout')), timeout)
-        ),
+        new Promise<boolean>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error('API check timeout')), timeout);
+        }),
       ]);
+      clearTimeout(timeoutId!);
       const latencyMs = Date.now() - start;
 
       if (ok) {

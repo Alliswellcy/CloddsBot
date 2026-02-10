@@ -122,9 +122,22 @@ export function createTickRecorder(config: TickRecorderConfig): TickRecorder {
         );
       }
     } catch (err) {
-      // On error, put data back in buffers for retry
+      // On error, put data back in buffers for retry, but cap total size
+      // to prevent unbounded growth if the database is down for a long time.
+      const MAX_BUFFER_SIZE = batchSize * 10;
       tickBuffer = [...ticksToInsert, ...tickBuffer];
       orderbookBuffer = [...orderbooksToInsert, ...orderbookBuffer];
+
+      if (tickBuffer.length > MAX_BUFFER_SIZE) {
+        const dropped = tickBuffer.length - MAX_BUFFER_SIZE;
+        tickBuffer = tickBuffer.slice(-MAX_BUFFER_SIZE);
+        logger.warn({ dropped }, 'Tick buffer overflow, dropped oldest ticks');
+      }
+      if (orderbookBuffer.length > MAX_BUFFER_SIZE) {
+        const dropped = orderbookBuffer.length - MAX_BUFFER_SIZE;
+        orderbookBuffer = orderbookBuffer.slice(-MAX_BUFFER_SIZE);
+        logger.warn({ dropped }, 'Orderbook buffer overflow, dropped oldest snapshots');
+      }
 
       logger.error({ err }, 'Failed to flush tick recorder buffers');
     }

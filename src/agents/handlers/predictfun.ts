@@ -6,7 +6,10 @@
  */
 
 import type { ToolInput, HandlerResult, HandlersMap, HandlerContext } from './types';
+import { createLogger } from '../../utils/logger';
 import * as predictfun from '../../exchanges/predictfun';
+
+const logger = createLogger('handlers:predictfun');
 
 // =============================================================================
 // HELPERS
@@ -311,7 +314,7 @@ async function createOrderHandler(
         error: result.error,
       });
     } catch (err: unknown) {
-      // Fall through to direct call
+      logger.warn({ err }, 'ExecutionService create order failed, falling back to direct call');
     }
   }
 
@@ -376,7 +379,7 @@ async function cancelOrdersHandler(
       const cancelled = results.filter(r => r.success).length;
       return JSON.stringify({ success: cancelled > 0, cancelled, results });
     } catch (err: unknown) {
-      // Fall through to direct call
+      logger.warn({ err }, 'ExecutionService cancel order failed, falling back to direct call');
     }
   }
 

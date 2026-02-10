@@ -31,6 +31,7 @@ const RATE_LIMIT_MAX = Number(process.env.CLODDS_TRANSCRIBE_RATE_MAX || 10);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.CLODDS_TRANSCRIBE_RATE_WINDOW_MS || 60_000);
 const CACHE_TTL_MS = Number(process.env.CLODDS_TRANSCRIBE_CACHE_TTL_MS || 5 * 60_000);
 
+const MAX_CACHE_ENTRIES = 50;
 type CacheEntry = { expiresAt: number; value: TranscriptionResult };
 const cache = new Map<string, CacheEntry>();
 let rateLimitState: RateLimitState = { windowStart: 0, count: 0 };
@@ -83,6 +84,16 @@ function getCached(key: string): TranscriptionResult | null {
 }
 
 function setCached(key: string, value: TranscriptionResult): void {
+  if (cache.size >= MAX_CACHE_ENTRIES) {
+    const now = Date.now();
+    for (const [k, entry] of cache) {
+      if (entry.expiresAt <= now) cache.delete(k);
+    }
+  }
+  if (cache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
   cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
 }
 

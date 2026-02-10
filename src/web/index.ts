@@ -109,12 +109,20 @@ const DEFAULT_HOST = 'localhost';
 export class SessionManager {
   private sessions: Map<string, WebSession> = new Map();
   private timeout: number;
+  private cleanupInterval: NodeJS.Timeout;
 
   constructor(timeoutMs = 30 * 60 * 1000) {
     this.timeout = timeoutMs;
 
     // Cleanup expired sessions every minute
-    setInterval(() => this.cleanup(), 60000);
+    this.cleanupInterval = setInterval(() => this.cleanup(), 60000);
+    this.cleanupInterval.unref(); // Don't prevent process exit
+  }
+
+  /** Stop the cleanup timer */
+  destroy(): void {
+    clearInterval(this.cleanupInterval);
+    this.sessions.clear();
   }
 
   create(userId?: string): WebSession {
@@ -239,10 +247,13 @@ export class WebServer extends EventEmitter {
   async stop(): Promise<void> {
     return new Promise((resolve) => {
       // Close all WebSocket connections
-      for (const [id, client] of this.clients) {
+      for (const [, client] of this.clients) {
         client.close();
       }
       this.clients.clear();
+
+      // Destroy session manager (clears cleanup interval)
+      this.sessions.destroy();
 
       // Close WebSocket server
       if (this.wss) {
@@ -339,7 +350,15 @@ export class WebServer extends EventEmitter {
     // Parse body
     let body: unknown;
     if (['POST', 'PUT', 'PATCH'].includes(method)) {
-      body = await this.parseBody(req);
+      try {
+        body = await this.parseBody(req);
+      } catch (parseError) {
+        const message = parseError instanceof Error ? parseError.message : 'Bad request';
+        const code = message.includes('too large') ? 413 : 400;
+        res.writeHead(code, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: message }));
+        return;
+      }
     }
 
     // Build API request
@@ -396,8 +415,10 @@ export class WebServer extends EventEmitter {
       await route.handler(apiReq, apiRes);
     } catch (error) {
       logger.error({ error, path: url.pathname }, 'Request handler error');
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Internal server error' }));
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      }
     }
   }
 
@@ -440,6 +461,7 @@ export class WebServer extends EventEmitter {
 
     ws.on('close', () => {
       this.clients.delete(clientId);
+      this.sessions.delete(clientId);
       logger.debug({ clientId }, 'WebSocket client disconnected');
       this.emit('disconnection', { clientId });
     });
@@ -480,16 +502,29 @@ export class WebServer extends EventEmitter {
   }
 
   private async parseBody(req: http.IncomingMessage): Promise<unknown> {
-    return new Promise((resolve) => {
+    const MAX_BODY_SIZE = 1024 * 1024; // 1MB limit
+    return new Promise((resolve, reject) => {
       let body = '';
-      req.on('data', chunk => body += chunk);
+      let size = 0;
+      req.on('data', (chunk: Buffer | string) => {
+        size += typeof chunk === 'string' ? chunk.length : chunk.byteLength;
+        if (size > MAX_BODY_SIZE) {
+          req.destroy();
+          reject(new Error('Request body too large'));
+          return;
+        }
+        body += chunk;
+      });
+      req.on('error', (err) => {
+        reject(err);
+      });
       req.on('end', () => {
         const contentType = req.headers['content-type'] || '';
         if (contentType.includes('application/json')) {
           try {
             resolve(JSON.parse(body));
           } catch {
-            resolve(body);
+            reject(new Error('Invalid JSON in request body'));
           }
         } else {
           resolve(body);
@@ -508,7 +543,12 @@ export class WebServer extends EventEmitter {
       }
 
       const credentials = Buffer.from(header.slice(6), 'base64').toString();
-      const [username, password] = credentials.split(':');
+      const colonIndex = credentials.indexOf(':');
+      if (colonIndex === -1) {
+        return { valid: false, error: 'Invalid credentials format' };
+      }
+      const username = credentials.slice(0, colonIndex);
+      const password = credentials.slice(colonIndex + 1);
 
       if (auth.users && auth.users[username] === password) {
         return { valid: true };
@@ -679,8 +719,17 @@ const CHAT_HTML = `<!DOCTYPE html>
       messages.scrollTop = messages.scrollHeight;
     }
 
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
     function formatMessage(text) {
-      return text
+      return escapeHtml(text)
         .replace(/\`\`\`(\\w*)\\n([\\s\\S]*?)\`\`\`/g, '<pre><code>$2</code></pre>')
         .replace(/\`([^\`]+)\`/g, '<code>$1</code>')
         .replace(/\\n/g, '<br>');
@@ -688,10 +737,10 @@ const CHAT_HTML = `<!DOCTYPE html>
 
     function send() {
       const text = input.value.trim();
-      if (!text || ws.readyState !== WebSocket.OPEN) return;
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
 
       addMessage(text, 'user');
-      ws.send(JSON.stringify({ type: 'message', payload: { content: text } }));
+      ws.send(JSON.stringify({ type: 'message', payload: { content: text }, timestamp: Date.now() }));
       input.value = '';
     }
 

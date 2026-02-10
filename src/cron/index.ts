@@ -176,6 +176,7 @@ function calculateNextRun(schedule: CronSchedule, lastRunMs?: number): number {
       return schedule.atMs > now ? schedule.atMs : -1; // -1 = already passed
 
     case 'every': {
+      if (!schedule.everyMs || schedule.everyMs <= 0) return -1; // invalid interval
       const anchor = schedule.anchorMs || now;
       const elapsed = now - anchor;
       const intervals = Math.floor(elapsed / schedule.everyMs);
@@ -542,6 +543,12 @@ function resolveAlertRecipient(userId: string): { platform: string; chatId: stri
 
     const now = new Date();
     const windowMinutes = 5;
+
+    // Prune stale digest-sent entries from previous days
+    const today = now.toISOString().slice(0, 10);
+    for (const [userId, sentDate] of digestSentOn) {
+      if (sentDate !== today) digestSentOn.delete(userId);
+    }
 
     for (const user of users) {
       if (!shouldSendDigest(user, now, windowMinutes)) continue;
@@ -1165,7 +1172,7 @@ function resolveAlertRecipient(userId: string): { platform: string; chatId: stri
     const now = Date.now();
 
     for (const user of users) {
-      const stopLossPct = normalizeStopLossPct(user.settings.stopLossPct);
+      const stopLossPct = normalizeStopLossPct(user.settings?.stopLossPct);
       if (!stopLossPct) continue;
 
       const positions = deps.db.getPositions(user.id);
@@ -1259,6 +1266,13 @@ function resolveAlertRecipient(userId: string): { platform: string; chatId: stri
   async function executeJobInternal(job: CronJob): Promise<void> {
     if (!job.enabled) {
       emitter.emit('event', { type: 'job:skipped', job, reason: 'disabled' } as CronEvent);
+      return;
+    }
+
+    // Prevent concurrent execution of the same job
+    if (job.state.runningAtMs) {
+      emitter.emit('event', { type: 'job:skipped', job, reason: 'already running' } as CronEvent);
+      logger.debug({ jobId: job.id, name: job.name }, 'Skipping cron job: already running');
       return;
     }
 

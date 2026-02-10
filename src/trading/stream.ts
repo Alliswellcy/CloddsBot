@@ -307,7 +307,7 @@ export function createTradingStream(initialConfig?: Partial<StreamConfig>): Trad
   async function broadcastToChannel(channel: StreamChannel, message: string): Promise<void> {
     switch (channel.type) {
       case 'console':
-        console.log(`[STREAM] ${message}`);
+        logger.info({ channel: 'stream' }, message);
         break;
 
       case 'webhook':

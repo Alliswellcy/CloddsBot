@@ -352,6 +352,11 @@ export function calculateSolForTokens(
   tokenAmount: BN,
   feeBps: number = 100
 ): BN {
+  // Guard: cannot buy more tokens than the virtual reserve holds
+  if (tokenAmount.gte(state.virtualTokenReserves)) {
+    throw new Error('tokenAmount exceeds virtualTokenReserves — not enough liquidity');
+  }
+
   // Rearranged from buy formula:
   // solIn = virtualSol * tokensOut / (virtualToken - tokensOut)
   const solBeforeFee = state.virtualSolReserves

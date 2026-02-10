@@ -48,8 +48,8 @@ const DEFAULT_STEPS: WizardStep[] = [
     title: 'Welcome',
     description: 'Welcome to Clodds setup',
     async run(ctx) {
-      console.log('\n🎲 Welcome to Clodds - Your AI Prediction Markets Assistant\n');
-      console.log('This wizard will help you set up Clodds.\n');
+      logger.info('Welcome to Clodds - Your AI Prediction Markets Assistant');
+      logger.info('This wizard will help you set up Clodds.');
     },
   },
   {
@@ -57,15 +57,14 @@ const DEFAULT_STEPS: WizardStep[] = [
     title: 'Anthropic API Key',
     description: 'Configure Claude API access',
     async run(ctx) {
-      console.log('\n📝 Anthropic API Key\n');
-      console.log('Get your API key from: https://console.anthropic.com/\n');
+      logger.info('Anthropic API Key - Get your API key from: https://console.anthropic.com/');
 
       const key = await prompt(ctx.rl, 'Enter your Anthropic API key (sk-ant-...): ');
       if (key && key.startsWith('sk-ant-')) {
         ctx.config.ANTHROPIC_API_KEY = key;
-        console.log('✓ API key saved\n');
+        logger.info('API key saved');
       } else {
-        console.log('⚠ Invalid or no key provided, skipping\n');
+        logger.warn('Invalid or no key provided, skipping');
       }
     },
   },
@@ -74,17 +73,17 @@ const DEFAULT_STEPS: WizardStep[] = [
     title: 'Telegram Bot',
     description: 'Configure Telegram channel',
     async run(ctx) {
-      console.log('\n📱 Telegram Bot Setup\n');
+      logger.info('Telegram Bot Setup');
 
       if (!await confirm(ctx.rl, 'Do you want to set up Telegram?')) {
         return;
       }
 
-      console.log('\nGet a bot token from @BotFather on Telegram\n');
+      logger.info('Get a bot token from @BotFather on Telegram');
       const token = await prompt(ctx.rl, 'Enter your Telegram bot token: ');
       if (token) {
         ctx.config.TELEGRAM_BOT_TOKEN = token;
-        console.log('✓ Telegram configured\n');
+        logger.info('Telegram configured');
       }
     },
   },
@@ -93,7 +92,7 @@ const DEFAULT_STEPS: WizardStep[] = [
     title: 'Polymarket',
     description: 'Configure Polymarket trading',
     async run(ctx) {
-      console.log('\n📊 Polymarket Setup\n');
+      logger.info('Polymarket Setup');
 
       if (!await confirm(ctx.rl, 'Do you want to set up Polymarket trading?')) {
         return;
@@ -107,7 +106,7 @@ const DEFAULT_STEPS: WizardStep[] = [
         ctx.config.POLY_API_KEY = apiKey;
         ctx.config.POLY_API_SECRET = apiSecret;
         ctx.config.POLY_API_PASSPHRASE = passphrase;
-        console.log('✓ Polymarket configured\n');
+        logger.info('Polymarket configured');
       }
     },
   },
@@ -116,7 +115,7 @@ const DEFAULT_STEPS: WizardStep[] = [
     title: 'Finish',
     description: 'Save configuration',
     async run(ctx) {
-      console.log('\n💾 Saving configuration...\n');
+      logger.info('Saving configuration...');
 
       const configDir = join(homedir(), '.clodds');
       if (!existsSync(configDir)) {
@@ -130,8 +129,8 @@ const DEFAULT_STEPS: WizardStep[] = [
         .join('\n');
       writeFileSync(envPath, envContent);
 
-      console.log('✓ Configuration saved to .env\n');
-      console.log('🎉 Setup complete! Run `npm start` to launch Clodds.\n');
+      logger.info('Configuration saved to .env');
+      logger.info('Setup complete! Run `npm start` to launch Clodds.');
     },
   },
 ];

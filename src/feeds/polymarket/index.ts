@@ -57,6 +57,8 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
   let ws: WebSocket | null = null;
   let reconnectTimer: NodeJS.Timeout | null = null;
   let initialSubscriptionSent = false;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT_DELAY = 60000; // 60s max
   const subscriptions = new Map<string, Set<(update: PriceUpdate) => void>>();
   const lastPrices = new Map<string, number>();
 
@@ -102,6 +104,7 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
 
     ws.on('open', () => {
       logger.info('Polymarket WebSocket connected');
+      reconnectAttempts = 0; // Reset backoff on successful connection
       initialSubscriptionSent = false;
 
       // Resubscribe to all markets
@@ -133,10 +136,13 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
 
   function scheduleReconnect() {
     if (reconnectTimer) return;
+    const delay = Math.min(5000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+    reconnectAttempts++;
+    logger.info({ delay, attempt: reconnectAttempts }, 'Polymarket reconnecting...');
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect();
-    }, 5000);
+    }, delay);
   }
 
   function sendInitialSubscription(assetIds: string[]) {

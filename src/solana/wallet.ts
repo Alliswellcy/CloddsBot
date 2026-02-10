@@ -57,20 +57,33 @@ export async function signAndSendTransaction(
   transaction: Transaction | VersionedTransaction
 ): Promise<string> {
   if (transaction instanceof VersionedTransaction) {
+    transaction.sign([keypair]);
     const raw = transaction.serialize();
-    return await connection.sendRawTransaction(raw, {
+    const signature = await connection.sendRawTransaction(raw, {
       skipPreflight: false,
       preflightCommitment: 'confirmed',
     });
+
+    // Confirm to detect on-chain failures
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+
+    return signature;
   }
 
   transaction.feePayer = keypair.publicKey;
-  transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  transaction.recentBlockhash = blockhash;
   transaction.sign(keypair);
-  return await connection.sendRawTransaction(transaction.serialize(), {
+  const signature = await connection.sendRawTransaction(transaction.serialize(), {
     skipPreflight: false,
     preflightCommitment: 'confirmed',
   });
+
+  // Confirm to detect on-chain failures
+  await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+
+  return signature;
 }
 
 export function decodeSecretKey(value: string): Uint8Array {

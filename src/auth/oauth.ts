@@ -74,6 +74,15 @@ const PROVIDER_CONFIGS: Record<string, OAuthProviderConfig> = {
   },
 };
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 export class OAuthClient {
   private config: OAuthConfig;
   private providerConfig: OAuthProviderConfig;
@@ -109,7 +118,7 @@ export class OAuthClient {
     try {
       const dir = path.dirname(this.tokenStorePath);
       if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
       fs.writeFileSync(this.tokenStorePath, JSON.stringify(this.tokens, null, 2), {
         mode: 0o600, // Owner read/write only
@@ -405,6 +414,10 @@ export class OAuthClient {
     if (this.tokens.expiresAt && this.tokens.expiresAt - Date.now() < 5 * 60 * 1000) {
       if (this.tokens.refreshToken) {
         await this.refreshAccessToken();
+        // Guard against refresh returning an already-expired token
+        if (this.tokens.expiresAt && this.tokens.expiresAt - Date.now() < 5 * 60 * 1000) {
+          throw new Error('Refreshed token is already expired');
+        }
       } else {
         throw new Error('Token expired and no refresh token available');
       }
@@ -487,10 +500,7 @@ export async function interactiveOAuth(config: OAuthConfig): Promise<OAuthTokens
 
     const deviceCode = await client.startDeviceCodeFlow();
 
-    console.log('\n=== OAuth Authentication ===');
-    console.log(`Open this URL in your browser:\n  ${deviceCode.verificationUri}`);
-    console.log(`\nEnter this code: ${deviceCode.userCode}`);
-    console.log('\nWaiting for authorization...');
+    logger.info({ verificationUri: deviceCode.verificationUri, userCode: deviceCode.userCode }, 'OAuth: open URL in browser and enter code');
 
     return client.pollDeviceCode(deviceCode.deviceCode, deviceCode.interval);
   }
@@ -501,7 +511,7 @@ export async function interactiveOAuth(config: OAuthConfig): Promise<OAuthTokens
 
   return new Promise((resolve, reject) => {
     const server = http.createServer(async (req, res) => {
-      if (!req.url?.startsWith('/callback')) {
+      if (!req.url || !(req.url === '/callback' || req.url.startsWith('/callback?'))) {
         res.writeHead(404);
         res.end('Not found');
         return;
@@ -514,7 +524,7 @@ export async function interactiveOAuth(config: OAuthConfig): Promise<OAuthTokens
 
       if (error) {
         res.writeHead(400, { 'Content-Type': 'text/html' });
-        res.end(`<h1>Authentication Failed</h1><p>${error}</p>`);
+        res.end(`<h1>Authentication Failed</h1><p>${escapeHtml(error)}</p>`);
         server.close();
         reject(new Error(error));
         return;
@@ -544,16 +554,14 @@ export async function interactiveOAuth(config: OAuthConfig): Promise<OAuthTokens
         resolve(tokens);
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'text/html' });
-        res.end(`<h1>Authentication Failed</h1><p>${err}</p>`);
+        res.end('<h1>Authentication Failed</h1><p>Token exchange error</p>');
         server.close();
         reject(err);
       }
     });
 
     server.listen(port, () => {
-      console.log('\n=== OAuth Authentication ===');
-      console.log(`Open this URL in your browser:\n  ${authUrl}`);
-      console.log('\nWaiting for authorization...');
+      logger.info({ authUrl, port }, 'OAuth: open URL in browser to authorize');
     });
 
     // Timeout after 5 minutes

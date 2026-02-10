@@ -365,10 +365,14 @@ export function detectInjection(input: string): { safe: boolean; threats: string
     }
   }
 
-  // Command injection patterns
+  // Command injection patterns — require shell-specific sequences, not bare chars
+  // that appear in normal text like "$50" or "SOL & ETH"
   const cmdPatterns = [
-    /[;&|`$]|\$\(/,
-    /\|\s*(?:cat|ls|rm|wget|curl)\s/i,
+    /;\s*(?:rm|cat|ls|wget|curl|bash|sh|chmod|chown|kill|pkill|dd|nc|ncat)\s/i,
+    /`[^`]+`/,
+    /\$\([^)]+\)/,
+    /\|\s*(?:cat|ls|rm|wget|curl|bash|sh|nc)\s/i,
+    /&&\s*(?:rm|cat|wget|curl|bash|sh)\s/i,
   ];
 
   for (const pattern of cmdPatterns) {
@@ -409,14 +413,23 @@ export class SecretStore {
   private encryptionKey: Buffer | null = null;
   private storePath: string;
 
+  private _ready: Promise<void>;
+
   constructor(encryptionKey?: string, storePath?: string) {
     this.storePath = storePath || join(homedir(), '.clodds', 'secrets.enc');
 
-    if (encryptionKey) {
-      this.initEncryption(encryptionKey);
-    }
+    // initEncryption must complete before load() to decrypt properly
+    this._ready = (async () => {
+      if (encryptionKey) {
+        await this.initEncryption(encryptionKey);
+      }
+      this.load();
+    })();
+  }
 
-    this.load();
+  /** Wait for encryption key derivation + initial load to finish */
+  async ready(): Promise<void> {
+    return this._ready;
   }
 
   private async initEncryption(password: string): Promise<void> {

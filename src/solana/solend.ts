@@ -7,6 +7,9 @@
 import { Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
 import { signAndSendTransaction } from './wallet';
 import BN from 'bn.js';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('solana:solend');
 
 // ============================================
 // INTERFACES
@@ -138,7 +141,7 @@ export async function getSolendReserves(
 
     return reserves;
   } catch (error) {
-    console.error('Failed to get Solend reserves:', error);
+    logger.error({ error }, 'Failed to get Solend reserves');
     return [];
   }
 }
@@ -217,7 +220,7 @@ export async function getSolendObligation(
       ltv: ltv * 100,
     };
   } catch (error) {
-    console.error('Failed to get Solend obligation:', error);
+    logger.error({ error }, 'Failed to get Solend obligation');
     return null;
   }
 }

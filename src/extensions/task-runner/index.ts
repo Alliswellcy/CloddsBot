@@ -116,7 +116,7 @@ builtInExecutors.set('shell', {
         cwd,
         env: safeEnv,
         maxBuffer: 10 * 1024 * 1024, // 10MB max output
-        timeout: task.timeout || 60000, // Default 60s timeout
+        timeout: task.timeout ?? 60000, // Default 60s timeout
       }, (error: Error | null, stdout: string, stderr: string) => {
         const durationMs = Date.now() - startTime;
         if (error) {
@@ -346,7 +346,7 @@ builtInExecutors.set('transform', {
         switch (reduceOp) {
           case 'sum':
             return (inputData as unknown[]).reduce(
-              (acc, item) => (acc as number) + (safeGetProperty(item, reduceField) as number || 0),
+              (acc, item) => (acc as number) + ((safeGetProperty(item, reduceField) as number) ?? 0),
               initial ?? 0
             );
           case 'count':
@@ -464,8 +464,8 @@ Rules:
    */
   async executeTask(task: TaskDefinition, workDir?: string): Promise<TaskResult> {
     const taskId = task.id;
-    const timeout = task.timeout || this.config.defaultTimeout || 60000;
-    const maxRetries = task.maxRetries || this.config.defaultMaxRetries || 3;
+    const timeout = task.timeout ?? this.config.defaultTimeout ?? 60000;
+    const maxRetries = task.maxRetries ?? this.config.defaultMaxRetries ?? 3;
 
     // Check if already running
     if (this.runningTasks.has(taskId)) {
@@ -527,10 +527,11 @@ Rules:
         while (result.attempts < maxRetries) {
           result.attempts++;
 
+          let timeoutTimer: NodeJS.Timeout | null = null;
           try {
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Task timeout')), timeout)
-            );
+            const timeoutPromise = new Promise((_, reject) => {
+              timeoutTimer = setTimeout(() => reject(new Error('Task timeout')), timeout);
+            });
 
             result.output = await Promise.race([
               executor.execute(task, context),
@@ -549,6 +550,8 @@ Rules:
               // Exponential backoff
               await new Promise(r => setTimeout(r, Math.pow(2, result.attempts) * 1000));
             }
+          } finally {
+            if (timeoutTimer) clearTimeout(timeoutTimer);
           }
         }
 

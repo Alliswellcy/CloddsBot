@@ -162,7 +162,20 @@ async function handleRequest(req: JsonRpcRequest): Promise<JsonRpcResponse | nul
         return errorResponse(req.id, -32602, injectionMsg);
       }
 
-      const toolResult = await callTool(toolName, toolArgs);
+      const TOOL_TIMEOUT_MS = Number(process.env.CLODDS_MCP_TOOL_TIMEOUT_MS || 30000);
+      let toolResult: Awaited<ReturnType<typeof callTool>>;
+      try {
+        toolResult = await Promise.race([
+          callTool(toolName, toolArgs),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Tool execution timed out after ${TOOL_TIMEOUT_MS}ms`)), TOOL_TIMEOUT_MS)
+          ),
+        ]);
+      } catch (err: any) {
+        const durationMs = Date.now() - start;
+        logAudit({ tool: toolName, clientId, timestamp: start, durationMs, success: false, error: err.message }, securityConfig);
+        return errorResponse(req.id, -32603, err.message || 'Tool execution failed');
+      }
       const durationMs = Date.now() - start;
       logAudit({ tool: toolName, clientId, timestamp: start, durationMs, success: !toolResult.isError }, securityConfig);
       return { jsonrpc: '2.0', id: req.id, result: toolResult };
@@ -189,13 +202,21 @@ export async function startMcpServer(): Promise<void> {
     const trimmed = line.trim();
     if (!trimmed) return;
 
-    let req: JsonRpcRequest;
+    let parsed: any;
     try {
-      req = JSON.parse(trimmed);
+      parsed = JSON.parse(trimmed);
     } catch {
       sendResponse(errorResponse(undefined, -32700, 'Parse error'));
       return;
     }
+
+    // Validate JSON-RPC 2.0 envelope
+    if (parsed.jsonrpc !== '2.0' || typeof parsed.method !== 'string') {
+      sendResponse(errorResponse(parsed.id, -32600, 'Invalid Request: missing jsonrpc "2.0" or method'));
+      return;
+    }
+
+    const req: JsonRpcRequest = parsed;
 
     try {
       const response = await handleRequest(req);

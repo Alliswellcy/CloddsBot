@@ -8715,7 +8715,7 @@ async function executeTool(
         const limit = (toolInput.limit as number) || 20;
         const platform = (toolInput.platform as string) || 'polymarket';
 
-        let trades: any[] = [];
+        let trades: Record<string, unknown>[] = [];
 
         if (platform === 'polymarket') {
           const response = await fetchPolymarketClob(context, `https://clob.polymarket.com/trades?maker=${address}&limit=${limit}`);
@@ -8742,8 +8742,8 @@ async function executeTool(
                 if (!fillsRes.ok) {
                   throw new Error(`Kalshi API error: ${fillsRes.status}`);
                 }
-                const fillsData = await fillsRes.json() as { fills?: any[] };
-                trades = (fillsData.fills || []).map((f: any) => ({
+                const fillsData = await fillsRes.json() as { fills?: Record<string, unknown>[] };
+                trades = (fillsData.fills || []).map((f) => ({
                   ticker: f.ticker,
                   side: f.side,
                   count: f.count,
@@ -8763,8 +8763,8 @@ async function executeTool(
                   const fillsRes = await fetch(fillsUrl, {
                     headers: { Authorization: `Bearer ${loginData.token}` },
                   });
-                  const fillsData = await fillsRes.json() as { fills?: any[] };
-                  trades = (fillsData.fills || []).map((f: any) => ({
+                  const fillsData = await fillsRes.json() as { fills?: Record<string, unknown>[] };
+                  trades = (fillsData.fills || []).map((f) => ({
                     ticker: f.ticker,
                     side: f.side,
                     count: f.count,
@@ -8832,7 +8832,7 @@ async function executeTool(
         const address = toolInput.address as string;
         const platform = (toolInput.platform as string) || 'polymarket';
 
-        let positions: any[] = [];
+        let positions: Record<string, unknown>[] = [];
 
         if (platform === 'polymarket') {
           const response = await fetch(`https://data-api.polymarket.com/positions?user=${address}`);
@@ -8860,12 +8860,12 @@ async function executeTool(
                 if (!posRes.ok) {
                   throw new Error(`Kalshi API error: ${posRes.status}`);
                 }
-                const posData = await posRes.json() as { market_positions?: any[] };
-                positions = (posData.market_positions || []).map((p: any) => ({
+                const posData = await posRes.json() as { market_positions?: Record<string, unknown>[] };
+                positions = (posData.market_positions || []).map((p) => ({
                   ticker: p.ticker,
-                  side: p.position > 0 ? 'Yes' : 'No',
-                  count: Math.abs(p.position),
-                  avgPrice: `${p.total_traded ? Math.round((p.realized_pnl || 0) / p.total_traded * 100) : 0}¢`,
+                  side: (p.position as number) > 0 ? 'Yes' : 'No',
+                  count: Math.abs(p.position as number),
+                  avgPrice: `${p.total_traded ? Math.round(((p.realized_pnl as number) || 0) / (p.total_traded as number) * 100) : 0}¢`,
                   marketPrice: `${p.market_exposure || 0}¢`,
                 }));
                 await context.credentials.markSuccess(userId, 'kalshi');
@@ -8880,12 +8880,12 @@ async function executeTool(
                   const posRes = await fetch(positionsUrl, {
                     headers: { Authorization: `Bearer ${loginData.token}` },
                   });
-                  const posData = await posRes.json() as { market_positions?: any[] };
-                  positions = (posData.market_positions || []).map((p: any) => ({
+                  const posData = await posRes.json() as { market_positions?: Record<string, unknown>[] };
+                  positions = (posData.market_positions || []).map((p) => ({
                     ticker: p.ticker,
-                    side: p.position > 0 ? 'Yes' : 'No',
-                    count: Math.abs(p.position),
-                    avgPrice: `${p.total_traded ? Math.round((p.realized_pnl || 0) / p.total_traded * 100) : 0}¢`,
+                    side: (p.position as number) > 0 ? 'Yes' : 'No',
+                    count: Math.abs(p.position as number),
+                    avgPrice: `${p.total_traded ? Math.round(((p.realized_pnl as number) || 0) / (p.total_traded as number) * 100) : 0}¢`,
                     marketPrice: `${p.market_exposure || 0}¢`,
                   }));
                   await context.credentials.markSuccess(userId, 'kalshi');
@@ -9073,7 +9073,7 @@ async function executeTool(
         const limit = (toolInput.limit as number) || 10;
         const platform = (toolInput.platform as string) || 'polymarket';
 
-        let traders: any[] = [];
+        let traders: Record<string, unknown>[] = [];
 
         if (platform === 'polymarket') {
           // Map period param to API timePeriod
@@ -16618,9 +16618,13 @@ async function executeTool(
             db,
             userId,
             sessionId: session.id,
+            tradingContext: context.tradingContext,
+            credentials: context.credentials,
+            feeds: context.feeds,
           });
           if (result) {
-            return JSON.stringify(result);
+            // dispatchHandler returns HandlerResult (already JSON string), don't double-stringify
+            return result;
           }
         }
         return JSON.stringify({ error: `Unknown tool: ${toolName}` });

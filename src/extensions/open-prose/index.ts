@@ -118,7 +118,7 @@ export interface OpenProseExtension {
 export async function createOpenProseExtension(config: OpenProseConfig): Promise<OpenProseExtension> {
   const documents = new Map<string, Document>();
   const history = new Map<string, DocumentVersion[]>();
-  const maxHistoryEntries = config.maxHistoryEntries || 100;
+  const maxHistoryEntries = config.maxHistoryEntries ?? 100;
 
   function generateId(): string {
     return generateSecureId('doc');

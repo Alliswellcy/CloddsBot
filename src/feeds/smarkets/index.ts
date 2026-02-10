@@ -127,6 +127,8 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
   const marketCache = new Map<string, { market: SmarketsMarket; event: SmarketsEvent }>();
   const contractCache = new Map<string, SmarketsContract[]>();
   let pingInterval: NodeJS.Timeout | null = null;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT_DELAY = 60000; // 60s max
 
   // Freshness tracking for WebSocket health monitoring
   const freshnessTracker: FreshnessTracker = getGlobalFreshnessTracker();
@@ -177,7 +179,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
     const outcomes: Outcome[] = contracts.map((c) => {
       const quote = quotesMap.get(c.id);
       // Smarkets prices are in percentage (0-100)
-      const backPrice = quote?.bids?.[0]?.price || 0;
+      const backPrice = quote?.bids?.[0]?.price ?? 0;
       const price = backPrice / 100;
 
       return {
@@ -231,6 +233,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
 
         if (msg.type === 'authenticated') {
           logger.info('Smarkets stream authenticated');
+          reconnectAttempts = 0; // Reset backoff on successful connection
           emitter.emit('connected');
 
           // Resubscribe
@@ -263,7 +266,10 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
         pingInterval = null;
       }
 
-      setTimeout(connectStream, 5000);
+      const delay = Math.min(5000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+      reconnectAttempts++;
+      logger.info({ delay, attempt: reconnectAttempts }, 'Smarkets reconnecting...');
+      setTimeout(connectStream, delay);
     });
 
     ws.on('error', (err) => {
@@ -288,7 +294,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
 
     const marketPrices = priceCache.get(market_id) || new Map();
     const prevPrice = marketPrices.get(contract_id);
-    const newPrice = (bids?.[0]?.price || last_executed_price || 0) / 100;
+    const newPrice = (bids?.[0]?.price ?? last_executed_price ?? 0) / 100;
 
     if (prevPrice !== newPrice) {
       marketPrices.set(contract_id, newPrice);
@@ -430,8 +436,8 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
         .map((o) => [o.price / 100, o.quantity / 100] as [number, number])
         .slice(0, 10);
 
-      const bestBid = bids[0]?.[0] || 0;
-      const bestOffer = offers[0]?.[0] || 1;
+      const bestBid = bids[0]?.[0] ?? 0;
+      const bestOffer = offers[0]?.[0] ?? 1;
 
       return {
         platform: 'smarkets' as Platform,
@@ -455,7 +461,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
         for (const quote of quotes) {
           const marketPrices = priceCache.get(marketId) || new Map();
           const prevPrice = marketPrices.get(quote.contract_id);
-          const newPrice = (quote.bids?.[0]?.price || quote.last_executed_price || 0) / 100;
+          const newPrice = (quote.bids?.[0]?.price ?? quote.last_executed_price ?? 0) / 100;
           if (prevPrice !== newPrice && newPrice > 0) {
             marketPrices.set(quote.contract_id, newPrice);
             priceCache.set(marketId, marketPrices);

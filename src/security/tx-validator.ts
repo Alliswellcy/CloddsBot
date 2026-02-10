@@ -84,8 +84,8 @@ export async function validateTx(
   for (const f of addrCheck.flags) flags.push(f);
 
   // 2. Safe program check (reduce risk if sending to known-good program)
-  const normalizedDest = request.destination.toLowerCase();
-  const safeName = SAFE_PROGRAMS[normalizedDest] || SAFE_PROGRAMS[request.destination];
+  // Check both original (Solana is case-sensitive base58) and lowercased (EVM is case-insensitive)
+  const safeName = SAFE_PROGRAMS[request.destination] || SAFE_PROGRAMS[request.destination.toLowerCase()];
   if (safeName) {
     score = Math.max(0, score - 20);
     flags.push(`Known safe program: ${safeName}`);

@@ -261,7 +261,10 @@ export async function getGraduationProgress(tokenAddress: string): Promise<numbe
 
     if (threshold === 0n) return 100;
 
-    const progress = (Number(assetBalance) / Number(threshold)) * 100;
+    // Use formatUnits to avoid precision loss on large bigints (42K * 1e18 exceeds Number.MAX_SAFE_INTEGER)
+    const assetFloat = parseFloat(formatUnits(assetBalance, 18));
+    const thresholdFloat = parseFloat(formatUnits(threshold, 18));
+    const progress = thresholdFloat > 0 ? (assetFloat / thresholdFloat) * 100 : 100;
     return Math.min(100, progress);
   } catch {
     return 0;
@@ -320,7 +323,9 @@ export async function getAgentTokenInfo(tokenAddress: string): Promise<AgentToke
     const vReserve = Number(formatUnits(assetBalance, 18));
     const tReserve = Number(formatUnits(tokenBalance, tokenDecimals));
     const currentPrice = tReserve > 0 ? vReserve / tReserve : 0;
-    const progress = threshold > 0n ? (Number(assetBalance) / Number(threshold)) * 100 : 100;
+    const assetF = parseFloat(formatUnits(assetBalance, 18));
+    const thresholdF = parseFloat(formatUnits(threshold, 18));
+    const progress = thresholdF > 0 ? (assetF / thresholdF) * 100 : 100;
 
     info.bondingCurve = {
       virtualReserve: formatUnits(assetBalance, 18),

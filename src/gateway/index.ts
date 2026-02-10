@@ -136,19 +136,19 @@ export class GatewayServer extends EventEmitter {
   constructor(config: GatewayConfig = {}) {
     super();
     this.config = {
+      ...config,
       port: config.port ?? 8080,
       host: config.host ?? '0.0.0.0',
       path: config.path ?? '/gateway',
       heartbeatInterval: config.heartbeatInterval ?? 45000,
       maxClients: config.maxClients ?? 1000,
       auth: config.auth ?? { type: 'none' },
-      ...config,
     };
   }
 
   /** Start the gateway server */
   async start(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       // Create HTTP(S) server
       if (this.config.ssl) {
         const fs = require('fs');
@@ -164,6 +164,7 @@ export class GatewayServer extends EventEmitter {
       this.wss = new WebSocketServer({
         server: this.server,
         path: this.config.path,
+        maxPayload: 1024 * 1024, // 1 MB max message size
       });
 
       this.wss.on('connection', (socket, request) => {
@@ -174,6 +175,11 @@ export class GatewayServer extends EventEmitter {
       this.heartbeatChecker = setInterval(() => {
         this.checkHeartbeats();
       }, this.config.heartbeatInterval);
+
+      // Reject on server error (e.g. port in use, permission denied)
+      this.server.on('error', (err) => {
+        reject(err);
+      });
 
       // Start listening
       this.server.listen(this.config.port, this.config.host, () => {
@@ -326,8 +332,13 @@ export class GatewayServer extends EventEmitter {
           break;
 
         case GatewayOpcodes.RESUME:
-          client.authenticated = true;
-          this.emit('resume', { client, data: message.d });
+          // Only allow resume if already authenticated (e.g. reconnecting a valid session)
+          if (client.authenticated) {
+            this.emit('resume', { client, data: message.d });
+          } else {
+            this.send(client, { op: GatewayOpcodes.INVALID_SESSION, d: false });
+            client.socket.close(4001, 'Cannot resume without prior authentication');
+          }
           break;
 
         case GatewayOpcodes.DISPATCH:
@@ -468,6 +479,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
   );
 
   let channels: Awaited<ReturnType<typeof createChannelManager>> | null = null;
+  let triggerManager: import('../execution/trigger-orders').TriggerOrderManager | null = null;
   const watchers: FSWatcher[] = [];
   let started = false;
   let reloadInFlight: Promise<void> | null = null;
@@ -746,7 +758,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     httpGateway.setBracketRouter(createBracketRouter({ execution: executionService }));
 
     const { createTriggerOrderManager } = await import('../execution/trigger-orders.js');
-    const triggerManager = createTriggerOrderManager(executionService, feeds as any);
+    triggerManager = createTriggerOrderManager(executionService, feeds as any);
     const { createTriggerRouter } = await import('./trigger-routes.js');
     httpGateway.setTriggerRouter(createTriggerRouter({ manager: triggerManager }));
     triggerManager.start();
@@ -2445,6 +2457,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         if (mlPipeline) mlPipeline.stop();
         if (positionBridge) positionBridge.stop();
         if (signalRouter) signalRouter.stop();
+        if (triggerManager) triggerManager.stop();
         // Stop event flow first, then flush pending writes
         signalBus.disconnectFeeds();
         if (tickRecorder) await tickRecorder.stop();
@@ -2456,7 +2469,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         await feeds.stop();
         if (channels) await channels.stop();
         await httpGateway.stop();
-        db.close();
+        try { db.close(); } catch { /* may already be closed */ }
       });
 
       await httpGateway.start();
@@ -2706,6 +2719,12 @@ export async function createGateway(config: Config): Promise<AppGateway> {
       if (signalRouter) {
         signalRouter.stop();
         signalRouter = null;
+      }
+
+      // Stop trigger order manager
+      if (triggerManager) {
+        triggerManager.stop();
+        triggerManager = null;
       }
 
       // Stop event flow first, then flush pending writes

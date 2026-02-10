@@ -275,16 +275,16 @@ export function createAlertService(
           alert.marketQuestion || null,
           alert.type,
           alert.threshold,
-          alert.changePct || null,
-          alert.timeWindowSecs || null,
+          alert.changePct ?? null,
+          alert.timeWindowSecs ?? null,
           alert.deliveryChannel,
           alert.deliveryChatId,
           alert.status,
           alert.createdAt.toISOString(),
           alert.triggeredAt?.toISOString() || null,
-          alert.lastPrice || null,
+          alert.lastPrice ?? null,
           alert.oneTime ? 1 : 0,
-          alert.cooldownSecs || null,
+          alert.cooldownSecs ?? null,
           alert.lastTriggeredAt?.toISOString() || null,
         ]
       );
@@ -584,7 +584,7 @@ export function createAlertService(
           text += `   Volume: ${alert.threshold.toLocaleString()}\n`;
         }
 
-        if (alert.lastPrice) {
+        if (alert.lastPrice != null) {
           text += `   Last: $${alert.lastPrice.toFixed(3)}\n`;
         }
 

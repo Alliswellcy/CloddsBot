@@ -85,7 +85,7 @@ interface LanceDB {
 export async function createLanceDBExtension(config: LanceDBConfig): Promise<LanceDBExtension> {
   const dbPath = config.dbPath || path.join(process.env.HOME || '.', '.clodds', 'memory.lance');
   const tableName = config.tableName || 'memories';
-  const dimensions = config.dimensions || (config.embeddingModel === 'local' ? 384 : 1536);
+  const dimensions = config.dimensions ?? (config.embeddingModel === 'local' ? 384 : 1536);
 
   let db: LanceDB | null = null;
   let table: LanceTable | null = null;
@@ -186,6 +186,14 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
 
   function generateId(): string {
     return generateSecureId('mem');
+  }
+
+  function sanitizeId(id: string): string {
+    // Only allow alphanumeric, hyphens, underscores for filter interpolation
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+      throw new Error(`Invalid memory ID: ${id}`);
+    }
+    return id;
   }
 
   const extension: LanceDBExtension = {
@@ -336,17 +344,19 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
     async updateImportance(id: string, importance: number): Promise<void> {
       if (!table) throw new Error('Database not initialized');
 
+      const safeId = sanitizeId(id);
       const memory = await extension.getMemory(id);
       if (memory) {
         memory.importance = importance;
-        await table.delete(`id = '${id}'`);
+        await table.delete(`id = '${safeId}'`);
         await table.add([memory]);
       }
     },
 
     async deleteMemory(id: string): Promise<void> {
       if (!table) throw new Error('Database not initialized');
-      await table.delete(`id = '${id}'`);
+      const safeId = sanitizeId(id);
+      await table.delete(`id = '${safeId}'`);
     },
 
     async getMemoriesBySource(source: string, limit?: number): Promise<MemoryEntry[]> {
@@ -359,8 +369,8 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
     async compact(maxEntries?: number, minImportance?: number): Promise<number> {
       if (!table) throw new Error('Database not initialized');
 
-      const max = maxEntries || 10000;
-      const minImp = minImportance || 0.1;
+      const max = maxEntries ?? 10000;
+      const minImp = minImportance ?? 0.1;
 
       const count = await table.countRows();
       if (count <= max) return 0;
@@ -378,7 +388,8 @@ export async function createLanceDBExtension(config: LanceDBConfig): Promise<Lan
 
       for (const entry of results as MemoryEntry[]) {
         if (!keepIds.has(entry.id)) {
-          await table.delete(`id = '${entry.id}'`);
+          const safeId = sanitizeId(entry.id);
+          await table.delete(`id = '${safeId}'`);
           deleted++;
         }
       }

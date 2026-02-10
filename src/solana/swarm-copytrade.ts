@@ -348,8 +348,8 @@ export class SwarmCopyTrader extends EventEmitter {
     // Find token changes
     for (const post of targetPost) {
       const pre = targetPre.find(p => p.mint === post.mint);
-      const preAmount = pre?.uiTokenAmount?.uiAmount || 0;
-      const postAmount = post.uiTokenAmount?.uiAmount || 0;
+      const preAmount = pre?.uiTokenAmount?.uiAmount ?? 0;
+      const postAmount = post.uiTokenAmount?.uiAmount ?? 0;
       const tokenChange = postAmount - preAmount;
 
       if (post.mint === SOL_MINT) continue; // Skip wrapped SOL

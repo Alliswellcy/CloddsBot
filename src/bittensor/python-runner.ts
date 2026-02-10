@@ -28,7 +28,11 @@ export function createPythonRunner(pythonPath: string = 'python3'): PythonRunner
         resolve({
           stdout: stdout ?? '',
           stderr: stderr ?? '',
-          exitCode: error ? (typeof (error as any).code === 'number' ? (error as any).code : 1) : 0,
+          exitCode: error
+            ? (typeof (error as NodeJS.ErrnoException & { status?: number }).status === 'number'
+              ? (error as NodeJS.ErrnoException & { status?: number }).status!
+              : 1)
+            : 0,
           success: !error,
         });
       });

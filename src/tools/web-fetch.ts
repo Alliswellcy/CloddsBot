@@ -128,6 +128,7 @@ interface CacheEntry {
 }
 
 const CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+const MAX_CACHE_ENTRIES = 200;
 const cache = new Map<string, CacheEntry>();
 
 const DEFAULT_MAX_LENGTH = 50000;
@@ -305,6 +306,18 @@ export function createWebFetchTool(): WebFetchTool {
           truncated,
           cached: false,
         };
+
+        // Evict stale entries if cache is at capacity.
+        if (cache.size >= MAX_CACHE_ENTRIES) {
+          const now = Date.now();
+          for (const [k, v] of cache) {
+            if (now - v.timestamp >= CACHE_TTL) cache.delete(k);
+          }
+        }
+        if (cache.size >= MAX_CACHE_ENTRIES) {
+          const oldest = cache.keys().next().value;
+          if (oldest !== undefined) cache.delete(oldest);
+        }
 
         // Cache result
         cache.set(cacheKey, {

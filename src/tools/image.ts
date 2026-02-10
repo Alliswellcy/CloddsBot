@@ -92,6 +92,7 @@ interface CacheEntry {
   timestamp: number;
 }
 
+const MAX_CACHE_ENTRIES = 100;
 const rateLimitState: RateLimitEntry = { count: 0, resetAt: 0 };
 const responseCache = new Map<string, CacheEntry>();
 
@@ -179,7 +180,26 @@ function getCached(cacheKey: string): AnalysisResult | null {
   return entry.value;
 }
 
+function evictStaleCacheEntries(): void {
+  const ttl =
+    parseInt(process.env.CLODDS_VISION_CACHE_TTL_MS || '', 10) || DEFAULT_CACHE_TTL_MS;
+  const now = Date.now();
+  for (const [key, entry] of responseCache) {
+    if (now - entry.timestamp > Math.max(1_000, ttl)) {
+      responseCache.delete(key);
+    }
+  }
+}
+
 function setCached(cacheKey: string, value: AnalysisResult): void {
+  if (responseCache.size >= MAX_CACHE_ENTRIES) {
+    evictStaleCacheEntries();
+  }
+  // If still at capacity after eviction, drop the oldest entry.
+  if (responseCache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = responseCache.keys().next().value;
+    if (oldest !== undefined) responseCache.delete(oldest);
+  }
   responseCache.set(cacheKey, { value, timestamp: Date.now() });
 }
 

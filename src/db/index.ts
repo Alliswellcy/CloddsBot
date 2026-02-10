@@ -19,6 +19,17 @@ import type {
   MarketIndexEntry,
 } from '../types';
 
+/**
+ * Values that can be bound to SQL parameters in sql.js.
+ * Prefer using this over `any[]` when building parameter arrays.
+ */
+export type SqlBindValue = string | number | boolean | null | undefined;
+
+/** Parameter array accepted by Database.run() / Database.query().
+ *  Accepts SqlBindValue[] or unknown[] for backward compat with
+ *  callers that accumulate params dynamically. */
+type SqlParams = SqlBindValue[] | unknown[];
+
 const DB_DIR = resolveStateDir();
 const DB_FILE = join(DB_DIR, 'clodds.db');
 const BACKUP_DIR = join(DB_DIR, 'backups');
@@ -591,10 +602,8 @@ export interface Database {
   setVersion(version: number): void;
 
   // Raw SQL access (for custom queries)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  run(sql: string, params?: any[]): void;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  query<T>(sql: string, params?: any[]): T[];
+  run(sql: string, params?: SqlParams): void;
+  query<T>(sql: string, params?: SqlParams): T[];
 
   // Users
   getUserByPlatformId(platform: string, platformUserId: string): User | undefined;
@@ -1307,6 +1316,7 @@ export async function initDatabase(): Promise<Database> {
     CREATE INDEX IF NOT EXISTS idx_hl_positions_user ON hyperliquid_positions(user_id);
     CREATE INDEX IF NOT EXISTS idx_hl_positions_coin ON hyperliquid_positions(coin);
     CREATE INDEX IF NOT EXISTS idx_hl_positions_open ON hyperliquid_positions(closed_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_hl_positions_open_unique ON hyperliquid_positions(user_id, coin) WHERE closed_at IS NULL;
 
     -- Hyperliquid funding payments
     CREATE TABLE IF NOT EXISTS hyperliquid_funding (
@@ -1378,6 +1388,7 @@ export async function initDatabase(): Promise<Database> {
     CREATE INDEX IF NOT EXISTS idx_binance_positions_user ON binance_futures_positions(user_id);
     CREATE INDEX IF NOT EXISTS idx_binance_positions_symbol ON binance_futures_positions(symbol);
     CREATE INDEX IF NOT EXISTS idx_binance_positions_open ON binance_futures_positions(closed_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_binance_positions_open_unique ON binance_futures_positions(user_id, symbol) WHERE closed_at IS NULL;
 
     -- Binance Futures funding payments
     CREATE TABLE IF NOT EXISTS binance_futures_funding (
@@ -1449,6 +1460,7 @@ export async function initDatabase(): Promise<Database> {
     CREATE INDEX IF NOT EXISTS idx_bybit_positions_user ON bybit_futures_positions(user_id);
     CREATE INDEX IF NOT EXISTS idx_bybit_positions_symbol ON bybit_futures_positions(symbol);
     CREATE INDEX IF NOT EXISTS idx_bybit_positions_open ON bybit_futures_positions(closed_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_bybit_positions_open_unique ON bybit_futures_positions(user_id, symbol) WHERE closed_at IS NULL;
 
     -- Bybit Futures funding payments
     CREATE TABLE IF NOT EXISTS bybit_futures_funding (
@@ -1519,6 +1531,7 @@ export async function initDatabase(): Promise<Database> {
     CREATE INDEX IF NOT EXISTS idx_mexc_positions_user ON mexc_futures_positions(user_id);
     CREATE INDEX IF NOT EXISTS idx_mexc_positions_symbol ON mexc_futures_positions(symbol);
     CREATE INDEX IF NOT EXISTS idx_mexc_positions_open ON mexc_futures_positions(closed_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mexc_positions_open_unique ON mexc_futures_positions(user_id, symbol) WHERE closed_at IS NULL;
 
     -- MEXC Futures funding payments
     CREATE TABLE IF NOT EXISTS mexc_futures_funding (
@@ -1874,6 +1887,17 @@ export async function initDatabase(): Promise<Database> {
     CREATE INDEX IF NOT EXISTS idx_evm_swap_trades_dex ON evm_swap_trades(dex);
     CREATE INDEX IF NOT EXISTS idx_evm_swap_trades_timestamp ON evm_swap_trades(timestamp);
 
+    -- Messages table (append-only per-row storage)
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      timestamp INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+
     -- Create indexes
     CREATE INDEX IF NOT EXISTS idx_alerts_user ON alerts(user_id);
     CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(enabled, triggered);
@@ -1981,12 +2005,16 @@ export async function initDatabase(): Promise<Database> {
     pruneBackups(maxFiles);
   }
 
+  /** Coerce params to sql.js BindParams at the boundary */
+  function asBindParams(params: SqlParams): import('sql.js').BindParams {
+    return params as import('sql.js').BindParams;
+  }
+
   // Helper to get single row
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function getOne<T>(sql: string, params: any[] = []): T | undefined {
+  function getOne<T>(sql: string, params: SqlParams = []): T | undefined {
     const stmt = db.prepare(sql);
     try {
-      stmt.bind(params);
+      stmt.bind(asBindParams(params));
       if (stmt.step()) {
         const row = stmt.getAsObject();
         return row as T;
@@ -1998,11 +2026,10 @@ export async function initDatabase(): Promise<Database> {
   }
 
   // Helper to get all rows
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function getAll<T>(sql: string, params: any[] = []): T[] {
+  function getAll<T>(sql: string, params: SqlParams = []): T[] {
     const stmt = db.prepare(sql);
     try {
-      stmt.bind(params);
+      stmt.bind(asBindParams(params));
       const results: T[] = [];
       while (stmt.step()) {
         results.push(stmt.getAsObject() as T);
@@ -2014,18 +2041,16 @@ export async function initDatabase(): Promise<Database> {
   }
 
   // Helper to run statement
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function run(sql: string, params: any[] = []): void {
-    db.run(sql, params);
+  function run(sql: string, params: SqlParams = []): void {
+    db.run(sql, asBindParams(params));
     saveDb();
   }
 
   // Helper to query multiple rows
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function query<T>(sql: string, params: any[] = []): T[] {
+  function query<T>(sql: string, params: SqlParams = []): T[] {
     const stmt = db.prepare(sql);
     try {
-      stmt.bind(params);
+      stmt.bind(asBindParams(params));
       const results: T[] = [];
       while (stmt.step()) {
         results.push(stmt.getAsObject() as T);
@@ -2985,10 +3010,10 @@ export async function initDatabase(): Promise<Database> {
           trade.price,
           trade.fee || 0,
           trade.feeToken || 'USDC',
-          trade.closedPnl || null,
+          trade.closedPnl ?? null,
           trade.orderType || null,
           trade.isMaker ? 1 : 0,
-          trade.leverage || null,
+          trade.leverage ?? null,
           trade.timestamp.getTime(),
           Date.now(),
         ]
@@ -3151,12 +3176,12 @@ export async function initDatabase(): Promise<Database> {
           position.side,
           position.size,
           position.entryPrice,
-          position.markPrice || null,
-          position.liquidationPrice || null,
-          position.unrealizedPnl || null,
-          position.realizedPnl || 0,
-          position.leverage || null,
-          position.marginUsed || null,
+          position.markPrice ?? null,
+          position.liquidationPrice ?? null,
+          position.unrealizedPnl ?? null,
+          position.realizedPnl ?? 0,
+          position.leverage ?? null,
+          position.marginUsed ?? null,
           position.openedAt.getTime(),
           Date.now(),
           Date.now(),
@@ -3302,10 +3327,10 @@ export async function initDatabase(): Promise<Database> {
           trade.price,
           trade.commission || 0,
           trade.commissionAsset || 'USDT',
-          trade.realizedPnl || null,
+          trade.realizedPnl ?? null,
           trade.orderType || null,
           trade.isMaker ? 1 : 0,
-          trade.leverage || null,
+          trade.leverage ?? null,
           trade.timestamp.getTime(),
           Date.now(),
         ]
@@ -3441,13 +3466,13 @@ export async function initDatabase(): Promise<Database> {
           position.positionSide,
           position.size,
           position.entryPrice,
-          position.markPrice || null,
-          position.liquidationPrice || null,
-          position.unrealizedPnl || null,
-          position.realizedPnl || 0,
-          position.leverage || null,
+          position.markPrice ?? null,
+          position.liquidationPrice ?? null,
+          position.unrealizedPnl ?? null,
+          position.realizedPnl ?? 0,
+          position.leverage ?? null,
           position.marginType || null,
-          position.isolatedMargin || null,
+          position.isolatedMargin ?? null,
           position.openedAt.getTime(),
           Date.now(),
           Date.now(),
@@ -3593,10 +3618,10 @@ export async function initDatabase(): Promise<Database> {
           trade.price,
           trade.commission || 0,
           trade.commissionAsset || 'USDT',
-          trade.closedPnl || null,
+          trade.closedPnl ?? null,
           trade.orderType || null,
           trade.isMaker ? 1 : 0,
-          trade.leverage || null,
+          trade.leverage ?? null,
           trade.timestamp.getTime(),
           Date.now(),
         ]
@@ -3732,13 +3757,13 @@ export async function initDatabase(): Promise<Database> {
           position.side,
           position.size,
           position.entryPrice,
-          position.markPrice || null,
-          position.liquidationPrice || null,
-          position.unrealizedPnl || null,
-          position.cumRealisedPnl || 0,
-          position.leverage || null,
+          position.markPrice ?? null,
+          position.liquidationPrice ?? null,
+          position.unrealizedPnl ?? null,
+          position.cumRealisedPnl ?? 0,
+          position.leverage ?? null,
           position.tradeMode || null,
-          position.positionMargin || null,
+          position.positionMargin ?? null,
           position.openedAt.getTime(),
           Date.now(),
           Date.now(),
@@ -3883,10 +3908,10 @@ export async function initDatabase(): Promise<Database> {
           trade.price,
           trade.fee || 0,
           trade.feeAsset || 'USDT',
-          trade.realizedPnl || null,
-          trade.orderType || null,
+          trade.realizedPnl ?? null,
+          trade.orderType ?? null,
           trade.isMaker ? 1 : 0,
-          trade.leverage || null,
+          trade.leverage ?? null,
           trade.timestamp.getTime(),
           Date.now(),
         ]
@@ -4021,13 +4046,13 @@ export async function initDatabase(): Promise<Database> {
           position.positionType,
           position.holdVol,
           position.openAvgPrice,
-          position.markPrice || null,
-          position.liquidationPrice || null,
-          position.unrealizedPnl || null,
-          position.realizedPnl || 0,
-          position.leverage || null,
-          position.marginMode || null,
-          position.positionMargin || null,
+          position.markPrice ?? null,
+          position.liquidationPrice ?? null,
+          position.unrealizedPnl ?? null,
+          position.realizedPnl ?? 0,
+          position.leverage ?? null,
+          position.marginMode ?? null,
+          position.positionMargin ?? null,
           position.openedAt.getTime(),
           Date.now(),
           Date.now(),
@@ -4853,6 +4878,7 @@ export async function initDatabase(): Promise<Database> {
           logger.warn({ error }, 'Database backup failed');
         }
       }, backupConfig.intervalMs);
+      backupInterval.unref();
     }
 
     return instance;

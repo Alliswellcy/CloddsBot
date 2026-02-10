@@ -100,9 +100,27 @@ export class RollingStats {
   private window: RollingWindow<number>;
   private sum: number = 0;
   private sumSq: number = 0;
+  private pushCount: number = 0;
+  private readonly recomputeEvery: number;
 
   constructor(capacity: number) {
     this.window = new RollingWindow(capacity);
+    // Recompute from scratch every 1000 pushes to prevent floating-point drift
+    this.recomputeEvery = 1000;
+  }
+
+  /**
+   * Recompute sum/sumSq from the actual buffer to eliminate accumulated
+   * floating-point drift from incremental subtraction.
+   */
+  private recompute(): void {
+    const values = this.window.getAll();
+    this.sum = 0;
+    this.sumSq = 0;
+    for (const v of values) {
+      this.sum += v;
+      this.sumSq += v * v;
+    }
   }
 
   /**
@@ -119,6 +137,12 @@ export class RollingStats {
     this.window.push(value);
     this.sum += value;
     this.sumSq += value * value;
+
+    this.pushCount++;
+    if (this.pushCount >= this.recomputeEvery) {
+      this.recompute();
+      this.pushCount = 0;
+    }
   }
 
   /**
@@ -182,5 +206,6 @@ export class RollingStats {
     this.window.clear();
     this.sum = 0;
     this.sumSq = 0;
+    this.pushCount = 0;
   }
 }

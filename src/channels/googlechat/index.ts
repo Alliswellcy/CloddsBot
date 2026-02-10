@@ -295,6 +295,9 @@ export async function createGoogleChatChannel(
     },
 
     // Expose event handler for webhook integration
+    // WARNING: Google Chat webhook events should be verified at the gateway layer
+    // (e.g., by validating the Bearer token in the Authorization header).
+    // This adapter does not perform signature verification itself.
     handleEvent: handleEvent as (event: unknown) => Promise<unknown>,
   };
 }

@@ -1547,9 +1547,11 @@ async function placeKalshiOrder(
         }
 
         // Calculate slippage from mid price
-        const slippage = action === 'buy'
-          ? (avgFillPrice - orderbook.midPrice) / orderbook.midPrice
-          : (orderbook.midPrice - avgFillPrice) / orderbook.midPrice;
+        const slippage = orderbook.midPrice > 0
+          ? (action === 'buy'
+            ? (avgFillPrice - orderbook.midPrice) / orderbook.midPrice
+            : (orderbook.midPrice - avgFillPrice) / orderbook.midPrice)
+          : 0;
 
         if (slippage > maxSlippage) {
           return {
@@ -2338,6 +2340,10 @@ async function getPolymarketUSDCAllowance(
 
     // USDC has 6 decimals
     const allowanceWei = BigInt(result.result);
+    // Cap at MAX_SAFE_INTEGER to avoid Number precision loss on large allowances (e.g., MaxUint256)
+    if (allowanceWei > BigInt(Number.MAX_SAFE_INTEGER)) {
+      return Number.MAX_SAFE_INTEGER / 1e6;
+    }
     return Number(allowanceWei) / 1e6;
   } catch (error) {
     logger.warn({ error, ownerAddress }, 'Failed to fetch USDC allowance');
@@ -2649,6 +2655,11 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
   // ==========================================================================
 
   function validateOrder(request: OrderRequest): string | null {
+    // Guard against NaN/Infinity values that would bypass all checks
+    if (!Number.isFinite(request.price) || !Number.isFinite(request.size)) {
+      return `Invalid order: price=${request.price}, size=${request.size} (must be finite numbers)`;
+    }
+
     // Circuit breaker check - block orders when tripped
     if (circuitBreaker && !circuitBreaker.canTrade()) {
       const state = circuitBreaker.getState();
@@ -2714,8 +2725,9 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
           return { success: false, error: `Security blocked: ${check.flags.join(', ')}` };
         }
       } catch (err) {
-        // Shield not loaded or RPC failure — log but don't block
-        logger.debug({ err }, 'Security shield check skipped');
+        // Shield failure — log at warn level so it's visible; allow trade to proceed
+        // but flag it so operators know security was not verified
+        logger.warn({ err }, 'Security shield check failed — trade proceeding without security verification');
       }
     }
 
@@ -3130,9 +3142,11 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
 
         // Calculate slippage relative to mid price
         const midPrice = orderbook.midPrice || request.price;
-        const slippage = request.side === 'buy'
-          ? (avgFillPrice - midPrice) / midPrice
-          : (midPrice - avgFillPrice) / midPrice;
+        const slippage = midPrice > 0
+          ? (request.side === 'buy'
+            ? (avgFillPrice - midPrice) / midPrice
+            : (midPrice - avgFillPrice) / midPrice)
+          : 0;
 
         return {
           slippage: Math.max(0, slippage),
@@ -3153,138 +3167,138 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
     },
 
     async placeOrdersBatch(orders) {
-      const polyOrders = orders.filter(o => o.platform === 'polymarket');
-      const kalshiOrders = orders.filter(o => o.platform === 'kalshi');
-      const opinionOrders = orders.filter(o => o.platform === 'opinion');
-      const predictfunOrders = orders.filter(o => o.platform === 'predictfun');
-      const otherOrders = orders.filter(o => o.platform !== 'opinion' && o.platform !== 'polymarket' && o.platform !== 'kalshi' && o.platform !== 'predictfun');
+      // Track original indices so results are returned in the same order as input
+      const indexedOrders = orders.map((o, i) => ({ order: o, index: i }));
+      const resultsByIndex: OrderResult[] = new Array(orders.length);
 
-      const results: OrderResult[] = [];
+      const polyIndexed = indexedOrders.filter(o => o.order.platform === 'polymarket');
+      const kalshiIndexed = indexedOrders.filter(o => o.order.platform === 'kalshi');
+      const opinionIndexed = indexedOrders.filter(o => o.order.platform === 'opinion');
+      const predictfunIndexed = indexedOrders.filter(o => o.order.platform === 'predictfun');
+      const otherIndexed = indexedOrders.filter(o => o.order.platform !== 'opinion' && o.order.platform !== 'polymarket' && o.order.platform !== 'kalshi' && o.order.platform !== 'predictfun');
 
       // Execute Polymarket batch if we have Polymarket orders and config
-      if (polyOrders.length > 0 && config.polymarket) {
+      if (polyIndexed.length > 0 && config.polymarket) {
         try {
-          const batchInput = polyOrders.map(o => ({
-            tokenId: o.tokenId!,
-            side: o.side,
-            price: o.price,
-            size: o.size,
-            negRisk: o.negRisk,
-            postOnly: o.postOnly,
+          const batchInput = polyIndexed.map(o => ({
+            tokenId: o.order.tokenId!,
+            side: o.order.side,
+            price: o.order.price,
+            size: o.order.size,
+            negRisk: o.order.negRisk,
+            postOnly: o.order.postOnly,
           }));
           const batchResults = await placePolymarketOrdersBatch(config.polymarket, batchInput);
-          results.push(...batchResults);
+          for (let i = 0; i < polyIndexed.length; i++) {
+            resultsByIndex[polyIndexed[i].index] = batchResults[i] ?? { success: false, error: 'Missing batch result' };
+          }
         } catch (err) {
-          results.push(...polyOrders.map(() => ({
-            success: false,
-            error: err instanceof Error ? err.message : 'Batch order failed',
-          })));
+          for (const o of polyIndexed) {
+            resultsByIndex[o.index] = { success: false, error: err instanceof Error ? err.message : 'Batch order failed' };
+          }
         }
-      } else if (polyOrders.length > 0) {
-        results.push(...polyOrders.map(() => ({
-          success: false,
-          error: 'Polymarket trading not configured',
-        })));
+      } else if (polyIndexed.length > 0) {
+        for (const o of polyIndexed) {
+          resultsByIndex[o.index] = { success: false, error: 'Polymarket trading not configured' };
+        }
       }
 
       // Execute Kalshi batch if we have Kalshi orders and config
-      if (kalshiOrders.length > 0 && config.kalshi) {
+      if (kalshiIndexed.length > 0 && config.kalshi) {
         try {
-          const batchInput = kalshiOrders.map(o => ({
-            ticker: o.marketId,
-            side: (o.outcome?.toLowerCase() as 'yes' | 'no') || 'yes',
-            action: o.side,
-            price: o.price,
-            count: o.size,
+          const batchInput = kalshiIndexed.map(o => ({
+            ticker: o.order.marketId,
+            side: (o.order.outcome?.toLowerCase() as 'yes' | 'no') || 'yes',
+            action: o.order.side,
+            price: o.order.price,
+            count: o.order.size,
           }));
           const batchResults = await placeKalshiOrdersBatch(config.kalshi, batchInput);
-          results.push(...batchResults);
+          for (let i = 0; i < kalshiIndexed.length; i++) {
+            resultsByIndex[kalshiIndexed[i].index] = batchResults[i] ?? { success: false, error: 'Missing batch result' };
+          }
         } catch (err) {
-          results.push(...kalshiOrders.map(() => ({
-            success: false,
-            error: err instanceof Error ? err.message : 'Batch order failed',
-          })));
+          for (const o of kalshiIndexed) {
+            resultsByIndex[o.index] = { success: false, error: err instanceof Error ? err.message : 'Batch order failed' };
+          }
         }
-      } else if (kalshiOrders.length > 0) {
-        results.push(...kalshiOrders.map(() => ({
-          success: false,
-          error: 'Kalshi trading not configured',
-        })));
+      } else if (kalshiIndexed.length > 0) {
+        for (const o of kalshiIndexed) {
+          resultsByIndex[o.index] = { success: false, error: 'Kalshi trading not configured' };
+        }
       }
 
       // Execute Opinion batch if we have Opinion orders and config
-      if (opinionOrders.length > 0 && config.opinion) {
+      if (opinionIndexed.length > 0 && config.opinion) {
         try {
-          const batchInput = opinionOrders.map(o => ({
-            marketId: parseInt(o.marketId, 10),
-            tokenId: o.tokenId!,
-            side: o.side.toUpperCase() as 'BUY' | 'SELL',
-            price: o.price,
-            amount: o.size,
+          const batchInput = opinionIndexed.map(o => ({
+            marketId: parseInt(o.order.marketId, 10),
+            tokenId: o.order.tokenId!,
+            side: o.order.side.toUpperCase() as 'BUY' | 'SELL',
+            price: o.order.price,
+            amount: o.order.size,
           }));
 
           const batchResults = await placeOpinionOrdersBatch(config.opinion, batchInput);
-          results.push(...batchResults.map(r => ({
-            success: r.success,
-            orderId: r.orderId,
-            error: r.error,
-          })));
+          for (let i = 0; i < opinionIndexed.length; i++) {
+            const r = batchResults[i];
+            resultsByIndex[opinionIndexed[i].index] = r
+              ? { success: r.success, orderId: r.orderId, error: r.error }
+              : { success: false, error: 'Missing batch result' };
+          }
         } catch (err) {
-          // All Opinion orders failed
-          results.push(...opinionOrders.map(() => ({
-            success: false,
-            error: err instanceof Error ? err.message : 'Batch order failed',
-          })));
+          for (const o of opinionIndexed) {
+            resultsByIndex[o.index] = { success: false, error: err instanceof Error ? err.message : 'Batch order failed' };
+          }
         }
-      } else if (opinionOrders.length > 0) {
-        // No Opinion config
-        results.push(...opinionOrders.map(() => ({
-          success: false,
-          error: 'Opinion trading not configured',
-        })));
+      } else if (opinionIndexed.length > 0) {
+        for (const o of opinionIndexed) {
+          resultsByIndex[o.index] = { success: false, error: 'Opinion trading not configured' };
+        }
       }
 
       // Execute PredictFun orders (no native batch API — sequential via SDK with EIP-712 signing)
-      if (predictfunOrders.length > 0 && config.predictfun) {
-        for (const order of predictfunOrders) {
+      if (predictfunIndexed.length > 0 && config.predictfun) {
+        for (const o of predictfunIndexed) {
           try {
             const result = await placePredictFunOrder(
               config.predictfun,
-              order.tokenId!,
-              order.side,
-              order.price,
-              order.size,
-              order.marketId
+              o.order.tokenId!,
+              o.order.side,
+              o.order.price,
+              o.order.size,
+              o.order.marketId
             );
-            results.push(result);
+            resultsByIndex[o.index] = result;
           } catch (err) {
-            results.push({
+            resultsByIndex[o.index] = {
               success: false,
               error: err instanceof Error ? err.message : 'Order failed',
-            });
+            };
           }
         }
-      } else if (predictfunOrders.length > 0) {
-        results.push(...predictfunOrders.map(() => ({
-          success: false,
-          error: 'PredictFun trading not configured',
-        })));
+      } else if (predictfunIndexed.length > 0) {
+        for (const o of predictfunIndexed) {
+          resultsByIndex[o.index] = { success: false, error: 'PredictFun trading not configured' };
+        }
       }
 
       // Execute other orders individually (fallback)
-      for (const order of otherOrders) {
+      for (const o of otherIndexed) {
         try {
-          const result = order.side === 'buy'
-            ? await this.buyLimit(order)
-            : await this.sellLimit(order);
-          results.push(result);
+          const result = o.order.side === 'buy'
+            ? await this.buyLimit(o.order)
+            : await this.sellLimit(o.order);
+          resultsByIndex[o.index] = result;
         } catch (err) {
-          results.push({
+          resultsByIndex[o.index] = {
             success: false,
             error: err instanceof Error ? err.message : 'Order failed',
-          });
+          };
         }
       }
+
+      const results = resultsByIndex;
 
       return results;
     },

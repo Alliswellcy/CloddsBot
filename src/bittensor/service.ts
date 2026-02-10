@@ -71,7 +71,7 @@ export function createBittensorService(
 
   /** Refresh TAO price from CoinGecko (if not overridden in config) */
   async function refreshTaoPrice(): Promise<void> {
-    if (config.taoPriceUsd) return; // user-provided override
+    if (config.taoPriceUsd !== undefined) return; // user-provided override
     const price = await fetchTaoPrice();
     if (price > 0) {
       taoPriceUsd = price;

@@ -54,6 +54,7 @@ export async function createNostrChannel(
   const staticAllowlist = new Set<string>(config.allowFrom || []);
   const relayConnections = new Map<string, WebSocket>();
   const seenEvents = new Set<string>();
+  let running = false;
   let privateKeyHex: string;
   let publicKeyHex: string;
 
@@ -265,9 +266,12 @@ export async function createNostrChannel(
     });
 
     ws.on('close', () => {
-      logger.warn({ relay: url }, 'Nostr relay disconnected, reconnecting...');
       relayConnections.delete(url);
-      setTimeout(() => connectToRelay(url), 5000);
+      if (!running) return;
+      logger.warn({ relay: url }, 'Nostr relay disconnected, reconnecting...');
+      setTimeout(() => {
+        if (running) connectToRelay(url);
+      }, 5000);
     });
 
     ws.on('error', (error) => {
@@ -279,6 +283,7 @@ export async function createNostrChannel(
     platform: 'nostr',
 
     async start() {
+      running = true;
       logger.info({ pubkey: publicKeyHex }, 'Starting Nostr bot');
       for (const relay of config.relays) {
         connectToRelay(relay);
@@ -286,6 +291,7 @@ export async function createNostrChannel(
     },
 
     async stop() {
+      running = false;
       logger.info('Stopping Nostr bot');
       for (const [url, ws] of relayConnections) {
         ws.close();

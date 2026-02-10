@@ -38,6 +38,9 @@ const DEFAULT_RETRY: Required<HttpRetryConfig> = {
   methods: ['GET', 'HEAD', 'OPTIONS'],
 };
 
+/** Default per-request timeout (30 seconds) to prevent hanging requests */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 type FetchInput = string | URL | Request;
 
 let originalFetch: typeof fetch | null = null;
@@ -50,6 +53,7 @@ let httpConfig: HttpRateLimitConfig = {
 
 const hostLimiters = new Map<string, RateLimiter>();
 const hostCooldowns = new Map<string, number>();
+const MAX_HOST_ENTRIES = 500;
 
 function normalizeMethod(method?: string): string {
   return (method || 'GET').toUpperCase();
@@ -73,6 +77,11 @@ function resolveRateLimit(host: string): RateLimitConfig | null {
 function getLimiter(host: string, config: RateLimitConfig): RateLimiter {
   const existing = hostLimiters.get(host);
   if (existing) return existing;
+  // Evict oldest entries if over limit to prevent memory leaks
+  if (hostLimiters.size >= MAX_HOST_ENTRIES) {
+    const firstKey = hostLimiters.keys().next().value;
+    if (firstKey) hostLimiters.delete(firstKey);
+  }
   const limiter = new RateLimiter(config);
   hostLimiters.set(host, limiter);
   return limiter;
@@ -152,7 +161,12 @@ async function fetchWithControl(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await originalFetch(input, init);
+      // Add default timeout if caller hasn't provided an AbortSignal
+      const fetchInit = (init?.signal) ? init : {
+        ...init,
+        signal: AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS),
+      };
+      const response = await originalFetch(input, fetchInit);
       lastResponse = response;
       if (!allowRetry) return response;
 

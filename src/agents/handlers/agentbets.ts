@@ -20,7 +20,7 @@ async function marketsHandler(toolInput: ToolInput): Promise<HandlerResult> {
   return safeHandler(async () => {
     const response = await fetch(`${API_URL}/markets`);
     if (!response.ok) throw new Error(`AgentBets API error: ${response.status}`);
-    const data = await response.json() as { markets: any[]; count: number };
+    const data = await response.json() as { markets: Record<string, unknown>[]; count: number };
     let markets = data.markets || [];
 
     if (query) {
@@ -56,7 +56,7 @@ async function opportunitiesHandler(_toolInput: ToolInput): Promise<HandlerResul
   return safeHandler(async () => {
     const response = await fetch(`${API_URL}/opportunities`);
     if (!response.ok) throw new Error(`AgentBets API error: ${response.status}`);
-    const data = await response.json() as { opportunities?: any[] };
+    const data = await response.json() as { opportunities?: Record<string, unknown>[] };
     return data.opportunities || [];
   });
 }

@@ -624,6 +624,13 @@ export function createOpportunityFinder(
       }> = [];
 
       for (const { platform, market } of match.markets) {
+        // Skip markets with stale prices (older than 5 minutes)
+        const stalenessMs = Date.now() - (market.updatedAt?.getTime?.() || 0);
+        if (market.updatedAt && stalenessMs > 5 * 60 * 1000) {
+          logger.debug({ platform, marketId: market.id, stalenessMs }, 'Skipping stale market in cross-platform arb');
+          continue;
+        }
+
         const yesOutcome = normalizer.findYes(market.outcomes);
         const noOutcome = normalizer.findNo(market.outcomes);
 
@@ -633,7 +640,7 @@ export function createOpportunityFinder(
           platform,
           market,
           yesPrice: yesOutcome.price,
-          noPrice: noOutcome?.price || 1 - yesOutcome.price,
+          noPrice: noOutcome?.price ?? (1 - yesOutcome.price),
           liquidity: Math.min(yesOutcome.volume24h || 0, noOutcome?.volume24h || 0),
         });
       }
@@ -653,13 +660,17 @@ export function createOpportunityFinder(
       const combinedCost = lowest.yesPrice + highest.noPrice;
       const grossCrossEdge = (1 - combinedCost) * 100;
 
-      // Calculate fee-adjusted edges (fees on both platforms)
+      // Calculate fee-adjusted edges (fees proportional to cost on each platform)
       const lowestFeeRate = getPlatformFeeRate(lowest.platform);
       const highestFeeRate = getPlatformFeeRate(highest.platform);
-      const totalFeesPct = (lowestFeeRate + highestFeeRate) * 100;
 
-      const spreadYes = grossSpreadYes - totalFeesPct;
-      const crossEdge = grossCrossEdge - totalFeesPct;
+      // Spread strategy fees: buy YES on low platform, sell YES on high platform
+      const spreadFeesPct = (lowest.yesPrice * lowestFeeRate + highest.yesPrice * highestFeeRate) * 100;
+      const spreadYes = grossSpreadYes - spreadFeesPct;
+
+      // Cross strategy fees: buy YES on low platform, buy NO on high platform
+      const crossFeesPct = (lowest.yesPrice * lowestFeeRate + highest.noPrice * highestFeeRate) * 100;
+      const crossEdge = grossCrossEdge - crossFeesPct;
 
       const edgePct = Math.max(spreadYes, crossEdge);
 
@@ -958,6 +969,8 @@ export function createOpportunityFinder(
   // REAL-TIME
   // ==========================================================================
 
+  let priceUpdateHandler: ((update: { platform: Platform; marketId: string; price: number }) => void) | null = null;
+
   async function startRealtime(): Promise<void> {
     if (isScanning) return;
     isScanning = true;
@@ -974,18 +987,14 @@ export function createOpportunityFinder(
       }
     }, cfg.scanIntervalMs);
 
-    // Subscribe to price updates
-    for (const platform of cfg.platforms) {
-      try {
-        feeds.on('priceUpdate', (update) => {
-          if (update.platform === platform) {
-            handlePriceUpdate(update);
-          }
-        });
-      } catch (error) {
-        logger.warn({ error, platform }, 'Failed to subscribe to price updates');
+    // Subscribe to price updates with a single listener (not one per platform)
+    const platformSet = new Set(cfg.platforms);
+    priceUpdateHandler = (update) => {
+      if (platformSet.has(update.platform)) {
+        handlePriceUpdate(update);
       }
-    }
+    };
+    feeds.on('priceUpdate', priceUpdateHandler);
 
     emitter.emit('started');
   }
@@ -998,32 +1007,61 @@ export function createOpportunityFinder(
       scanInterval = null;
     }
 
+    // Remove price update listener to prevent leaks
+    if (priceUpdateHandler) {
+      feeds.off('priceUpdate', priceUpdateHandler);
+      priceUpdateHandler = null;
+    }
+
     logger.info('Stopped real-time opportunity scanning');
     emitter.emit('stopped');
   }
 
   function handlePriceUpdate(update: { platform: Platform; marketId: string; price: number }): void {
     // Check if this affects any active opportunities
+    const toExpire: string[] = [];
     for (const [id, opp] of activeOpportunities) {
       const affected = opp.markets.find(
         (m) => m.platform === update.platform && m.marketId === update.marketId
       );
 
       if (affected) {
-        // Update price and recalculate
+        // Update price and recalculate edge based on new prices
         affected.price = update.price;
+
+        // Recalculate edgePct based on opportunity type
+        if (opp.type === 'internal' && opp.markets.length === 2) {
+          const sum = opp.markets[0].price + opp.markets[1].price;
+          const feeRate = getPlatformFeeRate(opp.markets[0].platform);
+          const totalFees = sum * feeRate;
+          opp.edgePct = (1 - sum) * 100 - totalFees * 100;
+          opp.profitPer100 = (opp.edgePct / 100) * 100;
+        } else if (opp.type === 'cross_platform' && opp.markets.length === 2) {
+          const m0 = opp.markets[0];
+          const m1 = opp.markets[1];
+          const combinedCost = m0.price + m1.price;
+          const fee0 = m0.price * getPlatformFeeRate(m0.platform);
+          const fee1 = m1.price * getPlatformFeeRate(m1.platform);
+          opp.edgePct = (1 - combinedCost) * 100 - (fee0 + fee1) * 100;
+          opp.profitPer100 = (opp.edgePct / 100) * 100;
+        }
+
         const rescored = scorer.score(opp);
         Object.assign(opp, rescored);
 
         // Check if still valid
         if (opp.edgePct < cfg.minEdge) {
           opp.status = 'expired';
-          activeOpportunities.delete(id);
+          toExpire.push(id);
           emitter.emit('expired', opp);
         } else {
           emitter.emit('updated', opp);
         }
       }
+    }
+    // Delete expired entries outside the iteration loop
+    for (const id of toExpire) {
+      activeOpportunities.delete(id);
     }
   }
 
@@ -1056,6 +1094,7 @@ export function createOpportunityFinder(
     if (opp) {
       opp.status = 'taken';
       opp.outcome = { taken: true, fillPrices };
+      activeOpportunities.delete(id);
       analytics.recordTaken(opp as unknown as Parameters<typeof analytics.recordTaken>[0]);
       emitter.emit('taken', opp);
     }

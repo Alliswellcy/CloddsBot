@@ -7,7 +7,7 @@
  * @see https://docs.pancakeswap.finance
  */
 
-import { ethers, Wallet, JsonRpcProvider, Contract, parseUnits, formatUnits, MaxUint256 } from 'ethers';
+import { ethers, Wallet, JsonRpcProvider, Contract, parseUnits, formatUnits } from 'ethers';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -310,7 +310,7 @@ export async function pancakeSwap(params: PancakeSwapParams): Promise<PancakeSwa
 
       if (allowance < amountIn) {
         logger.info({ token: quote.inputToken, router: config.swapRouter }, 'Approving token for PancakeSwap');
-        const approveTx = await token.approve(config.swapRouter, MaxUint256);
+        const approveTx = await token.approve(config.swapRouter, amountIn);
         await approveTx.wait();
       }
     }

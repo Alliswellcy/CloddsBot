@@ -175,7 +175,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
         marketIndex,
         direction,
         baseAssetAmount: amount,
-        price: price || 0.5,
+        price: price ?? 0.5,
         status: orderType === 'market' ? 'filled' : 'open',
         createdAt: new Date(),
       };
@@ -223,7 +223,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
         marketIndex,
         direction,
         baseAssetAmount: amount,
-        price: price || 0.5,
+        price: price ?? 0.5,
         status: orderType === 'market' ? 'filled' : 'open',
         createdAt: new Date(),
       };
@@ -494,7 +494,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
         if (Math.abs(baseAmount) < 0.0001) continue;
 
         const prices = await trading.getMarketPrice(p.marketIndex);
-        const currentPrice = baseAmount > 0 ? prices?.yes || 0.5 : prices?.no || 0.5;
+        const currentPrice = baseAmount > 0 ? prices?.yes ?? 0.5 : prices?.no ?? 0.5;
         const entryPrice = Math.abs(parseFloat(p.quoteEntryAmount) / 1e6 / baseAmount);
 
         const position: DriftPosition = {
@@ -565,7 +565,7 @@ export function createDriftTrading(config: DriftTradingConfig = {}): DriftTradin
 
       if (!data) return null;
 
-      const yesPrice = data.probability || data.lastPrice || 0.5;
+      const yesPrice = data.probability ?? data.lastPrice ?? 0.5;
 
       return {
         yes: yesPrice,

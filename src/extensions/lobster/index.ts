@@ -81,7 +81,8 @@ interface CacheEntry<T> {
 
 export async function createLobsterExtension(config: LobsterConfig): Promise<LobsterExtension> {
   const baseUrl = config.baseUrl || 'https://lobste.rs';
-  const cacheDuration = config.cacheDurationMs || 300000; // 5 minutes
+  const cacheDuration = config.cacheDurationMs ?? 300000; // 5 minutes
+  const MAX_CACHE_ENTRIES = 200;
   const cache = new Map<string, CacheEntry<unknown>>();
 
   async function fetchJSON<T>(path: string): Promise<T> {
@@ -92,6 +93,10 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
     const cached = cache.get(cacheKey) as CacheEntry<T> | undefined;
     if (cached && cached.expiresAt > Date.now()) {
       return cached.data;
+    }
+    // Remove expired entry
+    if (cached) {
+      cache.delete(cacheKey);
     }
 
     const headers: Record<string, string> = {
@@ -111,6 +116,19 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
 
     const data = (await response.json()) as T;
 
+    // Evict expired/oldest entries if cache is full
+    if (cache.size >= MAX_CACHE_ENTRIES) {
+      const now = Date.now();
+      for (const [key, entry] of cache) {
+        if (entry.expiresAt <= now) cache.delete(key);
+      }
+      // If still full, remove oldest entries
+      if (cache.size >= MAX_CACHE_ENTRIES) {
+        const oldest = Array.from(cache.keys()).slice(0, Math.floor(MAX_CACHE_ENTRIES / 4));
+        for (const key of oldest) cache.delete(key);
+      }
+    }
+
     // Cache the result
     cache.set(cacheKey, {
       data,
@@ -127,10 +145,10 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
       title: raw.title,
       url: raw.url,
       description: raw.description || raw.description_plain,
-      score: raw.score || 0,
-      commentCount: raw.comment_count || 0,
-      tags: raw.tags || [],
-      submitter: raw.submitter_user?.username || raw.submitter,
+      score: raw.score ?? 0,
+      commentCount: raw.comment_count ?? 0,
+      tags: raw.tags ?? [],
+      submitter: raw.submitter_user?.username ?? raw.submitter,
       submittedAt: new Date(raw.created_at),
       commentsUrl: raw.comments_url || `${baseUrl}/s/${raw.short_id}`,
     };
@@ -143,8 +161,8 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
       storyId: raw.story_id,
       author: raw.commenting_user?.username || raw.user,
       content: raw.comment_plain || raw.comment,
-      score: raw.score || 0,
-      depth: raw.indent_level || raw.depth || 0,
+      score: raw.score ?? 0,
+      depth: raw.indent_level ?? raw.depth ?? 0,
       parentId: raw.parent_comment,
       createdAt: new Date(raw.created_at),
     };
@@ -153,25 +171,25 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
   const extension: LobsterExtension = {
     async getHottest(page?: number): Promise<LobsterStory[]> {
       const path = page && page > 1 ? `/page/${page}` : '';
-      const data = await fetchJSON<any[]>(path || '/hottest');
+      const data = await fetchJSON<Record<string, unknown>[]>(path || '/hottest');
       return (Array.isArray(data) ? data : []).map(parseStory);
     },
 
     async getNewest(page?: number): Promise<LobsterStory[]> {
       const path = `/newest${page && page > 1 ? `/page/${page}` : ''}`;
-      const data = await fetchJSON<any[]>(path);
+      const data = await fetchJSON<Record<string, unknown>[]>(path);
       return (Array.isArray(data) ? data : []).map(parseStory);
     },
 
     async getByTag(tag: string, page?: number): Promise<LobsterStory[]> {
       const path = `/t/${tag}${page && page > 1 ? `/page/${page}` : ''}`;
-      const data = await fetchJSON<any[]>(path);
+      const data = await fetchJSON<Record<string, unknown>[]>(path);
       return (Array.isArray(data) ? data : []).map(parseStory);
     },
 
     async searchStories(query: string, page?: number): Promise<LobsterStory[]> {
       const path = `/search?q=${encodeURIComponent(query)}${page ? `&page=${page}` : ''}`;
-      const data = await fetchJSON<{ stories?: any[] }>(path);
+      const data = await fetchJSON<{ stories?: Record<string, unknown>[] }>(path);
       return (data.stories || []).map(parseStory);
     },
 
@@ -207,8 +225,8 @@ export async function createLobsterExtension(config: LobsterConfig): Promise<Lob
     },
 
     async getTags(): Promise<string[]> {
-      const data = await fetchJSON<any[]>('/tags');
-      return (data || []).map((t: any) => t.tag || t);
+      const data = await fetchJSON<Array<Record<string, unknown> | string>>('/tags');
+      return (data || []).map((t) => typeof t === 'string' ? t : String(t.tag || t));
     },
 
     async findMarketRelevant(keywords?: string[]): Promise<LobsterStory[]> {

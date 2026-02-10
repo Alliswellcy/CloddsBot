@@ -108,13 +108,18 @@ function rotateLogFile(filePath: string, maxFiles: number): void {
     try { unlinkSync(oldest); } catch {}
   }
 
-  // Rotate existing
+  // Rotate existing: .4 -> .5, .3 -> .4, .2 -> .3, .1 -> .2
   for (let i = maxFiles - 1; i >= 1; i--) {
-    const src = i === 1 ? filePath : `${filePath}.${i}`;
+    const src = `${filePath}.${i}`;
     const dst = `${filePath}.${i + 1}`;
     if (existsSync(src)) {
       try { renameSync(src, dst); } catch {}
     }
+  }
+
+  // Current file becomes .1
+  if (existsSync(filePath)) {
+    try { renameSync(filePath, `${filePath}.1`); } catch {}
   }
 }
 
@@ -241,9 +246,36 @@ export function createLogger(options: LoggerOptions = {}): Logger {
         maxFiles,
       });
 
-      // Merge bindings
+      // Merge parent bindings with child bindings and inject into the child's closure
       const merged = { ...bindings, ...childBindings };
-      (childLogger as { bindings?: Record<string, unknown> }).bindings = merged;
+
+      type LogFn = {
+        (msg: string, data?: Record<string, unknown>): void;
+        (data: Record<string, unknown>, msg: string): void;
+      };
+
+      // Store original methods before overriding, then wrap to inject merged bindings
+      const origDebug = childLogger.debug;
+      const origInfo = childLogger.info;
+      const origWarn = childLogger.warn;
+      const origError = childLogger.error;
+
+      function wrapOriginal(origFn: Function): LogFn {
+        const fn = function (msgOrData: string | Record<string, unknown>, dataOrMsg?: Record<string, unknown> | string) {
+          if (typeof msgOrData === 'string') {
+            const data = dataOrMsg as Record<string, unknown> | undefined;
+            origFn(msgOrData, { ...merged, ...data });
+          } else {
+            origFn({ ...merged, ...msgOrData }, dataOrMsg as string);
+          }
+        };
+        return fn as LogFn;
+      }
+
+      childLogger.debug = wrapOriginal(origDebug);
+      childLogger.info = wrapOriginal(origInfo);
+      childLogger.warn = wrapOriginal(origWarn);
+      childLogger.error = wrapOriginal(origError);
 
       return childLogger;
     },

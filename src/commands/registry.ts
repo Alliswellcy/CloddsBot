@@ -1367,7 +1367,7 @@ export function createDefaultCommands(): CommandDefinition[] {
       name: 'bot',
       description: 'Manage trading bots (start/stop/status/list)',
       usage: '/bot [start|stop|pause|resume|status] <strategy-id>',
-      aliases: ['bots', 'strategy'],
+      aliases: ['bots'],
       handler: async (args, ctx) => {
         // Get trading system from context if available
         const trading = (ctx as any).trading;
@@ -2057,11 +2057,19 @@ export function createDefaultCommands(): CommandDefinition[] {
             let valueB: unknown = 10;
 
             if (paramSpec && paramSpec.includes('=')) {
-              const [param, values] = paramSpec.split('=');
-              const [valA, valB] = values.split(',');
+              const eqIdx = paramSpec.indexOf('=');
+              const param = paramSpec.slice(0, eqIdx);
+              const valuesStr = paramSpec.slice(eqIdx + 1);
+              const valueParts = valuesStr.split(',');
               varyParam = param;
-              valueA = isNaN(Number(valA)) ? valA : Number(valA);
-              valueB = isNaN(Number(valB)) ? valB : Number(valB);
+              const rawA = valueParts[0];
+              const rawB = valueParts[1];
+              if (rawA !== undefined) {
+                valueA = isNaN(Number(rawA)) ? rawA : Number(rawA);
+              }
+              if (rawB !== undefined) {
+                valueB = isNaN(Number(rawB)) ? rawB : Number(rawB);
+              }
             }
 
             // Import helper
@@ -2609,7 +2617,7 @@ export function createDefaultCommands(): CommandDefinition[] {
             for (const part of rest) {
               const lower = part.toLowerCase();
               if (lower.startsWith('minedge=')) {
-                minEdge = parseFloat(lower.slice(8)) || 0.5;
+                minEdge = Number.isFinite(parseFloat(lower.slice(8))) ? parseFloat(lower.slice(8)) : 0.5;
               } else if (lower.startsWith('limit=')) {
                 limit = parseInt(lower.slice(6), 10) || 20;
               } else if (lower.startsWith('platforms=')) {
@@ -2863,7 +2871,7 @@ export function createDefaultCommands(): CommandDefinition[] {
             for (const part of rest) {
               const lower = part.toLowerCase();
               if (lower.startsWith('minedge=')) {
-                minEdge = parseFloat(lower.slice(8)) || 0.5;
+                minEdge = Number.isFinite(parseFloat(lower.slice(8))) ? parseFloat(lower.slice(8)) : 0.5;
               } else if (lower.startsWith('platforms=')) {
                 platforms.push(...lower.slice(10).split(','));
               }
@@ -3154,7 +3162,7 @@ export function createDefaultCommands(): CommandDefinition[] {
       usage: '/trending-agents [limit]',
       aliases: ['hot-agents'],
       handler: async (args, _ctx) => {
-        const limit = Math.min(parseInt(args) || 10, 20);
+        const limit = Math.min(parseInt(args, 10) || 10, 20);
         const agents = await virtuals.getTrendingAgents(limit);
 
         if (agents.length === 0) {
@@ -3180,7 +3188,7 @@ export function createDefaultCommands(): CommandDefinition[] {
       usage: '/new-agents [limit]',
       aliases: ['latest-agents'],
       handler: async (args, _ctx) => {
-        const limit = Math.min(parseInt(args) || 10, 20);
+        const limit = Math.min(parseInt(args, 10) || 10, 20);
         const agents = await virtuals.getNewAgents(limit);
 
         if (agents.length === 0) {

@@ -662,6 +662,10 @@ export function calculateKelly(
   // Kelly = (bp - q) / b
   // where b = odds received (1/price - 1), p = prob of winning, q = prob of losing
 
+  if (marketPrice <= 0 || marketPrice >= 1) {
+    return { fullKelly: 0, halfKelly: 0, quarterKelly: 0 };
+  }
+
   const b = (1 / marketPrice) - 1;
   const p = estimatedProbability;
   const q = 1 - p;

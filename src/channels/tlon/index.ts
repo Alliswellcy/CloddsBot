@@ -43,6 +43,7 @@ export async function createTlonChannel(
   let eventSource: EventSource | null = null;
   let channelId: string | null = null;
   let eventId = 0;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const baseUrl = config.shipUrl.replace(/\/$/, '');
 
@@ -268,7 +269,7 @@ export async function createTlonChannel(
     };
 
     // Poll periodically
-    setInterval(pollChannel, config.pollIntervalMs || 2000);
+    pollInterval = setInterval(pollChannel, config.pollIntervalMs || 2000);
   }
 
   return {
@@ -288,6 +289,10 @@ export async function createTlonChannel(
 
     async stop() {
       logger.info('Stopping Tlon bot');
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
       if (eventSource) {
         eventSource.close();
         eventSource = null;

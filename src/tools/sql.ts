@@ -41,7 +41,10 @@ const FORBIDDEN_KEYWORDS = [
 ];
 
 function normalizeSql(sql: string): string {
-  return sql.replace(/--.*$/gm, '').trim();
+  return sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')  // strip block comments
+    .replace(/--.*$/gm, '')              // strip line comments
+    .trim();
 }
 
 function startsWithAllowedStatement(sql: string): boolean {

@@ -1332,7 +1332,7 @@ export async function getDbcPoolsByCreator(
 export async function getDbcPoolMetadata(
   connection: Connection,
   poolAddress: string
-): Promise<any[]> {
+): Promise<unknown[]> {
   const client = await getDbcClient(connection);
   return await client.state.getPoolMetadata(poolAddress);
 }
@@ -1343,7 +1343,7 @@ export async function getDbcPoolMetadata(
 export async function getDbcPartnerMetadata(
   connection: Connection,
   partnerAddress: string
-): Promise<any[]> {
+): Promise<unknown[]> {
   const client = await getDbcClient(connection);
   return await client.state.getPartnerMetadata(partnerAddress);
 }
