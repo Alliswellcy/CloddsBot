@@ -24,28 +24,18 @@ Track token usage, estimate costs, and analyze AI consumption across sessions an
 ### Detailed Breakdown
 
 ```
-/usage by-model                             Usage by AI model
-/usage by-user                              Usage by user (admin)
-/usage by-session                           Usage by session
-/usage history                              Historical usage
+/usage breakdown [today]                    Cost breakdown by model
+/usage by-model                             Usage by AI model (alias)
+/usage by-user                              Usage by user
+/usage history [days]                       Historical usage (default 7 days)
+/usage estimate <model> <in> <out>          Estimate cost for tokens
+/usage user <id> [today]                    User-specific usage
 ```
 
-### Cost Tracking
+### Management
 
 ```
-/usage cost                                 Estimated costs
-/usage cost today                           Today's cost
-/usage cost month                           Monthly cost
-/usage budget                               Check against budget
-```
-
-### Settings
-
-```
-/usage footer on                            Show usage in responses
-/usage footer tokens                        Show token counts only
-/usage footer full                          Show tokens + cost
-/usage footer off                           Hide usage footer
+/usage reset                                Clear all usage data
 ```
 
 ---

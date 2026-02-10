@@ -19,13 +19,16 @@ Compare prediction market prices to external models, polls, and data sources to 
 
 ### Compare Specific Market
 ```
-/compare "Trump 2028" 538 betting-odds
+/edge compare "Trump 2028" 538 betting-odds
+/edge compare "BTC above 100k" polymarket kalshi
 ```
 
 ### Kelly Calculator
 ```
-/kelly 0.45 0.55 1000
-# market price, your estimate, bankroll
+/edge kelly 0.6 2.0 1000
+# probability, decimal odds, bankroll
+/edge kelly 55 2.5
+# 55% prob, 2.5 odds, $100 default bankroll
 ```
 
 ## Data Sources

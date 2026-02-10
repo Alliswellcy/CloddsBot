@@ -78,7 +78,7 @@ Auto-logging: enabled
 
 **Stats:**
   Total trades: ${stats.totalTrades}
-  Win rate: ${(stats.winRate * 100).toFixed(1)}%
+  Win rate: ${stats.winRate.toFixed(1)}%
   Total PnL: $${stats.totalPnL.toFixed(2)}`;
       }
 
@@ -89,7 +89,7 @@ Auto-logging: enabled
 
 Total Trades: ${stats.totalTrades}
 Wins: ${stats.winningTrades} | Losses: ${stats.losingTrades}
-Win Rate: ${(stats.winRate * 100).toFixed(1)}%
+Win Rate: ${stats.winRate.toFixed(1)}%
 Total PnL: $${stats.totalPnL.toFixed(2)}
 Avg PnL: $${stats.avgPnL.toFixed(2)}
 Avg Win: $${stats.avgWin.toFixed(2)} | Avg Loss: $${stats.avgLoss.toFixed(2)}
@@ -117,7 +117,7 @@ Fees: $${stats.netFees.toFixed(2)} (maker: ${stats.makerTrades}, taker: ${stats.
 
           lines.push(`**${bot.name}** ${statusIcon}`);
           lines.push(`  ID: ${bot.id}`);
-          lines.push(`  Trades: ${bot.tradesCount} | Win Rate: ${(bot.winRate * 100).toFixed(1)}% | PnL: $${bot.totalPnL.toFixed(2)}`);
+          lines.push(`  Trades: ${bot.tradesCount} | Win Rate: ${bot.winRate.toFixed(1)}% | PnL: $${bot.totalPnL.toFixed(2)}`);
           if (bot.lastCheck) lines.push(`  Last check: ${bot.lastCheck.toLocaleString()}`);
           if (bot.lastError) lines.push(`  Error: ${bot.lastError}`);
           lines.push('');

@@ -15,42 +15,45 @@ Create rules for automatic responses based on patterns, keywords, and conditions
 ### List Rules
 
 ```
-/auto-reply                                 List all rules
-/auto-reply active                          Show active rules only
-/auto-reply stats                           Rule trigger statistics
+/autoreply list                             List all rules
+/autoreply active                           Show active rules only
+/autoreply stats                            Rule statistics
 ```
 
 ### Create Rules
 
 ```
-/auto-reply add "hello" "Hi there!"         Simple keyword match
-/auto-reply add /price.*btc/i "BTC: $X"     Regex pattern
-/auto-reply add --exact "!help" "..."       Exact match only
+/autoreply add <pattern> <response>         Simple keyword match
+/autoreply add-regex <regex> <response>     Regex pattern
+/autoreply add-keywords <kw1,kw2> <resp>    Keyword rule
 ```
 
 ### Manage Rules
 
 ```
-/auto-reply enable <id>                     Enable rule
-/auto-reply disable <id>                    Disable rule
-/auto-reply delete <id>                     Remove rule
-/auto-reply edit <id> response "new text"   Update response
+/autoreply enable <id>                      Enable rule
+/autoreply disable <id>                     Disable rule
+/autoreply remove <id>                      Remove rule
+/autoreply edit <id> <new-response>         Update response
+/autoreply get <id>                         Rule details
 ```
 
 ### Testing
 
 ```
-/auto-reply test "hello world"              Test which rules match
-/auto-reply simulate "price btc"            Preview response
+/autoreply test <message>                   Test which rules match
+/autoreply simulate <message>               Preview response
 ```
 
 ### Advanced
 
 ```
-/auto-reply cooldown <id> 60                Set 60s cooldown
-/auto-reply schedule <id> 9-17              Active 9am-5pm only
-/auto-reply priority <id> 10                Set priority (higher first)
-/auto-reply channel <id> telegram           Limit to channel
+/autoreply cooldown <id> <seconds>          Set cooldown
+/autoreply schedule <id> <start-end>        Active hours (e.g. 9-17)
+/autoreply priority <id> <number>           Set priority (higher first)
+/autoreply channel <id> <channel>           Restrict to channel
+/autoreply clear-cooldowns                  Clear all cooldowns
+/autoreply reload                           Reload rules from disk
 ```
 
 ---

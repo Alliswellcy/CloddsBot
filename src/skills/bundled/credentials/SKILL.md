@@ -25,8 +25,9 @@ Securely store and manage API credentials for trading platforms with AES-256-GCM
 
 ```
 /creds list                                 List configured platforms
-/creds status                               Check credential health
+/creds status                               Encryption system status
 /creds test polymarket                      Test API connection
+/creds check polymarket                     Verify credentials work
 ```
 
 ### Remove Credentials

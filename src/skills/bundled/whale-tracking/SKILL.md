@@ -33,44 +33,46 @@ Monitor large trades and positions on Polymarket and crypto chains to identify m
 
 ## Chat Commands
 
-### Polymarket Whale Tracking
+### General
 
 ```
+/whale                                      # Active whale alerts summary
 /whale start                                # Start whale monitoring
 /whale stop                                 # Stop monitoring
+/whale config                               # Tracking configuration
+/whale list                                 # List tracked wallets
+```
 
+### Tracking Wallets
+
+```
 /whale track <address>                      # Follow specific wallet
 /whale untrack <address>                    # Stop following wallet
+/whale watch <address> [--chain c]          # Track an address (same as track)
+/whale unwatch <address>                    # Stop tracking (same as untrack)
+```
 
-/whale top 10                               # Top 10 traders by volume
-/whale top 10 --period 7d                   # Top 10 in last 7 days
+### Polymarket Whale Activity
 
+```
+/whale polymarket [n]                       # Recent Polymarket whale trades
+/whale polymarket market <id>               # Whale activity for a market
 /whale activity <market>                    # Whale activity for market
-/whale activity "trump"                     # Search by keyword
-
-/whale recent 20                            # Last 20 whale trades
-/whale recent 20 --min-size 10000           # Min $10k trades
+/whale recent [n] [--min-size N]            # Last N whale trades
+/whale top [n]                              # Top Polymarket whales
+/whale profitable [wr%] [min-n]             # Profitable whales
+/whale profile <address>                    # Whale profile + positions
+/whale positions [market-id]                # Active whale positions
 ```
 
 ### Crypto Whale Tracking
 
 ```
-/crypto-whale start                         # Start crypto whale tracking
-/crypto-whale stop                          # Stop tracking
-
-/crypto-whale watch solana <address>        # Watch Solana wallet
-/crypto-whale watch eth <address>           # Watch Ethereum wallet
-/crypto-whale unwatch <address>             # Stop watching
-
-/crypto-whale top solana 10                 # Top 10 Solana whales
-/crypto-whale top eth 10                    # Top 10 ETH whales
-
-/crypto-whale recent solana 20              # Recent Solana whale txs
-/crypto-whale recent eth 20                 # Recent ETH whale txs
-
-/crypto-whale thresholds                    # View current thresholds
-/crypto-whale threshold solana 50000        # Set Solana threshold to $50k
+/whale crypto [chain] [n]                   # On-chain whale txs
+/whale top crypto [chain] [n]               # Top on-chain whales
 ```
+
+Note: `/whales` also works as an alias for `/whale`.
 
 ---
 

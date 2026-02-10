@@ -69,6 +69,31 @@ async function execute(args: string): Promise<string> {
         return `Parsed: agentId=${parsed.agentId}, chainId=${parsed.chainId}, registry=${parsed.registry}`;
       }
 
+      case 'stats': {
+        const networks = Object.keys(erc8004.ERC8004_NETWORKS);
+        let output = `**Verification Statistics**\n\n`;
+        output += `Registry: ERC-8004\n`;
+        output += `Identity contract: ${erc8004.ERC8004_CONTRACTS.identity}\n`;
+        output += `Reputation contract: ${erc8004.ERC8004_CONTRACTS.reputation}\n`;
+        output += `Validation contract: ${erc8004.ERC8004_CONTRACTS.validation}\n`;
+        output += `Networks: ${networks.join(', ')}\n`;
+        return output;
+      }
+
+      case 'reputation':
+      case 'rep': {
+        if (!parts[1]) return 'Usage: /verify reputation <agent-id>';
+        const agentId = parseInt(parts[1]);
+        if (isNaN(agentId)) return 'Agent ID must be a number.';
+        const client = erc8004.createERC8004Client();
+        const rep = await client.getReputation(agentId);
+        if (!rep) return `No reputation data found for agent ${agentId}.`;
+        const formatted = erc8004.formatAgentId(agentId);
+        return `**Reputation for Agent ${formatted}**\n\n` +
+          `Score: ${rep.averageScore.toFixed(1)}/5\n` +
+          `Reviews: ${rep.feedbackCount}\n`;
+      }
+
       case 'help':
         return helpText();
 
@@ -109,6 +134,8 @@ function helpText(): string {
   /verify trader <address>           - Verify before copy trading
   /verify register                   - Register agent on-chain
   /verify status                     - Registry status
+  /verify stats                      - Verification statistics
+  /verify reputation <agent-id>      - Reputation score for agent
   /verify lookup <agent-id>          - Look up agent details
   /verify parse <formatted-id>       - Parse formatted agent ID
 

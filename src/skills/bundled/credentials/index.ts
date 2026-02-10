@@ -77,6 +77,17 @@ async function execute(args: string): Promise<string> {
         return `Failed to decrypt credentials for **${platform}**. They may be corrupted.`;
       }
 
+      case 'clear': {
+        const platforms = await manager.listUserPlatforms(userId);
+        if (platforms.length === 0) {
+          return 'No credentials stored. Nothing to clear.';
+        }
+        for (const platform of platforms) {
+          await manager.deleteCredentials(userId, platform);
+        }
+        return `Cleared credentials for ${platforms.length} platform(s): ${platforms.join(', ')}.`;
+      }
+
       case 'status': {
         const hasKey = Boolean(process.env.CLODDS_CREDENTIAL_KEY);
         return `**Credential System Status**\n\n` +
@@ -99,6 +110,7 @@ function helpText(): string {
   /creds list                          - List stored credentials
   /creds set <platform> <key> <value>  - Set credential (encrypted)
   /creds delete <platform>             - Delete credentials
+  /creds clear                         - Clear all stored credentials
   /creds check <platform>              - Verify credentials work
   /creds status                        - Encryption system status
 

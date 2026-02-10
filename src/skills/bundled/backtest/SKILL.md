@@ -32,8 +32,9 @@ Validate trading strategies using historical data, walk-forward analysis, and Mo
 
 ```
 /backtest results                  Show recent results
+/backtest stats                    Alias for results
 /backtest results <id> --detailed  Detailed breakdown
-/backtest export <id>              Export to CSV
+/backtest export                   Export last results as CSV
 ```
 
 ---

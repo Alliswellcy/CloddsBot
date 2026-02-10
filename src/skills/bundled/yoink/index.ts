@@ -190,6 +190,42 @@ async function handleCooldown(): Promise<string> {
   }
 }
 
+async function handleLeaderboard(): Promise<string> {
+  try {
+    const client = getPublicClient();
+
+    const [topYoinker, mostYoinks, totalYoinks, currentHolder] = await Promise.all([
+      client.readContract({ address: YOINK_CONTRACT, abi: YOINK_ABI, functionName: 'topYoinker' }),
+      client.readContract({ address: YOINK_CONTRACT, abi: YOINK_ABI, functionName: 'mostYoinks' }),
+      client.readContract({ address: YOINK_CONTRACT, abi: YOINK_ABI, functionName: 'totalYoinks' }),
+      client.readContract({ address: YOINK_CONTRACT, abi: YOINK_ABI, functionName: 'lastYoinkedBy' }),
+    ]);
+
+    let output = `**Yoink Leaderboard**\n\n`;
+    output += `| Rank | Player | Yoinks |\n`;
+    output += `|------|--------|--------|\n`;
+    output += `| 1 (Trophy) | \`${topYoinker}\` | ${mostYoinks} |\n`;
+
+    // If the current holder is different from top yoinker, show their score too
+    if (currentHolder.toLowerCase() !== topYoinker.toLowerCase()) {
+      const [holderYoinks] = await client.readContract({
+        address: YOINK_CONTRACT,
+        abi: YOINK_ABI,
+        functionName: 'score',
+        args: [currentHolder],
+      });
+      output += `| - (Holding) | \`${currentHolder}\` | ${holderYoinks} |\n`;
+    }
+
+    output += `\n**Total Yoinks (all players):** ${totalYoinks}\n`;
+    output += `\nNote: Full leaderboard requires an indexer. Use \`/yoink score <address>\` to check specific players.`;
+
+    return output;
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 export async function execute(args: string): Promise<string> {
   const parts = args.trim().split(/\s+/);
   const command = parts[0]?.toLowerCase() || '';
@@ -203,6 +239,9 @@ export async function execute(args: string): Promise<string> {
       return handleScore(parts[1]);
     case 'cooldown':
       return handleCooldown();
+    case 'leaderboard':
+    case 'lb':
+      return handleLeaderboard();
     case 'help':
     default:
       return `**Yoink - Capture the Flag**
@@ -211,6 +250,7 @@ export async function execute(args: string): Promise<string> {
 /yoink status              Game status
 /yoink score <address>     Player score
 /yoink cooldown            Check cooldown
+/yoink leaderboard         Top yoinkers
 
 **Rules:**
 - 10 minute cooldown between yoinks

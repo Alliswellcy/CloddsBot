@@ -144,13 +144,13 @@ async function handleStats(period?: string): Promise<string> {
   let output = `**Opportunity Statistics** (${days}d)\n\n`;
   output += `Total found: ${stats.totalFound}\n`;
   output += `Taken: ${stats.taken}\n`;
-  output += `Win rate: ${(stats.winRate * 100).toFixed(1)}%\n`;
+  output += `Win rate: ${stats.winRate.toFixed(1)}%\n`;
   output += `Total profit: $${stats.totalProfit.toLocaleString()}\n`;
   output += `Avg edge: ${stats.avgEdge.toFixed(2)}%\n`;
 
   if (stats.bestPlatformPair) {
     output += `\nBest pair: ${stats.bestPlatformPair.platforms.join(' <-> ')}\n`;
-    output += `  Win rate: ${(stats.bestPlatformPair.winRate * 100).toFixed(1)}%\n`;
+    output += `  Win rate: ${stats.bestPlatformPair.winRate.toFixed(1)}%\n`;
     output += `  Profit: $${stats.bestPlatformPair.profit.toLocaleString()}\n`;
   }
 

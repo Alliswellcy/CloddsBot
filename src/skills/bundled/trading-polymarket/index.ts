@@ -682,7 +682,7 @@ async function handleWhales(): Promise<string> {
 
       const lines = ['**Top Whales**', ''];
       for (const w of topWhales) {
-        lines.push(`  ${w.address.slice(0, 10)}... | $${formatNumber(w.totalValue)} | WR: ${(w.winRate * 100).toFixed(0)}%`);
+        lines.push(`  ${w.address.slice(0, 10)}... | $${formatNumber(w.totalValue)} | WR: ${w.winRate.toFixed(0)}%`);
         lines.push(`    Positions: ${w.positions.length} | Last active: ${w.lastActive.toLocaleTimeString()}`);
       }
       return lines.join('\n');

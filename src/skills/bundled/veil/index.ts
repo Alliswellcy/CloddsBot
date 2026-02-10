@@ -262,6 +262,69 @@ VEIL_KEY="..." npx @veil-cash/sdk transfer ${amount} ${veilAddress}
 Both parties remain anonymous - no public trace.`;
 }
 
+async function handleQueue(): Promise<string> {
+  const veilKey = process.env.VEIL_KEY;
+  if (!veilKey) {
+    return `VEIL_KEY not set. Run \`/veil init\` first.\n\nQueue balance shows deposits that are pending processing into your private balance.`;
+  }
+
+  if (!checkVeilSDK()) {
+    return `Veil SDK required for queue balance.\n\nInstall: \`npm install -g @veil-cash/sdk\`\nThen run: \`npx @veil-cash/sdk queue\``;
+  }
+
+  try {
+    const result = execSync('npx @veil-cash/sdk queue 2>&1', {
+      env: { ...process.env, VEIL_KEY: veilKey },
+      timeout: 30000,
+    }).toString().trim();
+    return `**Veil Queue (Pending Deposits)**\n\n${result || 'No pending transactions in queue.'}`;
+  } catch {
+    return `**Veil Queue**\n\nCould not query queue. Run manually:\n\`\`\`bash\nVEIL_KEY="..." npx @veil-cash/sdk queue\n\`\`\``;
+  }
+}
+
+async function handlePrivateBalance(): Promise<string> {
+  const veilKey = process.env.VEIL_KEY;
+  if (!veilKey) {
+    return `VEIL_KEY not set. Run \`/veil init\` first.\n\nPrivate balance shows your shielded (ZK-protected) funds.`;
+  }
+
+  if (!checkVeilSDK()) {
+    return `Veil SDK required for private balance.\n\nInstall: \`npm install -g @veil-cash/sdk\`\nThen run: \`npx @veil-cash/sdk balance\``;
+  }
+
+  try {
+    const result = execSync('npx @veil-cash/sdk balance 2>&1', {
+      env: { ...process.env, VEIL_KEY: veilKey },
+      timeout: 30000,
+    }).toString().trim();
+    return `**Veil Private Balance (Shielded)**\n\n${result || '0 ETH'}`;
+  } catch {
+    return `**Veil Private Balance**\n\nCould not query private balance. Run manually:\n\`\`\`bash\nVEIL_KEY="..." npx @veil-cash/sdk balance\n\`\`\``;
+  }
+}
+
+async function handleMerge(): Promise<string> {
+  const veilKey = process.env.VEIL_KEY;
+  if (!veilKey) {
+    return `VEIL_KEY not set. Run \`/veil init\` first.\n\nMerge consolidates multiple UTXOs into fewer ones for cheaper future transactions.`;
+  }
+
+  if (!checkVeilSDK()) {
+    return `Veil SDK required to merge UTXOs.\n\nInstall: \`npm install -g @veil-cash/sdk\`\nThen run: \`npx @veil-cash/sdk merge\``;
+  }
+
+  try {
+    const result = execSync('npx @veil-cash/sdk merge 2>&1', {
+      env: { ...process.env, VEIL_KEY: veilKey },
+      timeout: 60000,
+    }).toString().trim();
+    return `**Veil UTXO Merge**\n\n${result || 'Merge complete.'}`;
+  } catch {
+    return `**Veil UTXO Merge**\n\nCould not merge UTXOs. Run manually:\n\`\`\`bash\nVEIL_KEY="..." npx @veil-cash/sdk merge\n\`\`\``;
+  }
+}
+
 export async function execute(args: string): Promise<string> {
   const parts = args.trim().split(/\s+/);
   const command = parts[0]?.toLowerCase() || 'status';
@@ -279,6 +342,12 @@ export async function execute(args: string): Promise<string> {
       return handleWithdraw(parts[1], parts[2]);
     case 'transfer':
       return handleTransfer(parts[1], parts[2]);
+    case 'queue':
+      return handleQueue();
+    case 'private':
+      return handlePrivateBalance();
+    case 'merge':
+      return handleMerge();
     case 'help':
     default:
       return getHelp();
@@ -290,11 +359,14 @@ function getHelp(): string {
 
 /veil init                    Setup keypair
 /veil status                  Check configuration
-/veil balance                 Check balances
+/veil balance                 Check all balances
+/veil queue                   Show pending deposits
+/veil private                 Show shielded balance
 
 /veil deposit <amount>        Deposit to private pool
 /veil withdraw <amt> <addr>   Withdraw to public
 /veil transfer <amt> <veil>   Private transfer
+/veil merge                   Consolidate UTXOs
 
 **How It Works:**
 1. Deposit ETH → private pool (public tx)

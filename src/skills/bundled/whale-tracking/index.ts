@@ -2,11 +2,17 @@
  * Whale Tracking CLI Skill
  *
  * Commands:
- * /whales - View active whale alerts
- * /whales polymarket - Polymarket whale activity
- * /whales crypto [chain] - On-chain whale movements
- * /whales watch <address> - Watch specific address
- * /whales config - Tracking configuration
+ * /whale (or /whales) - View active whale alerts
+ * /whale start - Start whale monitoring
+ * /whale stop - Stop whale monitoring
+ * /whale track <address> - Follow specific wallet
+ * /whale untrack <address> - Stop following wallet
+ * /whale recent [n] - Recent whale trades
+ * /whale activity <market> - Whale activity for market
+ * /whale polymarket - Polymarket whale activity
+ * /whale crypto [chain] - On-chain whale movements
+ * /whale watch <address> - Watch specific address
+ * /whale config - Tracking configuration
  */
 
 async function execute(args: string): Promise<string> {
@@ -386,6 +392,138 @@ async function execute(args: string): Promise<string> {
         return output;
       }
 
+      case 'start': {
+        const polyState = polyTracker.getConnectionState();
+        const cryptoStats = cryptoTracker.getStats();
+        let output = '**Starting Whale Tracking**\n\n';
+
+        if (polyState !== 'connected') {
+          try {
+            await polyTracker.start();
+            output += 'Polymarket tracker: started\n';
+          } catch (e) {
+            output += `Polymarket tracker: failed to start (${e instanceof Error ? e.message : String(e)})\n`;
+          }
+        } else {
+          output += 'Polymarket tracker: already running\n';
+        }
+
+        if (!cryptoStats.running) {
+          try {
+            await cryptoTracker.start();
+            output += 'Crypto tracker: started\n';
+          } catch (e) {
+            output += `Crypto tracker: failed to start (${e instanceof Error ? e.message : String(e)})\n`;
+          }
+        } else {
+          output += 'Crypto tracker: already running\n';
+        }
+
+        return output;
+      }
+
+      case 'stop': {
+        let output = '**Stopping Whale Tracking**\n\n';
+        try {
+          await polyTracker.stop();
+          output += 'Polymarket tracker: stopped\n';
+        } catch (e) {
+          output += `Polymarket tracker: error stopping (${e instanceof Error ? e.message : String(e)})\n`;
+        }
+        try {
+          await cryptoTracker.stop();
+          output += 'Crypto tracker: stopped\n';
+        } catch (e) {
+          output += `Crypto tracker: error stopping (${e instanceof Error ? e.message : String(e)})\n`;
+        }
+        return output;
+      }
+
+      case 'track': {
+        // Alias for 'watch'
+        if (!parts[1]) return 'Usage: /whale track <address> [--chain <chain>]\n\nTracks an address across Polymarket and on-chain.';
+        const address = parts[1];
+        const chainIdx = parts.indexOf('--chain');
+        const chain = chainIdx >= 0 ? parts[chainIdx + 1] : undefined;
+        const validChains = ['solana', 'ethereum', 'polygon', 'arbitrum', 'base', 'optimism'];
+
+        polyTracker.trackAddress(address);
+        if (chain && validChains.includes(chain)) {
+          cryptoTracker.watchWallet(address, chain as any);
+        } else {
+          cryptoTracker.watchWallet(address);
+        }
+
+        let output = `**Now Tracking** \`${address}\`\n\n`;
+        output += `Polymarket: tracking\n`;
+        output += `On-chain: ${chain || 'all configured chains'}\n`;
+        return output;
+      }
+
+      case 'untrack': {
+        // Alias for 'unwatch'
+        if (!parts[1]) return 'Usage: /whale untrack <address>';
+        const address = parts[1];
+        polyTracker.untrackAddress(address);
+        cryptoTracker.unwatchWallet(address);
+        return `Stopped tracking \`${address}\` on all platforms.`;
+      }
+
+      case 'activity': {
+        const query = parts.slice(1).join(' ');
+        if (!query) return 'Usage: /whale activity <market-id-or-keyword>';
+        // Try to get whale activity for the market
+        try {
+          const activity = await polyMod.getMarketWhaleActivity(query);
+          let output = `**Whale Activity for Market**\n\n`;
+          output += `Total whale volume: $${activity.totalWhaleVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}\n`;
+          output += `Buy volume: $${activity.buyVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}\n`;
+          output += `Sell volume: $${activity.sellVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}\n\n`;
+          if (activity.topBuyers.length > 0) {
+            output += `Top buyers:\n`;
+            for (const addr of activity.topBuyers.slice(0, 5)) {
+              output += `  \`${addr}\`\n`;
+            }
+          }
+          if (activity.topSellers.length > 0) {
+            output += `\nTop sellers:\n`;
+            for (const addr of activity.topSellers.slice(0, 5)) {
+              output += `  \`${addr}\`\n`;
+            }
+          }
+          return output;
+        } catch (e) {
+          return `Could not get whale activity for "${query}": ${e instanceof Error ? e.message : String(e)}`;
+        }
+      }
+
+      case 'recent': {
+        const limit = parseInt(parts[1] || '20');
+        const minSizeIdx = parts.indexOf('--min-size');
+        const minSize = minSizeIdx >= 0 ? parseInt(parts[minSizeIdx + 1]) : 0;
+
+        let polyTrades = polyTracker.getRecentTrades(limit);
+        if (minSize > 0) {
+          polyTrades = polyTrades.filter(t => t.usdValue >= minSize);
+        }
+
+        if (polyTrades.length === 0) {
+          return `No recent whale trades${minSize > 0 ? ` above $${minSize.toLocaleString()}` : ''}. Tracker may need to be started.`;
+        }
+
+        let output = `**Recent Whale Trades** (${polyTrades.length})`;
+        if (minSize > 0) output += ` (min $${minSize.toLocaleString()})`;
+        output += '\n\n';
+
+        for (const t of polyTrades) {
+          const time = t.timestamp.toLocaleTimeString();
+          output += `  [${time}] ${t.side} ${t.outcome} $${t.usdValue.toLocaleString(undefined, { maximumFractionDigits: 0 })} @ ${t.price.toFixed(2)}`;
+          if (t.marketQuestion) output += `\n    ${t.marketQuestion.slice(0, 70)}`;
+          output += '\n';
+        }
+        return output;
+      }
+
       case 'config': {
         const stats = cryptoTracker.getStats();
         const polyState = polyTracker.getConnectionState();
@@ -420,24 +558,30 @@ Use \`/whales polymarket market <id>\` to check specific markets.`;
 function helpText(): string {
   return `**Whale Tracking Commands**
 
-  /whales                            - Active whale alerts (all platforms)
-  /whales polymarket [n]             - Polymarket whale trades
-  /whales polymarket market <id>     - Whale activity for a market
-  /whales crypto [chain] [n]         - On-chain whale txs
-  /whales watch <addr> [--chain c]   - Track an address
-  /whales unwatch <addr>             - Stop tracking
-  /whales list                       - List tracked wallets
-  /whales top [n]                    - Top Polymarket whales
-  /whales top crypto [chain] [n]     - Top on-chain whales
-  /whales profitable [wr%] [min-n]   - Profitable whales
-  /whales profile <addr>             - Whale profile + positions
-  /whales positions [market-id]      - Active whale positions
-  /whales config                     - Tracking config`;
+  /whale                             - Active whale alerts (all platforms)
+  /whale start                       - Start whale monitoring
+  /whale stop                        - Stop whale monitoring
+  /whale track <addr> [--chain c]    - Follow specific wallet
+  /whale untrack <addr>              - Stop following wallet
+  /whale recent [n] [--min-size N]   - Recent whale trades
+  /whale activity <market>           - Whale activity for market
+  /whale polymarket [n]              - Polymarket whale trades
+  /whale polymarket market <id>      - Whale activity for a market
+  /whale crypto [chain] [n]          - On-chain whale txs
+  /whale watch <addr> [--chain c]    - Track an address
+  /whale unwatch <addr>              - Stop tracking
+  /whale list                        - List tracked wallets
+  /whale top [n]                     - Top Polymarket whales
+  /whale top crypto [chain] [n]      - Top on-chain whales
+  /whale profitable [wr%] [min-n]    - Profitable whales
+  /whale profile <addr>              - Whale profile + positions
+  /whale positions [market-id]       - Active whale positions
+  /whale config                      - Tracking config`;
 }
 
 export default {
   name: 'whale-tracking',
   description: 'Whale tracking across Polymarket and on-chain (Solana, EVM)',
-  commands: ['/whales', '/whale-tracking'],
+  commands: ['/whales', '/whale', '/whale-tracking'],
   handle: execute,
 };

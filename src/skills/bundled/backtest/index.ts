@@ -107,6 +107,7 @@ async function execute(args: string): Promise<string> {
         return output;
       }
 
+      case 'stats':
       case 'results':
       case 'last': {
         if (sessionResults.length === 0) {
@@ -195,6 +196,40 @@ async function execute(args: string): Promise<string> {
         return output;
       }
 
+      case 'export': {
+        if (sessionResults.length === 0) {
+          return 'No backtest results to export. Run one with `/backtest run <strategy> --market <id>`.';
+        }
+        const last = sessionResults[sessionResults.length - 1];
+        const m = last.result.metrics;
+        let csv = 'metric,value\n';
+        csv += `run_id,${last.id}\n`;
+        csv += `total_return_pct,${m.totalReturnPct.toFixed(4)}\n`;
+        csv += `annualized_return_pct,${m.annualizedReturnPct.toFixed(4)}\n`;
+        csv += `final_equity,${m.finalEquity.toFixed(2)}\n`;
+        csv += `total_trades,${m.totalTrades}\n`;
+        csv += `win_rate,${m.winRate.toFixed(2)}\n`;
+        csv += `profit_factor,${m.profitFactor.toFixed(4)}\n`;
+        csv += `avg_trade_pct,${m.avgTradePct.toFixed(4)}\n`;
+        csv += `avg_win_pct,${m.avgWinPct.toFixed(4)}\n`;
+        csv += `avg_loss_pct,${m.avgLossPct.toFixed(4)}\n`;
+        csv += `max_drawdown_pct,${m.maxDrawdownPct.toFixed(4)}\n`;
+        csv += `max_drawdown_days,${m.maxDrawdownDays.toFixed(0)}\n`;
+        csv += `sharpe_ratio,${m.sharpeRatio.toFixed(4)}\n`;
+        csv += `sortino_ratio,${m.sortinoRatio.toFixed(4)}\n`;
+        csv += `calmar_ratio,${m.calmarRatio.toFixed(4)}\n`;
+        csv += `total_commission,${m.totalCommission.toFixed(2)}\n`;
+        csv += `total_slippage,${m.totalSlippage.toFixed(2)}\n`;
+        if (last.result.trades.length > 0) {
+          csv += '\n--- trades ---\nside,size,price,pnl\n';
+          for (const t of last.result.trades) {
+            const pnl = t.pnl !== undefined ? t.pnl.toFixed(4) : '';
+            csv += `${t.side},${t.size},${t.price.toFixed(6)},${pnl}\n`;
+          }
+        }
+        return `**CSV Export** (\`${last.id}\`)\n\n\`\`\`csv\n${csv}\`\`\``;
+      }
+
       case 'config': {
         const cfg = (backtestMod as any).DEFAULT_CONFIG || {
           initialCapital: 10000, commissionPct: 0.1, slippagePct: 0.05,
@@ -217,6 +252,8 @@ function helpText(): string {
 
   /backtest run <strategy> --market <id> [--days <n>] [--capital <n>]
   /backtest results                    - Show last results
+  /backtest stats                      - Alias for results
+  /backtest export                     - Export last results as CSV
   /backtest monte-carlo [sims]         - Monte Carlo simulation
   /backtest compare <s1> <s2>          - Compare strategies
   /backtest list                       - List saved runs

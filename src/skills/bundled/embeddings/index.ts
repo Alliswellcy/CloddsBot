@@ -163,6 +163,58 @@ export async function execute(args: string): Promise<string> {
         }
         return handleCacheStats();
 
+      case 'provider': {
+        const providerArg = rest[0]?.toLowerCase();
+        if (!providerArg) {
+          const hasOpenAI = !!process.env.OPENAI_API_KEY;
+          const hasVoyage = !!process.env.VOYAGE_API_KEY;
+          const current = hasOpenAI ? 'openai' : hasVoyage ? 'voyage' : 'local';
+          return `**Current Embedding Provider:** ${current}\n\nAvailable: openai, voyage, local\n\nTo switch provider, set the appropriate env var:\n  OPENAI_API_KEY - for OpenAI\n  VOYAGE_API_KEY - for Voyage AI\n  (no key needed) - for local transformers.js`;
+        }
+        const validProviders = ['openai', 'voyage', 'local'];
+        if (!validProviders.includes(providerArg)) {
+          return `Unknown provider "${providerArg}". Available: ${validProviders.join(', ')}`;
+        }
+        if (providerArg === 'openai' && !process.env.OPENAI_API_KEY) {
+          return `To use OpenAI embeddings, set OPENAI_API_KEY env var first.`;
+        }
+        if (providerArg === 'voyage' && !process.env.VOYAGE_API_KEY) {
+          return `To use Voyage embeddings, set VOYAGE_API_KEY env var first.`;
+        }
+        // Reinitialize service with new provider
+        service = null;
+        serviceInitPromise = null;
+        return `Provider set to **${providerArg}**. Service will reinitialize on next use.`;
+      }
+
+      case 'model': {
+        const modelArg = rest.join(' ');
+        if (!modelArg) {
+          const hasOpenAI = !!process.env.OPENAI_API_KEY;
+          const hasVoyage = !!process.env.VOYAGE_API_KEY;
+          const model = hasOpenAI ? 'text-embedding-3-small' : hasVoyage ? 'voyage-2' : 'Xenova/all-MiniLM-L6-v2';
+          return `**Current Embedding Model:** ${model}\n\nModels by provider:\n  OpenAI: text-embedding-3-small, text-embedding-3-large\n  Voyage: voyage-2, voyage-large-2, voyage-code-2\n  Local: Xenova/all-MiniLM-L6-v2`;
+        }
+        return `Model preference noted: **${modelArg}**.\n\nTo apply, set the appropriate env var and restart. Model selection is determined by the active provider configuration.`;
+      }
+
+      case 'test': {
+        const testText = rest.join(' ') || 'Hello, world!';
+        const svc = await getServiceAsync();
+        if (!svc) return 'Embeddings service not available. Check database initialization.';
+        try {
+          const vector = await svc.embed(testText);
+          return `**Embedding Test**\n\n` +
+            `Input: "${testText.slice(0, 100)}${testText.length > 100 ? '...' : ''}"\n` +
+            `Dimensions: ${vector.length}\n` +
+            `First 5 values: [${vector.slice(0, 5).map(v => v.toFixed(6)).join(', ')}]\n` +
+            `Last 5 values: [${vector.slice(-5).map(v => v.toFixed(6)).join(', ')}]\n` +
+            `Norm: ${Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0)).toFixed(6)}`;
+        } catch (error) {
+          return `Test failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+
       case 'config':
       case 'status':
         return handleConfig();
@@ -198,6 +250,9 @@ export async function execute(args: string): Promise<string> {
               title: 'Config',
               commands: [
                 { cmd: '/embed config', description: 'Show configuration' },
+                { cmd: '/embed provider [name]', description: 'Set/show provider (openai/voyage/local)' },
+                { cmd: '/embed model [name]', description: 'Set/show embedding model' },
+                { cmd: '/embed test [text]', description: 'Test embed text and show vector info' },
               ],
             },
           ],
