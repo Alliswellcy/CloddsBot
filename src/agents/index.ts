@@ -17136,9 +17136,15 @@ export async function createAgentManager(
         'claude-3-opus-20240229': 200000,
       };
       const modelContextWindow = MODEL_CONTEXT_WINDOWS[modelId] || 200000;
+      // Estimate fixed overhead: tool definitions + system prompt (these don't change during conversation)
+      const toolsTokenEstimate = estimateTokens(JSON.stringify(tools), modelId);
+      const systemTokenEstimate = estimateTokens(finalSystemPrompt, modelId);
+      // Reserve enough for tools + system prompt + response buffer
+      const reserveForFixed = toolsTokenEstimate + systemTokenEstimate + 4096;
+
       const contextConfig: ContextConfig = {
         maxTokens: modelContextWindow,
-        reserveTokens: 4096,
+        reserveTokens: reserveForFixed,
         compactThreshold: 0.85,
         minMessagesAfterCompact: 6,
         summarizer,
@@ -17150,10 +17156,7 @@ export async function createAgentManager(
       };
       const contextManager = createContextManager(contextConfig, memory);
       const effectiveMaxTokens =
-        (contextConfig.maxTokens ?? 128000) - (contextConfig.reserveTokens ?? 4096);
-
-      // Estimate tool definitions once (they don't change during the conversation)
-      const toolsTokenEstimate = estimateTokens(JSON.stringify(tools), modelId);
+        (contextConfig.maxTokens ?? 128000) - reserveForFixed;
 
       const estimateSubmitTokens = (): number => {
         const system = estimateTokens(finalSystemPrompt, modelId);
@@ -17173,11 +17176,9 @@ export async function createAgentManager(
         });
       }
 
-      // Add system prompt tokens
-      const systemTokens = estimateTokens(finalSystemPrompt, modelId);
-
       // Check if we need to compact before first API call
-      const guard = contextManager.checkGuard(systemTokens);
+      // (tools + system prompt are already accounted for in reserveTokens)
+      const guard = contextManager.checkGuard();
       if (guard.shouldCompact) {
         logger.info({ percentUsed: guard.percentUsed }, 'Context approaching limit, compacting');
 
@@ -17227,6 +17228,12 @@ export async function createAgentManager(
         { tokens: initialEstimate, max: effectiveMaxTokens },
         'Token estimate before submit'
       );
+
+      // Safety: if still over limit after compaction, return a friendly error
+      if (initialEstimate > effectiveMaxTokens * 1.1) {
+        logger.warn({ tokens: initialEstimate, max: effectiveMaxTokens }, 'Context exceeds limit even after compaction');
+        return 'This conversation has gotten too long for me to process. Please start a new conversation and I\'ll be happy to help!';
+      }
 
       let response = await createMessage({
         model: modelId,
@@ -17355,7 +17362,7 @@ export async function createAgentManager(
           });
         }
 
-        const loopGuard = contextManager.checkGuard(0);
+        const loopGuard = contextManager.checkGuard();
         if (loopGuard.shouldCompact) {
           logger.info({ percentUsed: loopGuard.percentUsed }, 'Compacting context during tool loop');
           const loopCompactResult = await contextManager.compact();
@@ -17377,6 +17384,12 @@ export async function createAgentManager(
           { tokens: loopEstimate, max: effectiveMaxTokens },
           'Token estimate before submit (tool loop)'
         );
+
+        // Safety: bail if over limit during tool loop
+        if (loopEstimate > effectiveMaxTokens * 1.1) {
+          logger.warn({ tokens: loopEstimate, max: effectiveMaxTokens }, 'Context exceeds limit during tool loop');
+          break;
+        }
 
         response = await createMessage({
           model: modelId,
