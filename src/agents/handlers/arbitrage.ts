@@ -37,11 +37,11 @@ async function findArbitrageHandler(
     return errorResult('Feed manager not available');
   }
 
-  const minEdge = (toolInput.min_edge as number) || 1;
+  const minEdge = (toolInput.min_edge as number) ?? 1;
   const query = (toolInput.query as string | undefined)?.trim() || '';
-  const limit = (toolInput.limit as number) || 10;
+  const limit = (toolInput.limit as number) ?? 10;
   const mode = (toolInput.mode as string) || 'both';
-  const minVolume = (toolInput.min_volume as number) || 0;
+  const minVolume = (toolInput.min_volume as number) ?? 0;
   const platforms = (toolInput.platforms as string[]) || ['polymarket', 'kalshi', 'manifold'];
 
   return safeHandler(async () => {

@@ -640,7 +640,7 @@ export function createDriftLiquidationMonitor(
         );
 
         // Calculate leverage
-        const leverage = positionValue / collateral;
+        const leverage = collateral > 0 ? positionValue / collateral : 0;
 
         positions.push({
           marketIndex,

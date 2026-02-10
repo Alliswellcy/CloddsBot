@@ -405,7 +405,7 @@ export function createAgreementPersistence(): AgreementPersistence {
       const database = getDb();
       // Search for agreements where party address is in the JSON parties array
       // Escape LIKE wildcards in user input to prevent pattern injection
-      const escapedAddress = partyAddress.replace(/%/g, '\\%').replace(/_/g, '\\_');
+      const escapedAddress = partyAddress.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
       const rows = database.query<AgreementRow>(
         `SELECT * FROM acp_agreements WHERE parties LIKE ? ESCAPE '\\' ORDER BY created_at DESC`,
         [`%"address":"${escapedAddress}"%`]

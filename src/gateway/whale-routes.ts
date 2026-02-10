@@ -29,7 +29,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to get status');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -41,7 +41,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { whales, count: whales.length } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to get known whales');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -54,7 +54,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { whales, count: whales.length } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to get top whales');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -68,7 +68,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { whales, count: whales.length } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to get profitable whales');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -80,7 +80,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { trades, count: trades.length } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to get recent trades');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -93,7 +93,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { positions, count: positions.length } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to get positions');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -109,7 +109,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: profile });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to get profile');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -126,7 +126,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { address: req.params.address, signalStrength: strength } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to calculate signal strength');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -137,7 +137,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { status: 'running' } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to start');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -148,7 +148,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { status: 'stopped' } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to stop');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -165,7 +165,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { address, tracking: true } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to track');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -182,7 +182,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { address, tracking: false } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to untrack');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -199,7 +199,7 @@ export function createWhaleRouter(deps: WhaleRouterDeps): Router {
       res.json({ ok: true, data: { address: req.params.address, recorded: true } });
     } catch (err) {
       logger.warn({ err }, 'Whale API: Failed to record close');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

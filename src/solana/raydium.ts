@@ -272,8 +272,8 @@ export async function listRaydiumPools(filters?: {
       lpMint: pool.lpMint || pool.lpMintAddress,
       marketId: pool.marketId || pool.market,
       type: pool.version ? `v${pool.version}` : pool.type,
-      liquidity: Number(pool.liquidity ?? pool.tvl ?? pool.reserve ?? 0) || undefined,
-      volume24h: Number(pool.volume24h ?? pool.volume ?? pool.day?.volume ?? 0) || undefined,
+      liquidity: (() => { const v = Number(pool.liquidity ?? pool.tvl ?? pool.reserve); return isNaN(v) ? undefined : v; })(),
+      volume24h: (() => { const v = Number(pool.volume24h ?? pool.volume ?? pool.day?.volume); return isNaN(v) ? undefined : v; })(),
     });
 
     if (results.length >= limit) break;
@@ -810,8 +810,8 @@ export async function removeAmmLiquidity(
   const slippage = params.slippage ?? 0.1;
 
   const lpMintDecimals = poolInfo.lpMint?.decimals ?? 9;
-  const mintAmountA = poolInfo.mintAmountA || poolInfo.baseReserve || 0;
-  const mintAmountB = poolInfo.mintAmountB || poolInfo.quoteReserve || 0;
+  const mintAmountA = poolInfo.mintAmountA ?? poolInfo.baseReserve ?? 0;
+  const mintAmountB = poolInfo.mintAmountB ?? poolInfo.quoteReserve ?? 0;
   const lpTotalAmount = poolInfo.lpAmount || poolInfo.lpSupply;
   if (!lpTotalAmount || Number(lpTotalAmount) === 0) {
     throw new Error('Cannot remove liquidity: LP total supply is zero');

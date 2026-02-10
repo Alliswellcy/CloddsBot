@@ -21,7 +21,7 @@ async function watchWalletHandler(
   }
 
   const address = (toolInput.address as string).toLowerCase();
-  const platform = (toolInput.platform as string) || 'polymarket';
+  const platform = (toolInput.platform as string) ?? 'polymarket';
   const nickname = toolInput.nickname as string | undefined;
 
   context.db.run(`
@@ -118,8 +118,8 @@ async function enableAutoCopyHandler(
 
   const address = (toolInput.address as string).toLowerCase();
   const maxSize = toolInput.max_size as number;
-  const sizeMultiplier = (toolInput.size_multiplier as number) || 0.5;
-  const minConfidence = (toolInput.min_confidence as number) || 0.55;
+  const sizeMultiplier = (toolInput.size_multiplier as number) ?? 0.5;
+  const minConfidence = (toolInput.min_confidence as number) ?? 0.55;
 
   context.db.run(`
     INSERT OR REPLACE INTO auto_copy_settings (user_id, target_address, max_size, size_multiplier, min_confidence, enabled, created_at)
@@ -213,8 +213,8 @@ async function whaleAlertsHandler(
   }
 
   const enabled = toolInput.enabled as boolean;
-  const minSize = (toolInput.min_size as number) || 10000;
-  const platform = (toolInput.platform as string) || 'polymarket';
+  const minSize = (toolInput.min_size as number) ?? 10000;
+  const platform = (toolInput.platform as string) ?? 'polymarket';
 
   context.db.run(`
     INSERT OR REPLACE INTO user_alert_settings (user_id, alert_type, enabled, config, updated_at)
@@ -241,8 +241,8 @@ async function volumeSpikeAlertsHandler(
   }
 
   const enabled = toolInput.enabled as boolean;
-  const multiplier = (toolInput.multiplier as number) || 3;
-  const platform = (toolInput.platform as string) || 'polymarket';
+  const multiplier = (toolInput.multiplier as number) ?? 3;
+  const platform = (toolInput.platform as string) ?? 'polymarket';
 
   context.db.run(`
     INSERT OR REPLACE INTO user_alert_settings (user_id, alert_type, enabled, config, updated_at)
@@ -270,7 +270,7 @@ async function newMarketAlertsHandler(
 
   const enabled = toolInput.enabled as boolean;
   const categories = toolInput.categories as string[] | undefined;
-  const platform = (toolInput.platform as string) || 'polymarket';
+  const platform = (toolInput.platform as string) ?? 'polymarket';
 
   context.db.run(`
     INSERT OR REPLACE INTO user_alert_settings (user_id, alert_type, enabled, config, updated_at)

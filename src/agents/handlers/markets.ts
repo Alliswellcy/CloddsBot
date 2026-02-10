@@ -109,7 +109,7 @@ async function getPortfolioHandler(
       summary: {
         totalValue: `$${totalValue.toFixed(2)}`,
         totalPnl: `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`,
-        totalPnlPct: totalCost > 0 ? `${((totalPnl / totalCost) * 100).toFixed(1)}%` : '0%',
+        totalPnlPct: totalCost !== 0 ? `${((totalPnl / totalCost) * 100).toFixed(1)}%` : '0%',
       },
     },
   });
@@ -265,7 +265,7 @@ async function getRecentNewsHandler(
     return errorResult('Feed manager not available');
   }
 
-  const limit = (toolInput.limit as number) || 10;
+  const limit = (toolInput.limit as number) ?? 10;
   const news = context.feeds.getRecentNews(limit);
 
   if (news.length === 0) {

@@ -28,7 +28,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { opportunities, count: opportunities.length } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Scan failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -40,7 +40,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { opportunities, count: opportunities.length } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Failed to get active');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -54,7 +54,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: stats });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Analytics failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -66,7 +66,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { pairs, count: pairs.length } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Platform pairs failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -82,7 +82,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: opportunity });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Failed to get opportunity');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -93,7 +93,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { status: 'scanning' } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Failed to start realtime');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -104,7 +104,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { status: 'stopped' } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Failed to stop realtime');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -122,7 +122,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, status: 'taken' } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Failed to mark taken');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -140,7 +140,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, outcomeRecorded: true } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Failed to record outcome');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -162,7 +162,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: plan });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Estimate failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -184,7 +184,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: risk });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Risk model failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -201,7 +201,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { links, count: links.length } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Linked markets failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -218,7 +218,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { linked: true, marketA, marketB } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Link markets failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -235,7 +235,7 @@ export function createOpportunityRouter(deps: OpportunityRouterDeps): Router {
       res.json({ ok: true, data: { unlinked: true, marketA, marketB } });
     } catch (err) {
       logger.warn({ err }, 'Opportunity API: Unlink markets failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

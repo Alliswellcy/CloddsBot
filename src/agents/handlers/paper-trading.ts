@@ -20,7 +20,7 @@ async function paperTradingModeHandler(
   }
 
   const enabled = toolInput.enabled as boolean;
-  const startingBalance = (toolInput.starting_balance as number) || 10000;
+  const startingBalance = (toolInput.starting_balance as number) ?? 10000;
 
   context.db.run(`
     INSERT OR REPLACE INTO paper_trading_settings (user_id, enabled, balance, starting_balance, created_at)
@@ -111,7 +111,7 @@ async function paperResetHandler(
     return errorResult('User ID not available');
   }
 
-  const startingBalance = (toolInput.starting_balance as number) || 10000;
+  const startingBalance = (toolInput.starting_balance as number) ?? 10000;
 
   context.db.run('DELETE FROM paper_positions WHERE user_id = ?', [context.userId]);
   context.db.run('DELETE FROM paper_trades WHERE user_id = ?', [context.userId]);

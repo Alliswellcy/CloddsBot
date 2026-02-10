@@ -30,7 +30,7 @@ export function createEmbeddingsRouter(deps: EmbeddingsRouterDeps): Router {
       res.json({ ok: true, data: { vector, dimensions: vector.length } });
     } catch (err) {
       logger.warn({ err }, 'Embeddings API: Embed failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -47,7 +47,7 @@ export function createEmbeddingsRouter(deps: EmbeddingsRouterDeps): Router {
       res.json({ ok: true, data: { vectors, count: vectors.length } });
     } catch (err) {
       logger.warn({ err }, 'Embeddings API: Embed batch failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -64,7 +64,7 @@ export function createEmbeddingsRouter(deps: EmbeddingsRouterDeps): Router {
       res.json({ ok: true, data: { score } });
     } catch (err) {
       logger.warn({ err }, 'Embeddings API: Similarity failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -90,7 +90,7 @@ export function createEmbeddingsRouter(deps: EmbeddingsRouterDeps): Router {
       res.json({ ok: true, data: { results, count: results.length } });
     } catch (err) {
       logger.warn({ err }, 'Embeddings API: Search failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -102,7 +102,7 @@ export function createEmbeddingsRouter(deps: EmbeddingsRouterDeps): Router {
       res.json({ ok: true, data: { cleared: true } });
     } catch (err) {
       logger.warn({ err }, 'Embeddings API: Clear cache failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

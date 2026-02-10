@@ -29,7 +29,7 @@ export function createShieldRouter(): Router {
       res.json({ ok: true, data: result });
     } catch (err) {
       logger.warn({ err }, 'Shield API: Scan failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -46,7 +46,7 @@ export function createShieldRouter(): Router {
       res.json({ ok: true, data: result });
     } catch (err) {
       logger.warn({ err }, 'Shield API: Check failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -67,7 +67,7 @@ export function createShieldRouter(): Router {
       res.json({ ok: true, data: result });
     } catch (err) {
       logger.warn({ err }, 'Shield API: Validate failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -79,7 +79,7 @@ export function createShieldRouter(): Router {
       res.json({ ok: true, data: stats });
     } catch (err) {
       logger.warn({ err }, 'Shield API: Stats failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

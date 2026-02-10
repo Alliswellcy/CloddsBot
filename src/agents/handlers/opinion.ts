@@ -30,8 +30,8 @@ function getTradingConfig(): opinion.OpinionConfig {
  * opinion_markets - List markets
  */
 async function marketsHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const status = (toolInput.status as string) || 'active';
-  const limit = (toolInput.limit as number) || 50;
+  const status = (toolInput.status as string) ?? 'active';
+  const limit = (toolInput.limit as number) ?? 50;
 
   return safeHandler(async () => {
     const params = new URLSearchParams({ limit: String(limit) });
@@ -89,7 +89,7 @@ async function priceHandler(toolInput: ToolInput): Promise<HandlerResult> {
  */
 async function orderbookHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const tokenId = toolInput.token_id as string;
-  const depth = (toolInput.depth as number) || 10;
+  const depth = (toolInput.depth as number) ?? 10;
 
   return safeHandler(async () => {
     const response = await fetch(`${API_BASE}/token/orderbook?tokenId=${tokenId}&depth=${depth}`, {
@@ -108,8 +108,8 @@ async function orderbookHandler(toolInput: ToolInput): Promise<HandlerResult> {
  */
 async function priceHistoryHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const tokenId = toolInput.token_id as string;
-  const interval = (toolInput.interval as string) || '1h';
-  const limit = (toolInput.limit as number) || 100;
+  const interval = (toolInput.interval as string) ?? '1h';
+  const limit = (toolInput.limit as number) ?? 100;
 
   return safeHandler(async () => {
     const params = new URLSearchParams({
@@ -154,7 +154,7 @@ async function placeOrderHandler(toolInput: ToolInput, _context: HandlerContext)
   const side = toolInput.side as 'BUY' | 'SELL';
   const price = toolInput.price as number;
   const amount = toolInput.amount as number;
-  const orderType = (toolInput.order_type as 'LIMIT' | 'MARKET') || 'LIMIT';
+  const orderType = (toolInput.order_type as 'LIMIT' | 'MARKET') ?? 'LIMIT';
 
   const config = getTradingConfig();
 

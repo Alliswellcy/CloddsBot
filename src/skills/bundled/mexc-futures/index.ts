@@ -156,6 +156,7 @@ async function handleLong(symbol?: string, volStr?: string, leverageStr?: string
   if (!symbol || !volStr) return 'Usage: /mx long <symbol> <vol> [leverage]x\nExample: /mx long BTC_USDT 1 10x';
 
   const vol = parseFloat(volStr);
+  if (isNaN(vol) || vol <= 0) return `Invalid volume: ${volStr}`;
   const leverage = parseLeverage(leverageStr);
 
   const result = await mx.openLong(config, symbol.toUpperCase(), vol, leverage);
@@ -170,6 +171,7 @@ async function handleShort(symbol?: string, volStr?: string, leverageStr?: strin
   if (!symbol || !volStr) return 'Usage: /mx short <symbol> <vol> [leverage]x\nExample: /mx short BTC_USDT 1 10x';
 
   const vol = parseFloat(volStr);
+  if (isNaN(vol) || vol <= 0) return `Invalid volume: ${volStr}`;
   const leverage = parseLeverage(leverageStr);
 
   const result = await mx.openShort(config, symbol.toUpperCase(), vol, leverage);
@@ -208,6 +210,7 @@ async function handleLeverage(symbol?: string, leverageStr?: string): Promise<st
   if (!symbol || !leverageStr) return 'Usage: /mx leverage <symbol> <value>';
 
   const leverage = parseInt(leverageStr, 10);
+  if (isNaN(leverage) || leverage <= 0) return `Invalid leverage: ${leverageStr}`;
   await mx.setLeverage(config, symbol.toUpperCase(), leverage);
   return `Set ${symbol.toUpperCase()} leverage to ${leverage}x`;
 }
@@ -255,7 +258,8 @@ async function handleMarkets(query?: string): Promise<string> {
 
 async function handleDbTrades(symbol?: string, limitStr?: string): Promise<string> {
   const db = await initDatabase();
-  const limit = limitStr ? parseInt(limitStr, 10) : 20;
+  const parsedLimit = limitStr ? parseInt(limitStr, 10) : NaN;
+  const limit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
   const trades = db.getMexcFuturesTrades(getUserId(), { symbol, limit });
 
   if (trades.length === 0) return symbol ? `No trades found for ${symbol}` : 'No trades found';
@@ -288,7 +292,8 @@ async function handleDbStats(symbol?: string, period?: string): Promise<string> 
 
 async function handleDbFunding(symbol?: string, limitStr?: string): Promise<string> {
   const db = await initDatabase();
-  const limit = limitStr ? parseInt(limitStr, 10) : 20;
+  const parsedLimit = limitStr ? parseInt(limitStr, 10) : NaN;
+  const limit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
   const funding = db.getMexcFuturesFunding(getUserId(), { symbol, limit });
 
   if (funding.length === 0) return 'No funding payments found';

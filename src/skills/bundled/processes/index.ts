@@ -39,7 +39,7 @@ async function execute(args: string): Promise<string> {
       }
 
       case 'kill': {
-        const pid = parseInt(parts[1]);
+        const pid = parseInt(parts[1], 10);
         if (isNaN(pid)) return 'Usage: /processes kill <pid>';
         proc.killTree(pid);
         return `Sent SIGTERM to process tree rooted at PID ${pid}.`;

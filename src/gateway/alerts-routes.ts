@@ -34,7 +34,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: { alerts, count: alerts.length } });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: List failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -49,7 +49,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: alert });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: Get failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -75,7 +75,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: alert });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: Create price alert failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -97,7 +97,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: alert });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: Create price change alert failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -119,7 +119,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: alert });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: Create volume alert failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -134,7 +134,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, enabled: true } });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: Enable failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -149,7 +149,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, enabled: false } });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: Disable failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -164,7 +164,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, deleted: true } });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: Delete failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -175,7 +175,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: { monitoring: true } });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: Start monitoring failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -186,7 +186,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       res.json({ ok: true, data: { monitoring: false } });
     } catch (err) {
       logger.warn({ err }, 'Alerts API: Stop monitoring failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

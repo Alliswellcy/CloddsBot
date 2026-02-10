@@ -427,12 +427,12 @@ export function createBotManager(db: Database, config: BotManagerConfig = {}): B
       // Start evaluation loop
       const intervalMs = strategy.config.intervalMs || defaultIntervalMs;
       const interval = setInterval(() => {
-        runEvaluation(strategy);
+        runEvaluation(strategy).catch(() => {});
       }, intervalMs);
       botIntervals.set(strategyId, interval);
 
       // Run initial evaluation
-      runEvaluation(strategy);
+      runEvaluation(strategy).catch(() => {});
 
       logger.info({ strategyId, intervalMs }, 'Bot started');
       emitter.emit('botStarted', strategyId);

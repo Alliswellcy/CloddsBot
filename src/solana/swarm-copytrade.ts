@@ -114,14 +114,14 @@ export class SwarmCopyTrader extends EventEmitter {
   private subscriptions: Map<string, number> = new Map();
   private processing: Set<string> = new Set(); // Prevent duplicate processing
   private recentTrades: Map<string, number> = new Map(); // Dedup by signature
+  private cleanupInterval: NodeJS.Timeout;
 
   constructor(connection: Connection, swarm: PumpFunSwarm) {
     super();
     this.connection = connection;
     this.swarm = swarm;
 
-    // Clean up old trade signatures periodically
-    setInterval(() => this.cleanupRecentTrades(), 60000);
+    this.cleanupInterval = setInterval(() => this.cleanupRecentTrades(), 60000);
   }
 
   // --------------------------------------------------------------------------
@@ -429,7 +429,7 @@ export class SwarmCopyTrader extends EventEmitter {
     }
 
     // Check loss limit
-    if (config.stopAfterLossPct && target.stats.pnlSol < 0) {
+    if (config.stopAfterLossPct && target.stats.pnlSol < 0 && target.stats.totalSolSpent > 0) {
       const lossPct = Math.abs(target.stats.pnlSol / target.stats.totalSolSpent) * 100;
       if (lossPct >= config.stopAfterLossPct) return false;
     }
@@ -462,13 +462,13 @@ export class SwarmCopyTrader extends EventEmitter {
 
       // Calculate total SOL received for sells from wallet results
       const totalSolReceived = trade.action === 'sell'
-        ? result.walletResults.reduce((sum, r) => sum + (r.solAmount || 0), 0)
+        ? result.walletResults.reduce((sum, r) => sum + (r.solAmount ?? 0), 0)
         : undefined;
 
       return {
         targetTrade: trade,
         success: result.success,
-        walletsExecuted: result.walletResults?.length || 0,
+        walletsExecuted: result.walletResults?.length ?? 0,
         totalSolSpent: result.totalSolSpent,
         totalSolReceived,
         signatures: result.walletResults?.map(r => r.signature).filter((s): s is string => !!s) || [],
@@ -523,6 +523,7 @@ export class SwarmCopyTrader extends EventEmitter {
   // --------------------------------------------------------------------------
 
   destroy(): void {
+    clearInterval(this.cleanupInterval);
     for (const target of this.targets.values()) {
       this.stopMonitoring(target);
     }

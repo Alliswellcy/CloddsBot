@@ -323,10 +323,14 @@ export class BagsBuilder implements SwarmTransactionBuilder {
       priceImpactPct: string;
     }>(`/trade/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountStr}&slippageMode=auto`);
 
+    const inAmt = parseFloat(quote.inAmount);
+    const outAmt = parseFloat(quote.outAmount);
+    const impact = parseFloat(quote.priceImpactPct);
+
     return {
-      inputAmount: parseFloat(quote.inAmount),
-      outputAmount: parseFloat(quote.outAmount),
-      priceImpact: parseFloat(quote.priceImpactPct) / 100,
+      inputAmount: Number.isFinite(inAmt) ? inAmt : 0,
+      outputAmount: Number.isFinite(outAmt) ? outAmt : 0,
+      priceImpact: Number.isFinite(impact) ? impact / 100 : undefined,
       route: 'bags',
     };
   }

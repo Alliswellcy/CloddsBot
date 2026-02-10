@@ -238,7 +238,7 @@ export function createX402Client(config: X402Config = {}): X402Client {
       // Check if we can auto-approve
       const cheapestOption = paymentDetails.accepts
         .filter((o) => o.asset === 'USDC')
-        .sort((a, b) => parseInt(a.maxAmountRequired) - parseInt(b.maxAmountRequired))[0];
+        .sort((a, b) => parseInt(a.maxAmountRequired, 10) - parseInt(b.maxAmountRequired, 10))[0];
 
       if (!cheapestOption) {
         logger.error('x402: No USDC payment option available');

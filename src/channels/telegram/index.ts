@@ -428,7 +428,7 @@ export async function createTelegramChannel(
 
     let cleanedText = text;
     if (botUsername) {
-      cleanedText = cleanedText.replace(new RegExp(`@${botUsername}`, 'g'), '').trim();
+      cleanedText = cleanedText.replace(new RegExp(`@${botUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'), '').trim();
     }
 
     const incomingMessage: IncomingMessage = {

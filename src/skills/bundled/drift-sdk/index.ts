@@ -204,7 +204,11 @@ async function handleLong(args: string): Promise<string> {
     return 'Invalid size. Must be a positive number.';
   }
 
-  const price = priceStr ? parseFloat(priceStr) : undefined;
+  const parsedPrice = priceStr ? parseFloat(priceStr) : undefined;
+  if (parsedPrice !== undefined && (isNaN(parsedPrice) || parsedPrice <= 0)) {
+    return 'Invalid price. Must be a positive number.';
+  }
+  const price = parsedPrice;
   const orderType = price ? 'limit' : 'market';
 
   const connection = getConnection();
@@ -257,7 +261,11 @@ async function handleShort(args: string): Promise<string> {
     return 'Invalid size. Must be a positive number.';
   }
 
-  const price = priceStr ? parseFloat(priceStr) : undefined;
+  const parsedPrice = priceStr ? parseFloat(priceStr) : undefined;
+  if (parsedPrice !== undefined && (isNaN(parsedPrice) || parsedPrice <= 0)) {
+    return 'Invalid price. Must be a positive number.';
+  }
+  const price = parsedPrice;
   const orderType = price ? 'limit' : 'market';
 
   const connection = getConnection();
@@ -376,7 +384,7 @@ async function handleCancel(args: string): Promise<string> {
       return `Cancelled ${result.cancelled.length} order(s) for ${arg.toUpperCase()}. TX: ${result.txSig}`;
     } else if (arg) {
       // Cancel by order ID
-      const orderId = parseInt(arg);
+      const orderId = parseInt(arg, 10);
       if (isNaN(orderId)) {
         return 'Invalid order ID. Use /drift cancel <orderId> or /drift cancel <coin>';
       }
@@ -437,7 +445,7 @@ async function handleLeverage(args: string): Promise<string> {
     return `Unknown market: ${coin}. Supported: BTC, ETH, SOL, MATIC, ARB, DOGE, BNB, SUI, PEPE, OP`;
   }
 
-  const leverage = parseInt(leverageStr);
+  const leverage = parseInt(leverageStr, 10);
   if (isNaN(leverage) || leverage < 1 || leverage > 20) {
     return 'Invalid leverage. Must be between 1 and 20.';
   }

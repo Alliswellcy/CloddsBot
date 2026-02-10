@@ -1294,7 +1294,7 @@ async function execute(args: string): Promise<string> {
       case 'trades':
       case 'history': {
         // /poly trades [limit]
-        const limit = parseInt(parts[1]) || 20;
+        const limit = parseInt(parts[1], 10) || 20;
         const apiKey = process.env.POLY_API_KEY;
         const apiSecret = process.env.POLY_API_SECRET;
         const apiPassphrase = process.env.POLY_API_PASSPHRASE;

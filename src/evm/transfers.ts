@@ -101,8 +101,8 @@ export async function estimateNativeTransferGas(
   return {
     gasLimit,
     gasPrice,
-    maxFeePerGas: feeData.maxFeePerGas || undefined,
-    maxPriorityFeePerGas: feeData.maxPriorityFeePerGas || undefined,
+    maxFeePerGas: feeData.maxFeePerGas ?? undefined,
+    maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ?? undefined,
     estimatedCost,
   };
 }
@@ -133,8 +133,8 @@ export async function estimateTokenTransferGas(
   return {
     gasLimit,
     gasPrice,
-    maxFeePerGas: feeData.maxFeePerGas || undefined,
-    maxPriorityFeePerGas: feeData.maxPriorityFeePerGas || undefined,
+    maxFeePerGas: feeData.maxFeePerGas ?? undefined,
+    maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ?? undefined,
     estimatedCost,
   };
 }
@@ -198,9 +198,20 @@ export async function sendNative(request: TransferRequest): Promise<TransferResu
     const tx = await wallet.sendTransaction({ to, value, gasLimit: 21000n });
     const receipt = await tx.wait();
 
+    if (!receipt || receipt.status !== 1) {
+      return {
+        success: false,
+        txHash: receipt?.hash,
+        from: wallet.address,
+        to,
+        amount,
+        error: 'Transaction reverted on-chain',
+      };
+    }
+
     return {
       success: true,
-      txHash: receipt?.hash,
+      txHash: receipt.hash,
       from: wallet.address,
       to,
       amount,
@@ -293,9 +304,21 @@ export async function sendToken(request: TokenTransferRequest): Promise<Transfer
     const tx = await token.transfer(to, value);
     const receipt = await tx.wait();
 
+    if (!receipt || receipt.status !== 1) {
+      return {
+        success: false,
+        txHash: receipt?.hash,
+        from: wallet.address,
+        to,
+        amount,
+        token: symbol,
+        error: 'Transaction reverted on-chain',
+      };
+    }
+
     return {
       success: true,
-      txHash: receipt?.hash,
+      txHash: receipt.hash,
       from: wallet.address,
       to,
       amount,
@@ -451,9 +474,20 @@ export async function speedUpTransaction(
 
     const receipt = await tx.wait();
 
+    if (!receipt || receipt.status !== 1) {
+      return {
+        success: false,
+        txHash: receipt?.hash,
+        from: wallet.address,
+        to: originalTx.to || '',
+        amount: formatEther(originalTx.value),
+        error: 'Replacement transaction reverted on-chain',
+      };
+    }
+
     return {
       success: true,
-      txHash: receipt?.hash,
+      txHash: receipt.hash,
       from: wallet.address,
       to: originalTx.to || '',
       amount: formatEther(originalTx.value),
@@ -498,9 +532,20 @@ export async function cancelTransaction(
 
     const receipt = await tx.wait();
 
+    if (!receipt || receipt.status !== 1) {
+      return {
+        success: false,
+        txHash: receipt?.hash,
+        from: wallet.address,
+        to: wallet.address,
+        amount: '0',
+        error: 'Cancel transaction reverted on-chain',
+      };
+    }
+
     return {
       success: true,
-      txHash: receipt?.hash,
+      txHash: receipt.hash,
       from: wallet.address,
       to: wallet.address,
       amount: '0',

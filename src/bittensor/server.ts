@@ -14,7 +14,7 @@ export function createBittensorRouter(service: BittensorService): Router {
       const status = await service.getStatus();
       res.json({ ok: true, data: status });
     } catch (err) {
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -27,7 +27,7 @@ export function createBittensorRouter(service: BittensorService): Router {
       }
       res.json({ ok: true, data: wallet });
     } catch (err) {
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -42,7 +42,7 @@ export function createBittensorRouter(service: BittensorService): Router {
       const earnings = await service.getEarnings(period);
       res.json({ ok: true, data: earnings });
     } catch (err) {
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -51,7 +51,7 @@ export function createBittensorRouter(service: BittensorService): Router {
       const statuses = await service.getMinerStatuses();
       res.json({ ok: true, data: statuses });
     } catch (err) {
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -60,7 +60,7 @@ export function createBittensorRouter(service: BittensorService): Router {
       const subnets = await service.getSubnets();
       res.json({ ok: true, data: subnets });
     } catch (err) {
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -74,7 +74,7 @@ export function createBittensorRouter(service: BittensorService): Router {
       const result = await service.registerOnSubnet(subnetId, hotkeyName);
       res.json({ ok: result.success, message: result.message });
     } catch (err) {
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -88,7 +88,7 @@ export function createBittensorRouter(service: BittensorService): Router {
       const result = await service.startMining(subnetId);
       res.json({ ok: result.success, message: result.message });
     } catch (err) {
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -102,7 +102,7 @@ export function createBittensorRouter(service: BittensorService): Router {
       const result = await service.stopMining(subnetId);
       res.json({ ok: result.success, message: result.message });
     } catch (err) {
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

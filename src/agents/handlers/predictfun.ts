@@ -45,7 +45,7 @@ async function marketsHandler(
   toolInput: ToolInput,
   _context: HandlerContext
 ): Promise<HandlerResult> {
-  const first = (toolInput.first as number) || 50;
+  const first = (toolInput.first as number) ?? 50;
   const after = toolInput.after as string;
   try {
     const params = new URLSearchParams({ first: String(first) });
@@ -212,7 +212,7 @@ async function activityHandler(
   toolInput: ToolInput,
   _context: HandlerContext
 ): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 50;
+  const limit = (toolInput.limit as number) ?? 50;
   try {
     const response = await apiFetch(`https://api.predict.fun/v1/account/activity?limit=${limit}`);
     if (!response.ok) return JSON.stringify({ error: `API error: ${response.status}` });
@@ -242,7 +242,7 @@ async function matchesHandler(
   _context: HandlerContext
 ): Promise<HandlerResult> {
   const marketId = toolInput.market_id as string;
-  const limit = (toolInput.limit as number) || 50;
+  const limit = (toolInput.limit as number) ?? 50;
   try {
     let url = `https://api.predict.fun/v1/matches?limit=${limit}`;
     if (marketId) url += `&market_id=${marketId}`;
@@ -364,7 +364,7 @@ async function cancelOrdersHandler(
   context: HandlerContext
 ): Promise<HandlerResult> {
   const orderHashes = toolInput.order_hashes as string[];
-  const isNegRisk = (toolInput.is_neg_risk as boolean) || false;
+  const isNegRisk = (toolInput.is_neg_risk as boolean) ?? false;
   const isYieldBearing = (toolInput.is_yield_bearing as boolean) ?? true;
 
   // Try ExecutionService first
@@ -407,7 +407,7 @@ async function redeemPositionsHandler(
   const conditionId = toolInput.condition_id as string;
   const indexSetInput = toolInput.index_set as number;
   const indexSet = (indexSetInput === 1 || indexSetInput === 2) ? indexSetInput : 1;
-  const isNegRisk = (toolInput.is_neg_risk as boolean) || false;
+  const isNegRisk = (toolInput.is_neg_risk as boolean) ?? false;
   const isYieldBearing = (toolInput.is_yield_bearing as boolean) ?? true;
   const amountStr = toolInput.amount as string | undefined;
   const amount = amountStr ? BigInt(amountStr) : undefined;
@@ -433,7 +433,7 @@ async function mergePositionsHandler(
 
   const conditionId = toolInput.condition_id as string;
   const amount = toolInput.amount as number;
-  const isNegRisk = (toolInput.is_neg_risk as boolean) || false;
+  const isNegRisk = (toolInput.is_neg_risk as boolean) ?? false;
   const isYieldBearing = (toolInput.is_yield_bearing as boolean) ?? true;
 
   try {

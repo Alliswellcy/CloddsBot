@@ -252,7 +252,7 @@ async function searchHandler(
   if (!apiKey) return CRED_ERROR;
 
   const query = toolInput.query as string;
-  const limit = (toolInput.limit as number) || 10;
+  const limit = (toolInput.limit as number) ?? 10;
   try {
     const response = await fetch(
       `${MANIFOLD_API}/v0/search-markets?term=${encodeURIComponent(query)}&limit=${limit}&filter=open&sort=liquidity`
@@ -336,9 +336,9 @@ async function positionsHandler(
         positions[bet.contractId] = { yes: 0, no: 0, invested: 0 };
       }
       if (bet.outcome === 'YES') {
-        positions[bet.contractId].yes += bet.shares || 0;
+        positions[bet.contractId].yes += bet.shares ?? 0;
       } else {
-        positions[bet.contractId].no += bet.shares || 0;
+        positions[bet.contractId].no += bet.shares ?? 0;
       }
       if (!bet.isSold) {
         positions[bet.contractId].invested += bet.amount;
@@ -609,7 +609,7 @@ async function manageTopicHandler(
 
   const marketId = toolInput.market_id as string;
   const groupId = toolInput.group_id as string;
-  const remove = toolInput.remove as boolean || false;
+  const remove = (toolInput.remove as boolean) ?? false;
   try {
     const response = await fetch(`${MANIFOLD_API}/v0/market/${marketId}/group`, {
       method: 'POST',
@@ -789,7 +789,7 @@ async function listUsersHandler(
   toolInput: ToolInput,
   _context: HandlerContext
 ): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 1000;
+  const limit = (toolInput.limit as number) ?? 1000;
   const before = toolInput.before as string | undefined;
   try {
     let url = `${MANIFOLD_API}/v0/users?limit=${limit}`;
@@ -856,7 +856,7 @@ async function listMarketsHandler(
   toolInput: ToolInput,
   _context: HandlerContext
 ): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 500;
+  const limit = (toolInput.limit as number) ?? 500;
   const sort = toolInput.sort as string | undefined;
   const order = toolInput.order as string | undefined;
   const before = toolInput.before as string | undefined;
@@ -974,7 +974,7 @@ async function getCommentsHandler(
   const marketId = toolInput.market_id as string | undefined;
   const marketSlug = toolInput.market_slug as string | undefined;
   const userId = toolInput.user_id as string | undefined;
-  const limit = (toolInput.limit as number) || 1000;
+  const limit = (toolInput.limit as number) ?? 1000;
   const page = toolInput.page as number | undefined;
   try {
     let url = `${MANIFOLD_API}/v0/comments`;
@@ -997,7 +997,7 @@ async function getTransactionsHandler(
   toolInput: ToolInput,
   _context: HandlerContext
 ): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 100;
+  const limit = (toolInput.limit as number) ?? 100;
   const offset = toolInput.offset as number | undefined;
   const before = toolInput.before as string | undefined;
   const after = toolInput.after as string | undefined;

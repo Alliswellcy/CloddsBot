@@ -657,7 +657,7 @@ export class PumpFunSwarm extends EventEmitter {
     this.confirmAllAsync(walletResults.filter(r => r.success && r.signature).map(r => r.signature!));
 
     // Schedule position refresh
-    setTimeout(() => this.refreshTokenPositions(params.mint), 5000);
+    setTimeout(() => { this.refreshTokenPositions(params.mint).catch(() => {}); }, 5000);
 
     return this.buildResult(params, walletResults, startTime, errors, 'parallel');
   }
@@ -694,7 +694,7 @@ export class PumpFunSwarm extends EventEmitter {
       for (const result of walletResults) {
         if (!result.error) result.success = true;
       }
-      setTimeout(() => this.refreshTokenPositions(params.mint), 5000);
+      setTimeout(() => { this.refreshTokenPositions(params.mint).catch(() => {}); }, 5000);
       return this.buildResult(params, walletResults, startTime, errors, 'bundle', [bundleId]);
     } catch (e) {
       errors.push(`Bundle failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -759,7 +759,7 @@ export class PumpFunSwarm extends EventEmitter {
       errors.push(...result.errors);
     }
 
-    setTimeout(() => this.refreshTokenPositions(params.mint), 5000);
+    setTimeout(() => { this.refreshTokenPositions(params.mint).catch(() => {}); }, 5000);
     return this.buildResult(params, allWalletResults, startTime, errors, 'multi-bundle', bundleIds);
   }
 
@@ -854,7 +854,7 @@ export class PumpFunSwarm extends EventEmitter {
       }
     }
 
-    setTimeout(() => this.refreshTokenPositions(params.mint), 5000);
+    setTimeout(() => { this.refreshTokenPositions(params.mint).catch(() => {}); }, 5000);
     return this.buildResult(params, walletResults, startTime, errors, 'sequential');
   }
 
@@ -1069,9 +1069,10 @@ export class PumpFunSwarm extends EventEmitter {
   }
 
   private confirmAllAsync(signatures: string[]): void {
-    // Fire and forget - confirms in background
     for (const sig of signatures) {
-      this.confirmWithTimeout(sig, this.config.confirmTimeoutMs).catch(() => {});
+      this.confirmWithTimeout(sig, this.config.confirmTimeoutMs).catch((e) => {
+        logger.warn({ signature: sig, error: e instanceof Error ? e.message : String(e) }, 'Transaction confirmation failed');
+      });
     }
   }
 
@@ -1112,7 +1113,7 @@ export class PumpFunSwarm extends EventEmitter {
     const successCount = walletResults.filter(r => r.success).length;
     const totalSol = walletResults
       .filter(r => r.success && r.solAmount)
-      .reduce((sum, r) => sum + (r.solAmount || 0), 0);
+      .reduce((sum, r) => sum + (r.solAmount ?? 0), 0);
 
     return {
       success: successCount > 0,
@@ -1416,7 +1417,7 @@ export class PumpFunSwarm extends EventEmitter {
       }
     }
 
-    setTimeout(() => this.refreshTokenPositions(mint), 5000);
+    setTimeout(() => { this.refreshTokenPositions(mint).catch(() => {}); }, 5000);
 
     return {
       success: consolidations.some(c => c.signature),
@@ -1731,7 +1732,11 @@ export class PumpFunSwarm extends EventEmitter {
     if (this.priceMonitorInterval) return;
 
     this.priceMonitorInterval = setInterval(async () => {
-      await this.checkPriceTriggers();
+      try {
+        await this.checkPriceTriggers();
+      } catch (e) {
+        logger.warn({ error: e instanceof Error ? e.message : String(e) }, 'Price trigger check failed');
+      }
     }, 5000); // Check every 5 seconds
   }
 
@@ -1809,7 +1814,7 @@ export class PumpFunSwarm extends EventEmitter {
           });
         }
       } catch (e) {
-        // Silently continue on errors
+        logger.error({ error: e, mint }, 'Price trigger check failed');
       }
     }
   }
@@ -2074,7 +2079,7 @@ export class PumpFunSwarm extends EventEmitter {
           const receiver = receivers.find(r => r.amount < targetAmount);
           if (receiver) {
             const deficit = targetAmount - receiver.amount;
-            const solToSpend = (sellResult.solAmount || 0) * (deficit / excessAmount);
+            const solToSpend = (sellResult.solAmount ?? 0) * (deficit / excessAmount);
 
             // Buy for the receiver
             const buyResult = await this.executeSingleTrade(receiver.wallet, {
@@ -2114,7 +2119,7 @@ export class PumpFunSwarm extends EventEmitter {
       await sleep(500);
     }
 
-    setTimeout(() => this.refreshTokenPositions(mint), 5000);
+    setTimeout(() => { this.refreshTokenPositions(mint).catch(() => {}); }, 5000);
 
     return {
       success: transfers.some(t => t.signature),

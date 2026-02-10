@@ -81,7 +81,7 @@ function renderProgress(): void {
 function startSpinner(): void {
   if (!process.stdout.isTTY) return;
   spinnerInterval = setInterval(() => {
-    spinnerFrame++;
+    spinnerFrame = (spinnerFrame + 1) % spinnerFrames.length;
     renderProgress();
   }, 80);
 }
@@ -238,10 +238,16 @@ async function main() {
     }
     console.log('\n  Press Ctrl+C to stop\n');
 
-    // Handle shutdown
+    let shuttingDown = false;
     const shutdown = async () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       console.log('\n\x1b[33mShutting down...\x1b[0m');
-      await gateway.stop();
+      try {
+        await gateway.stop();
+      } catch (e) {
+        logger.error({ err: e }, 'Error during shutdown');
+      }
       console.log('\x1b[32mGoodbye!\x1b[0m\n');
       process.exit(0);
     };
@@ -264,9 +270,16 @@ async function main() {
 
     logger.info('Clodds is running!');
 
+    let shuttingDown = false;
     const shutdown = async () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       logger.info('Shutting down...');
-      await gateway.stop();
+      try {
+        await gateway.stop();
+      } catch (e) {
+        logger.error({ err: e }, 'Error during shutdown');
+      }
       process.exit(0);
     };
 

@@ -60,37 +60,37 @@ function parseOptions(args: string[]): {
 
     switch (arg) {
       case '--name':
-        opts.name = next;
+        if (next) opts.name = next;
         i++;
         break;
       case '--mult':
       case '--multiplier': {
-        const v = parseFloat(next);
-        if (!isNaN(v)) opts.mult = v;
+        const v = next != null ? parseFloat(next) : NaN;
+        if (!isNaN(v) && v > 0) opts.mult = v;
         i++;
         break;
       }
       case '--max': {
-        const v = parseFloat(next);
-        if (!isNaN(v)) opts.max = v;
+        const v = next != null ? parseFloat(next) : NaN;
+        if (!isNaN(v) && v > 0) opts.max = v;
         i++;
         break;
       }
       case '--min': {
-        const v = parseFloat(next);
-        if (!isNaN(v)) opts.min = v;
+        const v = next != null ? parseFloat(next) : NaN;
+        if (!isNaN(v) && v >= 0) opts.min = v;
         i++;
         break;
       }
       case '--delay': {
-        const v = parseInt(next);
-        if (!isNaN(v)) opts.delay = v;
+        const v = next != null ? parseInt(next, 10) : NaN;
+        if (!isNaN(v) && v >= 0) opts.delay = v;
         i++;
         break;
       }
       case '--slippage': {
-        const v = parseInt(next);
-        if (!isNaN(v)) opts.slippage = v;
+        const v = next != null ? parseInt(next, 10) : NaN;
+        if (!isNaN(v) && v >= 0) opts.slippage = v;
         i++;
         break;
       }
@@ -375,7 +375,7 @@ Options:
 Multiplier: ${target.config.multiplier}x
 Max per trade: ${formatSol(target.config.maxPositionSol)} SOL
 Min to copy: ${formatSol(target.config.minTradeSol)} SOL
-Delay: ${target.config.delayMs || 0}ms
+Delay: ${target.config.delayMs ?? 0}ms
 Slippage: ${target.config.slippageBps || 500} bps
 Copy buys: ${target.config.copyBuys}
 Copy sells: ${target.config.copySells}`;

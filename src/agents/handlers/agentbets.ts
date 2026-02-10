@@ -15,7 +15,7 @@ const API_URL = 'https://agentbets-api-production.up.railway.app';
  */
 async function marketsHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const query = (toolInput.query as string) || '';
-  const limit = (toolInput.limit as number) || 20;
+  const limit = (toolInput.limit as number) ?? 20;
 
   return safeHandler(async () => {
     const response = await fetch(`${API_URL}/markets`);

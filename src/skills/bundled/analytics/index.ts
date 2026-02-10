@@ -24,7 +24,7 @@ async function execute(args: string): Promise<string> {
       case 'summary':
       case 'stats': {
         const periodFlag = parts.find((p: string) => p.match(/^\d+d$/));
-        const days = periodFlag ? parseInt(periodFlag) : 30;
+        const days = periodFlag ? parseInt(periodFlag, 10) : 30;
         const stats = analytics.getStats({ days });
         let output = `**Opportunity Analytics** (${days}d)\n\n`;
         output += `Total found: ${stats.totalFound}\n`;
@@ -89,7 +89,7 @@ async function execute(args: string): Promise<string> {
 
       case 'attribution': {
         const periodFlag = parts.find((p: string) => p.match(/^\d+d$/));
-        const days = periodFlag ? parseInt(periodFlag) : 30;
+        const days = periodFlag ? parseInt(periodFlag, 10) : 30;
         const attr = analytics.getPerformanceAttribution({ days });
         let output = `**Performance Attribution** (${days}d)\n\n`;
         output += `**By Edge Source:**\n`;
@@ -138,7 +138,7 @@ async function execute(args: string): Promise<string> {
 
       case 'by-strategy': {
         const periodFlag = parts.find((p: string) => p.match(/^\d+d$/));
-        const days = periodFlag ? parseInt(periodFlag) : 30;
+        const days = periodFlag ? parseInt(periodFlag, 10) : 30;
         const strategies = analytics.getBestStrategies({ days, minSamples: 1 });
         if (!strategies.length) return 'No strategy data yet.';
         let output = `**Performance by Strategy** (${days}d)\n\n`;
@@ -154,7 +154,7 @@ async function execute(args: string): Promise<string> {
       case 'by-hour':
       case 'by-day': {
         const periodFlag = parts.find((p: string) => p.match(/^\d+d$/));
-        const days = periodFlag ? parseInt(periodFlag) : 30;
+        const days = periodFlag ? parseInt(periodFlag, 10) : 30;
         const attr = analytics.getPerformanceAttribution({ days });
         let output = '';
 
@@ -192,7 +192,7 @@ async function execute(args: string): Promise<string> {
         const typeFlag = parts.indexOf('--type');
         const type = typeFlag >= 0 ? parts[typeFlag + 1] : undefined;
         const periodFlag = parts.find((p: string) => p.match(/^\d+d$/));
-        const days = periodFlag ? parseInt(periodFlag) : 30;
+        const days = periodFlag ? parseInt(periodFlag, 10) : 30;
         const decay = analytics.getEdgeDecayAnalysis({ type, days });
         if (decay.decayCurve.length === 0) return 'No edge decay data yet.';
         let output = `**Edge Decay Analysis** (${days}d)\n\n`;
@@ -207,7 +207,7 @@ async function execute(args: string): Promise<string> {
 
       case 'edge-buckets': {
         const periodFlag = parts.find((p: string) => p.match(/^\d+d$/));
-        const days = periodFlag ? parseInt(periodFlag) : 30;
+        const days = periodFlag ? parseInt(periodFlag, 10) : 30;
         const attr = analytics.getPerformanceAttribution({ days });
         let output = `**Performance by Edge Size** (${days}d)\n\n`;
         const labels: Record<string, string> = {
@@ -229,7 +229,7 @@ async function execute(args: string): Promise<string> {
 
       case 'liquidity': {
         const periodFlag = parts.find((p: string) => p.match(/^\d+d$/));
-        const days = periodFlag ? parseInt(periodFlag) : 30;
+        const days = periodFlag ? parseInt(periodFlag, 10) : 30;
         const attr = analytics.getPerformanceAttribution({ days });
         let output = `**Performance by Liquidity** (${days}d)\n\n`;
         const labels: Record<string, string> = {

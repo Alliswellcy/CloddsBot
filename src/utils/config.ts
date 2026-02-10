@@ -97,7 +97,7 @@ const DEFAULT_CONFIG: Config = {
       ? {
           enabled: true,
           pollInterval: process.env.IMESSAGE_POLL_INTERVAL
-            ? Number.parseInt(process.env.IMESSAGE_POLL_INTERVAL, 10)
+            ? (Number.parseInt(process.env.IMESSAGE_POLL_INTERVAL, 10) || undefined)
             : undefined,
         }
       : undefined,
@@ -107,7 +107,7 @@ const DEFAULT_CONFIG: Config = {
           channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
           channelSecret: process.env.LINE_CHANNEL_SECRET,
           webhookPort: process.env.LINE_WEBHOOK_PORT
-            ? Number.parseInt(process.env.LINE_WEBHOOK_PORT, 10)
+            ? (Number.parseInt(process.env.LINE_WEBHOOK_PORT, 10) || undefined)
             : undefined,
           webhookPath: process.env.LINE_WEBHOOK_PATH,
         }
@@ -409,7 +409,7 @@ export async function loadConfig(customPath?: string): Promise<Config> {
   if (process.env.MARKET_MAKING_SPREAD_BPS) {
     if (!config.trading) config.trading = { enabled: false, dryRun: true, maxOrderSize: 100, maxDailyLoss: 200 };
     if (!config.trading.marketMaking) config.trading.marketMaking = { enabled: false };
-    (config.trading.marketMaking as any).spreadBps = parseInt(process.env.MARKET_MAKING_SPREAD_BPS, 10);
+    (config.trading.marketMaking as any).spreadBps = parseInt(process.env.MARKET_MAKING_SPREAD_BPS, 10) || 50;
   }
   if (process.env.CRYPTO_HFT_ENABLED) {
     if (!config.trading) config.trading = { enabled: false, dryRun: true, maxOrderSize: 100, maxDailyLoss: 200 };
@@ -437,7 +437,10 @@ export async function loadConfig(customPath?: string): Promise<Config> {
     if (process.env.PERCOLATOR_MATCHER_PROGRAM) pc.matcherProgram = process.env.PERCOLATOR_MATCHER_PROGRAM;
     if (process.env.PERCOLATOR_MATCHER_CONTEXT) pc.matcherContext = process.env.PERCOLATOR_MATCHER_CONTEXT;
     if (process.env.PERCOLATOR_ORACLE) pc.oracleAddress = process.env.PERCOLATOR_ORACLE;
-    if (process.env.PERCOLATOR_LP_INDEX) pc.lpIndex = parseInt(process.env.PERCOLATOR_LP_INDEX, 10);
+    if (process.env.PERCOLATOR_LP_INDEX) {
+      const parsed = parseInt(process.env.PERCOLATOR_LP_INDEX, 10);
+      if (!Number.isNaN(parsed)) pc.lpIndex = parsed;
+    }
     if (process.env.PERCOLATOR_KEEPER_ENABLED) pc.keeperEnabled = envBool(process.env.PERCOLATOR_KEEPER_ENABLED);
     if (process.env.PERCOLATOR_DRY_RUN) pc.dryRun = envBool(process.env.PERCOLATOR_DRY_RUN);
     (config.feeds as any).percolator = pc;

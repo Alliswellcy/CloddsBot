@@ -32,7 +32,7 @@ export function createCronRouter(deps: CronRouterDeps): Router {
       res.json({ ok: true, data: status });
     } catch (err) {
       logger.warn({ err }, 'Cron API: Status failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -45,7 +45,7 @@ export function createCronRouter(deps: CronRouterDeps): Router {
       res.json({ ok: true, data: { jobs, count: jobs.length } });
     } catch (err) {
       logger.warn({ err }, 'Cron API: List failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -61,7 +61,7 @@ export function createCronRouter(deps: CronRouterDeps): Router {
       res.json({ ok: true, data: job });
     } catch (err) {
       logger.warn({ err }, 'Cron API: Get failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -78,7 +78,7 @@ export function createCronRouter(deps: CronRouterDeps): Router {
       res.json({ ok: true, data: job });
     } catch (err) {
       logger.warn({ err }, 'Cron API: Add failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -94,7 +94,7 @@ export function createCronRouter(deps: CronRouterDeps): Router {
       res.json({ ok: true, data: job });
     } catch (err) {
       logger.warn({ err }, 'Cron API: Update failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -110,7 +110,7 @@ export function createCronRouter(deps: CronRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, deleted: true } });
     } catch (err) {
       logger.warn({ err }, 'Cron API: Remove failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -127,7 +127,7 @@ export function createCronRouter(deps: CronRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, ran: true, mode } });
     } catch (err) {
       logger.warn({ err }, 'Cron API: Run failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

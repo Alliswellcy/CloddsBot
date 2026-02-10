@@ -90,7 +90,7 @@ async function handleMarket(marketId: string): Promise<string> {
     output += `**Contracts:**\n`;
     for (const o of market.outcomes) {
       output += `- **${o.name}** (ID: ${o.id})\n`;
-      output += `  Price: ${(o.price * 100).toFixed(1)}% | Volume: £${(o.volume24h || 0).toLocaleString()}\n`;
+      output += `  Price: ${(o.price * 100).toFixed(1)}% | Volume: £${(o.volume24h ?? 0).toLocaleString()}\n`;
     }
 
     return output;
@@ -174,8 +174,8 @@ async function handleBuy(marketId: string, contractId: string, price: string, qu
     const priceNum = parseFloat(price);
     const quantityNum = parseFloat(quantity);
 
-    if (isNaN(priceNum) || isNaN(quantityNum)) {
-      return 'Invalid price or quantity.';
+    if (isNaN(priceNum) || isNaN(quantityNum) || priceNum <= 0 || quantityNum <= 0) {
+      return 'Invalid price or quantity. Both must be positive numbers.';
     }
 
     // Circuit breaker pre-trade check
@@ -239,8 +239,8 @@ async function handleSell(marketId: string, contractId: string, price: string, q
     const priceNum = parseFloat(price);
     const quantityNum = parseFloat(quantity);
 
-    if (isNaN(priceNum) || isNaN(quantityNum)) {
-      return 'Invalid price or quantity.';
+    if (isNaN(priceNum) || isNaN(quantityNum) || priceNum <= 0 || quantityNum <= 0) {
+      return 'Invalid price or quantity. Both must be positive numbers.';
     }
 
     // Circuit breaker pre-trade check

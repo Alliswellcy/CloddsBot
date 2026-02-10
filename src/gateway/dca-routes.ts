@@ -40,7 +40,7 @@ export function createDCARouter(): Router {
       res.json({ ok: true, data: { orders, count: orders.length } });
     } catch (err) {
       logger.warn({ err }, 'DCA API: Failed to get orders');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -56,7 +56,7 @@ export function createDCARouter(): Router {
       res.json({ ok: true, data: enrichOrder(order) });
     } catch (err) {
       logger.warn({ err }, 'DCA API: Failed to get order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -112,7 +112,7 @@ export function createDCARouter(): Router {
       res.json({ ok: true, data: enrichOrder(order) });
     } catch (err) {
       logger.warn({ err }, 'DCA API: Failed to create order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -138,7 +138,7 @@ export function createDCARouter(): Router {
       res.json({ ok: true, data: { id: req.params.id, status: 'paused' } });
     } catch (err) {
       logger.warn({ err }, 'DCA API: Failed to pause order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -165,7 +165,7 @@ export function createDCARouter(): Router {
       res.json({ ok: true, data: { id: req.params.id, status: 'active' } });
     } catch (err) {
       logger.warn({ err }, 'DCA API: Failed to resume order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -181,7 +181,7 @@ export function createDCARouter(): Router {
       res.json({ ok: true, data: { id: req.params.id, deleted: true } });
     } catch (err) {
       logger.warn({ err }, 'DCA API: Failed to delete order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

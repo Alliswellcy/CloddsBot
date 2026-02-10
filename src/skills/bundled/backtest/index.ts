@@ -32,7 +32,7 @@ async function execute(args: string): Promise<string> {
         if (!marketId) return 'Market ID required. Usage: /backtest run <strategy> --market <id>';
 
         const daysIdx = parts.indexOf('--days');
-        const days = daysIdx >= 0 ? parseInt(parts[daysIdx + 1]) : 30;
+        const days = daysIdx >= 0 ? parseInt(parts[daysIdx + 1], 10) : 30;
         const capitalIdx = parts.indexOf('--capital');
         const capital = capitalIdx >= 0 ? parseFloat(parts[capitalIdx + 1]) : 10000;
 
@@ -135,7 +135,7 @@ async function execute(args: string): Promise<string> {
         if (sessionResults.length === 0) {
           return 'Run a backtest first with `/backtest run <strategy> --market <id>`, then use Monte Carlo.';
         }
-        const sims = parts[1] ? parseInt(parts[1]) : 1000;
+        const sims = parts[1] ? parseInt(parts[1], 10) : 1000;
         if (isNaN(sims) || sims < 10) return 'Usage: /backtest monte-carlo [num-sims]\n\nDefault: 1000 simulations. Min: 10.';
 
         const last = sessionResults[sessionResults.length - 1];

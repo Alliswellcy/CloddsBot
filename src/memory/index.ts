@@ -314,7 +314,7 @@ export function createMemoryService(
     },
 
     search(userId, channel, query) {
-      const queryLower = query.toLowerCase().replace(/[%_]/g, '\\$&');
+      const queryLower = query.toLowerCase().replace(/[\\%_]/g, '\\$&');
       const rows = db.query<MemoryRow>(
         "SELECT * FROM user_memory WHERE userId = ? AND channel = ? AND (LOWER(key) LIKE ? ESCAPE '\\' OR LOWER(value) LIKE ? ESCAPE '\\') ORDER BY updatedAt DESC",
         [userId, channel, `%${queryLower}%`, `%${queryLower}%`]

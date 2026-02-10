@@ -30,6 +30,7 @@ import { registerDispatchSkill, clearDispatchSkills } from './executor';
 // =============================================================================
 
 /** Cache bin lookups so we don't shell out repeatedly */
+const BIN_CACHE_MAX = 500;
 const binCache = new Map<string, boolean>();
 
 function hasBin(name: string): boolean {
@@ -41,6 +42,10 @@ function hasBin(name: string): boolean {
     found = true;
   } catch {
     found = false;
+  }
+  if (binCache.size >= BIN_CACHE_MAX) {
+    const firstKey = binCache.keys().next().value;
+    if (firstKey !== undefined) binCache.delete(firstKey);
   }
   binCache.set(name, found);
   return found;
@@ -96,6 +101,8 @@ function checkGates(gates?: SkillGates, configKeys?: Record<string, unknown>): b
       let val: unknown = configKeys;
       for (const part of parts) {
         if (typeof val !== 'object' || val === null) { val = undefined; break; }
+        if (part === '__proto__' || part === 'constructor' || part === 'prototype') { val = undefined; break; }
+        if (!Object.prototype.hasOwnProperty.call(val, part)) { val = undefined; break; }
         val = (val as Record<string, unknown>)[part];
       }
       if (!val) return false;
@@ -161,13 +168,14 @@ function parseSubcommands(skillName: string, content: string): Array<{ name: str
   const seen = new Set<string>();
   const result: Array<{ name: string; description: string; category: string }> = [];
   const normalized = skillName.toLowerCase().replace(/\s+/g, '-');
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   const lines = content.split('\n');
   let currentSection = 'General';
 
   const tableRegex = /^\|\s*`\/?[\w-]+\s+([\w-]+)(?:\s[^`]*)?\`\s*\|\s*([^|]+)\|/;
   const lineRegex = new RegExp(
-    `^\\s*\\/?${normalized}\\s+(\\w[\\w-]*)(?:\\s[^#\\n]*)?(?:#\\s*(.+))?$`
+    `^\\s*\\/?${escaped}\\s+(\\w[\\w-]*)(?:\\s[^#\\n]*)?(?:#\\s*(.+))?$`
   );
 
   for (const line of lines) {
@@ -345,18 +353,21 @@ export function loadSkillsFromDir(
     if (opts?.allowList && !opts.allowList.includes(entry.name)) continue;
 
     const skillPath = path.join(dir, entry.name, 'SKILL.md');
+    const resolvedSkillPath = path.resolve(skillPath);
+    if (!resolvedSkillPath.startsWith(path.resolve(dir) + path.sep)) continue;
     if (fs.existsSync(skillPath)) {
       const skill = loadSkill(skillPath, opts?.configKeys);
       if (skill) {
         skills.push(skill);
       }
     } else {
-      // Fallback: try loading from JS module default export
       const indexPath = path.join(dir, entry.name, 'index.js');
-      if (fs.existsSync(indexPath)) {
+      const resolvedIndex = path.resolve(indexPath);
+      if (!resolvedIndex.startsWith(path.resolve(dir) + path.sep)) continue;
+      if (fs.existsSync(resolvedIndex)) {
         try {
           // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const mod = require(indexPath);
+          const mod = require(resolvedIndex);
           const def = mod.default || mod;
           if (def && def.name) {
             const cmds = (def.commands || []) as string[];
@@ -403,6 +414,7 @@ export interface SkillManager {
  * Priority: workspace > managed > extraDirs > bundled
  */
 export function createSkillManager(workspacePath?: string, config?: SkillManagerConfig): SkillManager {
+  const SNAPSHOT_CACHE_MAX = 50;
   const skillsMap = new Map<string, Skill>();
   const snapshots = new Map<string, SkillSnapshot>();
   const watchers: fs.FSWatcher[] = [];
@@ -421,6 +433,10 @@ export function createSkillManager(workspacePath?: string, config?: SkillManager
       return cached.skills;
     }
     const skills = loadSkillsFromDir(dir, opts);
+    if (snapshots.size >= SNAPSHOT_CACHE_MAX) {
+      const firstKey = snapshots.keys().next().value;
+      if (firstKey !== undefined) snapshots.delete(firstKey);
+    }
     snapshots.set(dir, { hash, skills });
     return skills;
   };

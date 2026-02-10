@@ -251,8 +251,8 @@ async function handleRoute(from: string, to: string): Promise<string> {
     return `**Best Route: ${from} -> ${to}**\n\n` +
       `DEX: ${best.dex || 'Unknown'}\n` +
       `Pool: \`${best.address || 'Unknown'}\`\n` +
-      `Liquidity: $${(best.liquidity || 0).toLocaleString()}\n` +
-      `24h Volume: $${(best.volume24h || 0).toLocaleString()}`;
+      `Liquidity: $${(best.liquidity ?? 0).toLocaleString()}\n` +
+      `24h Volume: $${(best.volume24h ?? 0).toLocaleString()}`;
   } catch (error) {
     return `Error finding route: ${error instanceof Error ? error.message : String(error)}`;
   }

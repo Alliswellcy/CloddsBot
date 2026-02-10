@@ -25,7 +25,7 @@ export function createTriggerRouter(deps: TriggerRouterDeps): Router {
       res.json({ ok: true, data: { triggers, count: triggers.length } });
     } catch (err) {
       logger.warn({ err }, 'Trigger API: Failed to list triggers');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -41,7 +41,7 @@ export function createTriggerRouter(deps: TriggerRouterDeps): Router {
       res.json({ ok: true, data: trigger });
     } catch (err) {
       logger.warn({ err }, 'Trigger API: Failed to get trigger');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -87,7 +87,7 @@ export function createTriggerRouter(deps: TriggerRouterDeps): Router {
       res.json({ ok: true, data: { id: triggerId } });
     } catch (err) {
       logger.warn({ err }, 'Trigger API: Failed to create trigger');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -103,7 +103,7 @@ export function createTriggerRouter(deps: TriggerRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, status: 'cancelled' } });
     } catch (err) {
       logger.warn({ err }, 'Trigger API: Failed to cancel trigger');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -115,7 +115,7 @@ export function createTriggerRouter(deps: TriggerRouterDeps): Router {
       res.json({ ok: true, data: { status: 'monitoring' } });
     } catch (err) {
       logger.warn({ err }, 'Trigger API: Failed to start monitoring');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -127,7 +127,7 @@ export function createTriggerRouter(deps: TriggerRouterDeps): Router {
       res.json({ ok: true, data: { status: 'stopped' } });
     } catch (err) {
       logger.warn({ err }, 'Trigger API: Failed to stop monitoring');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

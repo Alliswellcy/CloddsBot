@@ -74,7 +74,7 @@ async function handleLong(market: string, size: string, price?: string): Promise
       `Market: ${market} (index: ${marketIndex})\n` +
       `Size: ${size}\n` +
       `Type: ${price ? `Limit @ ${price}` : 'Market'}\n` +
-      `Order ID: ${result.orderId || 'N/A'}\n` +
+      `Order ID: ${result.orderId ?? 'N/A'}\n` +
       `TX: \`${result.txSig}\``;
   } catch (error) {
     return `Long failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -111,7 +111,7 @@ async function handleShort(market: string, size: string, price?: string): Promis
       `Market: ${market} (index: ${marketIndex})\n` +
       `Size: ${size}\n` +
       `Type: ${price ? `Limit @ ${price}` : 'Market'}\n` +
-      `Order ID: ${result.orderId || 'N/A'}\n` +
+      `Order ID: ${result.orderId ?? 'N/A'}\n` +
       `TX: \`${result.txSig}\``;
   } catch (error) {
     return `Short failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -138,8 +138,8 @@ async function handlePositions(): Promise<string> {
     for (const pos of positions) {
       output += `**Market ${pos.marketIndex}** (${pos.marketType})\n`;
       output += `  Size: ${pos.baseAssetAmount}\n`;
-      output += `  Entry: ${pos.entryPrice || 'N/A'}\n`;
-      output += `  Unrealized PnL: ${pos.unrealizedPnl || 'N/A'}\n`;
+      output += `  Entry: ${pos.entryPrice ?? 'N/A'}\n`;
+      output += `  Unrealized PnL: ${pos.unrealizedPnl ?? 'N/A'}\n`;
       output += '\n';
     }
     return output;
@@ -169,9 +169,9 @@ async function handleOrders(): Promise<string> {
       output += `**Order ${order.orderId}**\n`;
       output += `  Market: ${order.marketIndex}\n`;
       output += `  Side: ${order.direction}\n`;
-      output += `  Price: ${order.price || 'Market'}\n`;
+      output += `  Price: ${order.price ?? 'Market'}\n`;
       output += `  Size: ${order.baseAssetAmount}\n`;
-      output += `  Filled: ${order.baseAssetAmountFilled || 0}\n`;
+      output += `  Filled: ${order.baseAssetAmountFilled ?? 0}\n`;
       output += '\n';
     }
     return output;
@@ -193,10 +193,10 @@ async function handleBalance(): Promise<string> {
     const balance = await drift.getDriftBalance(connection, keypair);
 
     return `**Drift Account**\n\n` +
-      `Total Collateral: $${balance.totalCollateral?.toLocaleString() || '0'}\n` +
-      `Free Collateral: $${balance.freeCollateral?.toLocaleString() || '0'}\n` +
-      `Margin Ratio: ${balance.marginRatio || 'N/A'}%\n` +
-      `Unrealized PnL: $${balance.unrealizedPnl?.toLocaleString() || '0'}`;
+      `Total Collateral: $${balance.totalCollateral?.toLocaleString() ?? '0'}\n` +
+      `Free Collateral: $${balance.freeCollateral?.toLocaleString() ?? '0'}\n` +
+      `Margin Ratio: ${balance.marginRatio ?? 'N/A'}%\n` +
+      `Unrealized PnL: $${balance.unrealizedPnl?.toLocaleString() ?? '0'}`;
   } catch (error) {
     return `Error: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -243,6 +243,7 @@ async function handleLeverage(market: string, leverage: string): Promise<string>
     const { marketIndex } = parseMarket(market);
     if (marketIndex < 0) return `Unknown market: ${market}. Use SOL-PERP, BTC-PERP, ETH-PERP, or a numeric index.`;
     const leverageNum = parseFloat(leverage);
+    if (isNaN(leverageNum) || leverageNum <= 0) return `Invalid leverage: ${leverage}`;
 
     const result = await drift.setDriftLeverage(connection, keypair, {
       marketIndex,
@@ -269,8 +270,11 @@ async function handleModify(orderId: string, newPrice?: string, newSize?: string
     const keypair = wallet.loadSolanaKeypair();
     const connection = wallet.getSolanaConnection();
 
+    const parsedOrderId = parseInt(orderId, 10);
+    if (isNaN(parsedOrderId)) return `Invalid order ID: ${orderId}. Must be a number.`;
+
     const result = await drift.modifyDriftOrder(connection, keypair, {
-      orderId: parseInt(orderId, 10),
+      orderId: parsedOrderId,
       newPrice,
       newBaseAmount: newSize,
     });

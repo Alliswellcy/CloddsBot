@@ -56,8 +56,10 @@ async function handleDeposit(args: string[]): Promise<string> {
 
     const tokens = await tokenlist.getTokenList();
     const tokenInfo = tokens.find(t => t.address === mint);
-    const decimals = tokenInfo?.decimals || 6;
-    const amountLamports = (parseFloat(amount) * Math.pow(10, decimals)).toString();
+    const decimals = tokenInfo?.decimals ?? 6;
+    const parsed = parseFloat(amount);
+    if (isNaN(parsed) || parsed <= 0) return `Invalid amount: ${amount}`;
+    const amountLamports = (parsed * Math.pow(10, decimals)).toString();
 
     const result = await marginfi.marginfiDeposit(connection, keypair, {
       bankMint: mint,
@@ -97,8 +99,10 @@ async function handleWithdraw(args: string[]): Promise<string> {
 
     const tokens = await tokenlist.getTokenList();
     const tokenInfo = tokens.find(t => t.address === mint);
-    const decimals = tokenInfo?.decimals || 6;
-    const amountLamports = withdrawAll ? '0' : (parseFloat(amount) * Math.pow(10, decimals)).toString();
+    const decimals = tokenInfo?.decimals ?? 6;
+    const parsed = withdrawAll ? 0 : parseFloat(amount);
+    if (!withdrawAll && (isNaN(parsed) || parsed <= 0)) return `Invalid amount: ${amount}`;
+    const amountLamports = withdrawAll ? '0' : (parsed * Math.pow(10, decimals)).toString();
 
     const result = await marginfi.marginfiWithdraw(connection, keypair, {
       bankMint: mint,
@@ -138,8 +142,10 @@ async function handleBorrow(args: string[]): Promise<string> {
 
     const tokens = await tokenlist.getTokenList();
     const tokenInfo = tokens.find(t => t.address === mint);
-    const decimals = tokenInfo?.decimals || 6;
-    const amountLamports = (parseFloat(amount) * Math.pow(10, decimals)).toString();
+    const decimals = tokenInfo?.decimals ?? 6;
+    const parsed = parseFloat(amount);
+    if (isNaN(parsed) || parsed <= 0) return `Invalid amount: ${amount}`;
+    const amountLamports = (parsed * Math.pow(10, decimals)).toString();
 
     const result = await marginfi.marginfiBorrow(connection, keypair, {
       bankMint: mint,
@@ -179,8 +185,10 @@ async function handleRepay(args: string[]): Promise<string> {
 
     const tokens = await tokenlist.getTokenList();
     const tokenInfo = tokens.find(t => t.address === mint);
-    const decimals = tokenInfo?.decimals || 6;
-    const amountLamports = repayAll ? '0' : (parseFloat(amount) * Math.pow(10, decimals)).toString();
+    const decimals = tokenInfo?.decimals ?? 6;
+    const parsed = repayAll ? 0 : parseFloat(amount);
+    if (!repayAll && (isNaN(parsed) || parsed <= 0)) return `Invalid amount: ${amount}`;
+    const amountLamports = repayAll ? '0' : (parsed * Math.pow(10, decimals)).toString();
 
     const result = await marginfi.marginfiRepay(connection, keypair, {
       bankMint: mint,
@@ -218,17 +226,17 @@ async function handleAccount(): Promise<string> {
     output += `LTV: ${account.ltv.toFixed(1)}%\n\n`;
 
     if (account.deposits.length > 0) {
-      output += `**Deposits** ($${parseFloat(account.totalDepositValue).toFixed(2)})\n`;
+      output += `**Deposits** ($${(parseFloat(account.totalDepositValue) || 0).toFixed(2)})\n`;
       for (const dep of account.deposits) {
-        output += `  ${dep.symbol}: ${dep.amount} ($${parseFloat(dep.amountUsd).toFixed(2)})\n`;
+        output += `  ${dep.symbol}: ${dep.amount} ($${(parseFloat(dep.amountUsd) || 0).toFixed(2)})\n`;
       }
       output += '\n';
     }
 
     if (account.borrows.length > 0) {
-      output += `**Borrows** ($${parseFloat(account.totalBorrowValue).toFixed(2)})\n`;
+      output += `**Borrows** ($${(parseFloat(account.totalBorrowValue) || 0).toFixed(2)})\n`;
       for (const bor of account.borrows) {
-        output += `  ${bor.symbol}: ${bor.amount} ($${parseFloat(bor.amountUsd).toFixed(2)})\n`;
+        output += `  ${bor.symbol}: ${bor.amount} ($${(parseFloat(bor.amountUsd) || 0).toFixed(2)})\n`;
       }
     }
 
@@ -265,8 +273,8 @@ async function handleHealth(): Promise<string> {
       `Health Factor: **${hf === Infinity ? '∞' : hf.toFixed(2)}**\n` +
       `Risk Level: **${riskLevel}**\n` +
       `LTV: ${account.ltv.toFixed(1)}%\n\n` +
-      `Total Deposits: $${parseFloat(account.totalDepositValue).toFixed(2)}\n` +
-      `Total Borrows: $${parseFloat(account.totalBorrowValue).toFixed(2)}`;
+      `Total Deposits: $${(parseFloat(account.totalDepositValue) || 0).toFixed(2)}\n` +
+      `Total Borrows: $${(parseFloat(account.totalBorrowValue) || 0).toFixed(2)}`;
   } catch (error) {
     return wrapSkillError('MarginFi', 'health check', error);
   }

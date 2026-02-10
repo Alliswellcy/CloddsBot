@@ -305,7 +305,7 @@ async function execute(args: string): Promise<string> {
           const first = snapshots[0];
           const last = snapshots[snapshots.length - 1];
           const valueChange = last.totalValue - first.totalValue;
-          const valueChangePct = first.totalValue > 0 ? (valueChange / first.totalValue) * 100 : 0;
+          const valueChangePct = first.totalValue !== 0 ? (valueChange / first.totalValue) * 100 : 0;
           const sign = (v: number) => v >= 0 ? '+' : '';
 
           const peak = Math.max(...snapshots.map((s: { totalValue: number }) => s.totalValue));
@@ -350,8 +350,8 @@ async function execute(args: string): Promise<string> {
       default:
         return helpText();
     }
-  } catch {
-    return helpText();
+  } catch (error) {
+    return `Portfolio error: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 

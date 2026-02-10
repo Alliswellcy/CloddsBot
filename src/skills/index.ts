@@ -3,6 +3,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, createWriteStream } from 'fs';
+import * as path from 'path';
 import { join, basename } from 'path';
 import { homedir, tmpdir } from 'os';
 import { EventEmitter } from 'events';
@@ -83,6 +84,7 @@ export class SkillRegistry extends EventEmitter {
 
   constructor(skillsDir?: string, registryUrl?: string) {
     super();
+    this.setMaxListeners(50);
     this.skillsDir = skillsDir || join(homedir(), '.clodds', 'skills');
     this.registryUrl = registryUrl || 'https://registry.clodds.dev';
     this.ensureDir();
@@ -125,13 +127,20 @@ export class SkillRegistry extends EventEmitter {
   }
 
   async installLocal(sourcePath: string): Promise<InstalledSkill> {
-    const manifestPath = join(sourcePath, 'skill.json');
+    const resolvedSource = path.resolve(sourcePath);
+    const manifestPath = join(resolvedSource, 'skill.json');
     if (!existsSync(manifestPath)) {
       throw new Error('Invalid skill: missing skill.json');
     }
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as SkillManifest;
+    if (!manifest.name || /[\/\\.\s]/.test(manifest.name)) {
+      throw new Error('Invalid skill name in manifest');
+    }
     const skillPath = join(this.skillsDir, manifest.name);
-    await execAsync(`cp -r "${sourcePath}" "${skillPath}"`);
+    if (!path.resolve(skillPath).startsWith(path.resolve(this.skillsDir) + path.sep)) {
+      throw new Error('Invalid skill name: path traversal detected');
+    }
+    await execAsync(`cp -r ${JSON.stringify(resolvedSource)} ${JSON.stringify(skillPath)}`);
     const installed: InstalledSkill = {
       manifest,
       path: skillPath,
@@ -405,10 +414,8 @@ export class SkillsRegistryClient {
     try {
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as SkillManifest & { postInstall?: string };
 
-      // Run postInstall script if defined
       if (manifest.postInstall) {
-        logger.info({ skillDir }, 'Running post-install script');
-        await execAsync(manifest.postInstall, { cwd: skillDir });
+        logger.warn({ skillDir, script: manifest.postInstall }, 'Skipping untrusted postInstall script');
       }
 
       // Install npm dependencies if package.json exists
@@ -431,6 +438,10 @@ export class SkillsRegistryClient {
 
   /** Install a skill from the registry */
   async install(slug: string, options?: { force?: boolean }): Promise<InstalledSkill> {
+    if (!slug || /[\/\\]/.test(slug) || slug === '.' || slug === '..') {
+      throw new Error(`Invalid skill slug: '${slug}'`);
+    }
+
     const skill = await this.getSkill(slug);
     if (!skill) {
       throw new Error(`Skill '${slug}' not found in registry`);
@@ -524,7 +535,9 @@ export class SkillsRegistryClient {
       if (existsSync(indexPath)) {
         try {
           index = JSON.parse(readFileSync(indexPath, 'utf-8'));
-        } catch {}
+        } catch (err) {
+          logger.warn({ err, indexPath }, 'Failed to parse skills index, recreating');
+        }
       }
       index.skills[slug] = installed;
       writeFileSync(indexPath, JSON.stringify(index, null, 2));
@@ -581,8 +594,8 @@ export class SkillsRegistryClient {
     for (const entry of entries) {
       if (entry.isDirectory()) {
         try {
-          await this.update(entry.name);
-          results.push({ slug: entry.name, updated: true });
+          const result = await this.update(entry.name);
+          results.push({ slug: entry.name, updated: result !== null });
         } catch (error) {
           results.push({ slug: entry.name, updated: false, error: String(error) });
         }
@@ -594,7 +607,13 @@ export class SkillsRegistryClient {
 
   /** Uninstall a skill */
   async uninstall(slug: string): Promise<boolean> {
+    if (!slug || /[\/\\]/.test(slug) || slug === '.' || slug === '..') {
+      throw new Error(`Invalid skill slug: '${slug}'`);
+    }
     const skillDir = join(this.skillsDir, slug);
+    if (!path.resolve(skillDir).startsWith(path.resolve(this.skillsDir) + path.sep)) {
+      throw new Error('Path traversal detected');
+    }
     if (!existsSync(skillDir)) return false;
 
     rmSync(skillDir, { recursive: true, force: true });
@@ -634,7 +653,9 @@ export class SkillsRegistryClient {
                 latestVersion: remote.version,
               });
             }
-          } catch {}
+          } catch (err) {
+            logger.warn({ err, slug: entry.name }, 'Failed to check update for skill');
+          }
         }
       }
     }

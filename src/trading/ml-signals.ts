@@ -701,7 +701,9 @@ export function createEnsembleModel(configs: ModelConfig[]): MLSignalModel {
 
   return {
     async predict(features: MarketFeatures): Promise<MLSignal> {
-      const predictions = await Promise.all(models.map(m => m.predict(features)));
+      const settled = await Promise.allSettled(models.map(m => m.predict(features)));
+      const predictions = settled.filter((r): r is PromiseFulfilledResult<MLSignal> => r.status === 'fulfilled').map(r => r.value);
+      if (predictions.length === 0) throw new Error('All ensemble models failed');
 
       // Average predictions
       const avgProbUp = average(predictions.map(p => p.probUp));
@@ -739,7 +741,9 @@ export function createEnsembleModel(configs: ModelConfig[]): MLSignalModel {
     },
 
     async train(data: TrainingData[]): Promise<{ accuracy: number; auc: number }> {
-      const results = await Promise.all(models.map(m => m.train(data)));
+      const settled = await Promise.allSettled(models.map(m => m.train(data)));
+      const results = settled.filter((r): r is PromiseFulfilledResult<{ accuracy: number; auc: number }> => r.status === 'fulfilled').map(r => r.value);
+      if (results.length === 0) throw new Error('All ensemble models failed to train');
       return {
         accuracy: average(results.map(r => r.accuracy)),
         auc: average(results.map(r => r.auc)),
@@ -764,7 +768,7 @@ export function createEnsembleModel(configs: ModelConfig[]): MLSignalModel {
     },
 
     async retrain(): Promise<void> {
-      await Promise.all(models.map(m => m.retrain()));
+      await Promise.allSettled(models.map(m => m.retrain()));
     },
   };
 }

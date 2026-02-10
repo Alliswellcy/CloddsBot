@@ -68,8 +68,9 @@ export async function createTwitchChannel(
       }
     }
 
+    const escapedUsername = config.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const cleanMessage = message
-      .replace(new RegExp(`@${config.username}`, 'gi'), '')
+      .replace(new RegExp(`@${escapedUsername}`, 'gi'), '')
       .trim();
 
     const incomingMessage: IncomingMessage = {
@@ -79,7 +80,7 @@ export async function createTwitchChannel(
       chatId: channelName,
       chatType: 'group',
       text: cleanMessage,
-      timestamp: new Date(parseInt(tags['tmi-sent-ts'] || String(Date.now()))),
+      timestamp: new Date(parseInt(tags['tmi-sent-ts'] || String(Date.now()), 10)),
     };
 
     logger.info({ username, channel: channelName }, 'Received Twitch message');

@@ -316,7 +316,7 @@ export async function pancakeSwap(params: PancakeSwapParams): Promise<PancakeSwa
     }
 
     const router = new Contract(config.swapRouter, SWAP_ROUTER_ABI, wallet);
-    const fee = quote.feeTier || 2500;
+    const fee = quote.feeTier ?? 2500;
 
     const swapParams = {
       tokenIn: quote.inputToken,
@@ -342,6 +342,10 @@ export async function pancakeSwap(params: PancakeSwapParams): Promise<PancakeSwa
     });
 
     const receipt = await tx.wait();
+
+    if (!receipt || receipt.status !== 1) {
+      throw new Error(`PancakeSwap swap reverted on-chain (txHash: ${receipt?.hash})`);
+    }
 
     logger.info({ txHash: receipt.hash, gasUsed: receipt.gasUsed.toString() }, 'PancakeSwap swap complete');
 

@@ -1852,9 +1852,9 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     }
 
     const platform = typeof req.query.platform === 'string' ? req.query.platform : undefined;
-    const limit = req.query.limit ? Number.parseInt(String(req.query.limit), 10) : undefined;
+    const limit = req.query.limit ? (Number.parseInt(String(req.query.limit), 10) || undefined) : undefined;
     const maxCandidates = req.query.maxCandidates
-      ? Number.parseInt(String(req.query.maxCandidates), 10)
+      ? (Number.parseInt(String(req.query.maxCandidates), 10) || undefined)
       : undefined;
     const minScore = req.query.minScore ? Number.parseFloat(String(req.query.minScore)) : undefined;
 

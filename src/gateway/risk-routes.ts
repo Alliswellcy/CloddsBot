@@ -25,7 +25,7 @@ export function createRiskRouter(deps: RiskRouterDeps): Router {
       res.json({ ok: true, data: snapshot });
     } catch (err) {
       logger.warn({ err }, 'Risk API: Failed to get portfolio risk');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -37,7 +37,7 @@ export function createRiskRouter(deps: RiskRouterDeps): Router {
       res.json({ ok: true, data: { regime } });
     } catch (err) {
       logger.warn({ err }, 'Risk API: Failed to get regime');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -49,7 +49,7 @@ export function createRiskRouter(deps: RiskRouterDeps): Router {
       res.json({ ok: true, data: dashboard });
     } catch (err) {
       logger.warn({ err }, 'Risk API: Failed to get dashboard');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -78,7 +78,7 @@ export function createRiskRouter(deps: RiskRouterDeps): Router {
       res.json({ ok: true, data: decision });
     } catch (err) {
       logger.warn({ err }, 'Risk API: Trade validation failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -91,7 +91,7 @@ export function createRiskRouter(deps: RiskRouterDeps): Router {
       res.json({ ok: true, data: result });
     } catch (err) {
       logger.warn({ err }, 'Risk API: Stress test failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -117,7 +117,7 @@ export function createRiskRouter(deps: RiskRouterDeps): Router {
       res.json({ ok: true, data: { recorded: true } });
     } catch (err) {
       logger.warn({ err }, 'Risk API: Record PnL failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

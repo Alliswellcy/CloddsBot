@@ -35,7 +35,7 @@ export function createPaymentsRouter(deps: PaymentsRouterDeps): Router {
       });
     } catch (err) {
       logger.warn({ err }, 'Payments API: Status failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -47,7 +47,7 @@ export function createPaymentsRouter(deps: PaymentsRouterDeps): Router {
       res.json({ ok: true, data: { payments: history, count: history.length } });
     } catch (err) {
       logger.warn({ err }, 'Payments API: History failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -64,7 +64,7 @@ export function createPaymentsRouter(deps: PaymentsRouterDeps): Router {
       res.json({ ok: true, data: balance });
     } catch (err) {
       logger.warn({ err }, 'Payments API: Balance failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -77,7 +77,7 @@ export function createPaymentsRouter(deps: PaymentsRouterDeps): Router {
       res.json({ ok: true, data: { network, address } });
     } catch (err) {
       logger.warn({ err }, 'Payments API: Address failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

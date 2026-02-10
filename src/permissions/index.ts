@@ -368,9 +368,9 @@ export function matchesAllowlistPattern(
 
     case 'regex':
       try {
-        if (entry.pattern.length > 1000) return false;
+        if (entry.pattern.length > 200) return false;
         const re = new RegExp(entry.pattern);
-        return re.test(command) || re.test(fullCommand);
+        return re.test(command.slice(0, 10000)) || re.test(fullCommand.slice(0, 10000));
       } catch {
         return false;
       }

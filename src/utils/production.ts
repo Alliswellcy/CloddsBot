@@ -202,7 +202,7 @@ export function trackError(
   const event: ErrorEvent = {
     timestamp: Date.now(),
     error: error.message,
-    stack: error.stack,
+    stack: error.stack?.replace(/\(\/[^\)]+\)/g, '(<path>)').replace(/at \/[^\s]+/g, 'at <path>'),
     handler: context?.handler,
     userId: context?.userId,
     context: context?.extra,

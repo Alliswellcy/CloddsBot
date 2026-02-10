@@ -327,6 +327,7 @@ export class SwarmArbitrageBot extends EventEmitter {
     const mostExpensive = sorted[sorted.length - 1];
 
     // Calculate spread in basis points
+    if (cheapest.price <= 0) return null;
     const spreadBps = ((mostExpensive.price - cheapest.price) / cheapest.price) * 10000;
 
     if (spreadBps < this.config.minSpreadBps) return null;
@@ -467,8 +468,8 @@ export class SwarmArbitrageBot extends EventEmitter {
       executionMode: 'bundle', // Atomic execution
     });
 
-    const totalSolReceived = sellResult.walletResults.reduce((sum, r) => sum + (r.solAmount || 0), 0);
-    const actualProfit = totalSolReceived - (buyResult.totalSolSpent || 0);
+    const totalSolReceived = sellResult.walletResults.reduce((sum, r) => sum + (r.solAmount ?? 0), 0);
+    const actualProfit = totalSolReceived - (buyResult.totalSolSpent ?? 0);
 
     return {
       opportunity,
@@ -513,8 +514,8 @@ export class SwarmArbitrageBot extends EventEmitter {
       executionMode: 'parallel',
     });
 
-    const totalSolReceived = sellResult.walletResults.reduce((sum, r) => sum + (r.solAmount || 0), 0);
-    const actualProfit = totalSolReceived - (buyResult.totalSolSpent || 0);
+    const totalSolReceived = sellResult.walletResults.reduce((sum, r) => sum + (r.solAmount ?? 0), 0);
+    const actualProfit = totalSolReceived - (buyResult.totalSolSpent ?? 0);
 
     return {
       opportunity,

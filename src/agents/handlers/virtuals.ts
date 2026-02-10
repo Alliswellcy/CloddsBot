@@ -67,7 +67,7 @@ async function agentsHandler(toolInput: ToolInput): Promise<HandlerResult> {
  * virtuals_trending - Get trending agents
  */
 async function trendingHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 10;
+  const limit = (toolInput.limit as number) ?? 10;
 
   return safeHandler(async () => {
     const f = await getFeed();
@@ -80,7 +80,7 @@ async function trendingHandler(toolInput: ToolInput): Promise<HandlerResult> {
  * virtuals_new - Get new agents
  */
 async function newHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 10;
+  const limit = (toolInput.limit as number) ?? 10;
 
   return safeHandler(async () => {
     const f = await getFeed();

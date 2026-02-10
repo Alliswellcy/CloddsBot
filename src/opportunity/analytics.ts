@@ -473,8 +473,9 @@ export function createOpportunityAnalytics(db: Database): OpportunityAnalytics {
       }
 
       if (platform) {
-        whereClause += ' AND markets LIKE ?';
-        params.push(`%"platform":"${platform}"%`);
+        whereClause += " AND markets LIKE ? ESCAPE '\\'";
+        const escapedPlatform = platform.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+        params.push(`%"platform":"${escapedPlatform}"%`);
       }
 
       // Get totals
@@ -649,8 +650,9 @@ export function createOpportunityAnalytics(db: Database): OpportunityAnalytics {
       }
 
       if (platform) {
-        whereClause += ' AND markets LIKE ?';
-        params.push(`%"platform":"${platform}"%`);
+        whereClause += " AND markets LIKE ? ESCAPE '\\'";
+        const escapedPlatform = platform.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+        params.push(`%"platform":"${escapedPlatform}"%`);
       }
 
       if (minEdge !== undefined) {
@@ -1129,7 +1131,7 @@ export function createOpportunityAnalytics(db: Database): OpportunityAnalytics {
       for (const [minute, edges] of Object.entries(edgeByMinute)) {
         const avgEdge = edges.reduce((a, b) => a + b, 0) / edges.length;
         decayCurve.push({
-          minutesSinceDiscovery: parseInt(minute),
+          minutesSinceDiscovery: parseInt(minute, 10),
           remainingEdgePct: avgEdge,
         });
       }

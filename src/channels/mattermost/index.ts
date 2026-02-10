@@ -166,7 +166,8 @@ export async function createMattermostChannel(
     if (!isDM) {
       const requireMention = config.groups?.[post.channel_id]?.requireMention ?? true;
       if (requireMention && botUserId) {
-        const mentionPattern = new RegExp(`@${botUserId}|@clodds`, 'i');
+        const escapedBotId = botUserId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const mentionPattern = new RegExp(`@${escapedBotId}|@clodds`, 'i');
         if (!mentionPattern.test(text)) {
           return;
         }
@@ -193,7 +194,7 @@ export async function createMattermostChannel(
       }
     }
 
-    const cleanText = botUserId ? text.replace(new RegExp(`@${botUserId}`, 'gi'), '').trim() : text;
+    const cleanText = botUserId ? text.replace(new RegExp(`@${botUserId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'), '').trim() : text;
     const incomingMessage: IncomingMessage = {
       id: post.id,
       platform: 'mattermost',

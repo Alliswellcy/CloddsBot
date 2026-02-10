@@ -228,9 +228,12 @@ Examples:
 
   for (let i = 2; i < args.length; i++) {
     if (args[i] === '--pool' && args[i + 1]) { pool = args[++i]; }
-    else if (args[i] === '--slippage' && args[i + 1]) { slippageBps = parseInt(args[++i]); }
-    else if (args[i] === '--priority' && args[i + 1]) { priorityFee = parseInt(args[++i]); }
+    else if (args[i] === '--slippage' && args[i + 1]) { slippageBps = parseInt(args[++i], 10); }
+    else if (args[i] === '--priority' && args[i + 1]) { priorityFee = parseInt(args[++i], 10); }
   }
+
+  if (isNaN(slippageBps)) slippageBps = 500;
+  if (priorityFee !== undefined && isNaN(priorityFee)) priorityFee = undefined;
 
   try {
     const { wallet, pumpapi } = await getSolanaModules();
@@ -289,8 +292,10 @@ Examples:
 
   for (let i = 2; i < args.length; i++) {
     if (args[i] === '--pool' && args[i + 1]) { pool = args[++i]; }
-    else if (args[i] === '--slippage' && args[i + 1]) { slippageBps = parseInt(args[++i]); }
+    else if (args[i] === '--slippage' && args[i + 1]) { slippageBps = parseInt(args[++i], 10); }
   }
+
+  if (isNaN(slippageBps)) slippageBps = 1000;
 
   try {
     const { wallet, pumpapi } = await getSolanaModules();
@@ -988,7 +993,7 @@ async function handleTrades(args: string[]): Promise<string> {
   let limit = 20;
 
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--limit' && args[i + 1]) { limit = parseInt(args[++i]); }
+    if (args[i] === '--limit' && args[i + 1]) { limit = parseInt(args[++i], 10); }
   }
 
   try {
@@ -1382,7 +1387,7 @@ Use this URI when creating your token.`;
 async function handleLatestTrades(args: string[]): Promise<string> {
   let limit = 20;
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--limit' && args[i + 1]) { limit = parseInt(args[++i]); }
+    if (args[i] === '--limit' && args[i + 1]) { limit = parseInt(args[++i], 10); }
   }
 
   try {
@@ -1456,7 +1461,7 @@ Example:
     else if (args[i] === '--telegram' && args[i + 1]) { telegram = args[++i]; }
     else if (args[i] === '--website' && args[i + 1]) { website = args[++i]; }
     else if (args[i] === '--initial' && args[i + 1]) { initialBuy = parseFloat(args[++i]); }
-    else if (args[i] === '--slippage' && args[i + 1]) { slippage = parseInt(args[++i]); }
+    else if (args[i] === '--slippage' && args[i + 1]) { slippage = parseInt(args[++i], 10); }
     else if (args[i] === '--priority' && args[i + 1]) { priorityFee = parseFloat(args[++i]); }
   }
 

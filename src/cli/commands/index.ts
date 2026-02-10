@@ -78,7 +78,8 @@ export function createConfigCommands(program: Command): void {
       }
 
       writeFileSync(configPath, JSON.stringify(data, null, 2));
-      console.log(`Set ${key} = ${value}`);
+      const sensitive = /key|secret|password|token|private/i.test(key);
+      console.log(`Set ${key} = ${sensitive ? '***' : value}`);
     });
 
   config
@@ -959,7 +960,7 @@ export function createMemoryCommands(program: Command): void {
     .option('-c, --channel <channel>', 'Search only in specific channel')
     .action(async (userId: string, query: string, options: { channel?: string }) => {
       await withDb((db) => {
-        let sql = 'SELECT * FROM user_memory WHERE userId = ? AND (key LIKE ? OR value LIKE ?)';
+        let sql = "SELECT * FROM user_memory WHERE userId = ? AND (key LIKE ? ESCAPE '\\' OR value LIKE ? ESCAPE '\\')";
         const escapedQuery = query.replace(/[%_\\]/g, '\\$&');
         const searchPattern = `%${escapedQuery}%`;
         const params: string[] = [userId, searchPattern, searchPattern];

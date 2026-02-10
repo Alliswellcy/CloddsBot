@@ -704,8 +704,8 @@ export function createServer(
       }
 
       // Read from messages table (paginated)
-      const limit = Math.min(parseInt(req.query.limit as string) || 500, 1000);
-      const before = parseInt(req.query.before as string) || undefined;
+      const limit = Math.min(parseInt(req.query.limit as string, 10) || 500, 1000);
+      const before = parseInt(req.query.before as string, 10) || undefined;
       let messages: Array<{ id: string; role: string; content: string; timestamp: number }> = [];
 
       if (db.getSessionMessages) {

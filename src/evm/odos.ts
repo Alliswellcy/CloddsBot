@@ -281,14 +281,22 @@ export async function executeOdosSwap(request: OdosSwapRequest): Promise<OdosSwa
       output: `${quote.outputAmount} ${request.outputToken}`,
     }, 'Executing Odos swap');
 
+    const MAX_GAS_LIMIT = 5_000_000n;
+    const bufferedGas = BigInt(Math.floor(tx.gas * 1.2));
+    const gasLimit = bufferedGas > MAX_GAS_LIMIT ? MAX_GAS_LIMIT : bufferedGas;
+
     const txResponse = await wallet.sendTransaction({
       to: tx.to,
       data: tx.data,
       value: BigInt(tx.value),
-      gasLimit: BigInt(Math.floor(tx.gas * 1.2)), // 20% buffer
+      gasLimit,
     });
 
     const receipt = await txResponse.wait();
+
+    if (!receipt || receipt.status !== 1) {
+      throw new Error(`Odos swap reverted on-chain (txHash: ${receipt?.hash})`);
+    }
 
     // Get actual output from receipt or use quote estimate
     const outputDecimals = await getTokenDecimals(request.chain, quote.outputToken);

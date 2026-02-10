@@ -23,9 +23,11 @@ async function execute(args: string): Promise<string> {
     const platformIdx = parts.indexOf('--platform');
     const platform = (platformIdx >= 0 ? parts[platformIdx + 1] : 'polymarket') as 'polymarket' | 'kalshi' | 'opinion' | 'predictfun';
     const priceIdx = parts.indexOf('--price');
-    const price = priceIdx >= 0 ? parseFloat(parts[priceIdx + 1]) : undefined;
+    const rawPrice = priceIdx >= 0 ? parseFloat(parts[priceIdx + 1]) : NaN;
+    const price = !isNaN(rawPrice) ? rawPrice : undefined;
     const slippageIdx = parts.indexOf('--slippage');
-    const maxSlippage = slippageIdx >= 0 ? parseFloat(parts[slippageIdx + 1]) / 100 : 0.02;
+    const rawSlippage = slippageIdx >= 0 ? parseFloat(parts[slippageIdx + 1]) : NaN;
+    const maxSlippage = !isNaN(rawSlippage) ? rawSlippage / 100 : 0.02;
 
     const service = createExecutionService({} as any);
 
@@ -48,7 +50,7 @@ async function execute(args: string): Promise<string> {
           return `**Trade blocked** — Circuit breaker tripped: ${state.tripReason || 'unknown'}\nUse \`/risk reset\` to re-arm.`;
         }
 
-        const request = { platform, marketId, price: price || 0.50, size };
+        const request = { platform, marketId, price: price ?? 0.50, size };
         const result = price
           ? await service.buyLimit(request)
           : await service.protectedBuy(request, maxSlippage);
@@ -56,7 +58,7 @@ async function execute(args: string): Promise<string> {
         cb.recordTrade({
           pnlUsd: 0,
           success: result.success,
-          sizeUsd: size * (price || 0.50),
+          sizeUsd: size * (price ?? 0.50),
           error: result.error,
         });
 
@@ -71,8 +73,8 @@ async function execute(args: string): Promise<string> {
               outcomeName: 'Yes',
               side: 'long',
               size,
-              entryPrice: result.avgFillPrice || price || 0.50,
-              currentPrice: result.avgFillPrice || price || 0.50,
+              entryPrice: result.avgFillPrice ?? (price ?? 0.50),
+              currentPrice: result.avgFillPrice ?? (price ?? 0.50),
               openedAt: new Date(),
             });
           } catch { /* position tracking non-critical */ }
@@ -100,7 +102,7 @@ async function execute(args: string): Promise<string> {
           return `**Trade blocked** — Circuit breaker tripped: ${state.tripReason || 'unknown'}\nUse \`/risk reset\` to re-arm.`;
         }
 
-        const request = { platform, marketId, price: price || 0.50, size };
+        const request = { platform, marketId, price: price ?? 0.50, size };
         const result = price
           ? await service.sellLimit(request)
           : await service.protectedSell(request, maxSlippage);
@@ -108,7 +110,7 @@ async function execute(args: string): Promise<string> {
         cb.recordTrade({
           pnlUsd: 0,
           success: result.success,
-          sizeUsd: size * (price || 0.50),
+          sizeUsd: size * (price ?? 0.50),
           error: result.error,
         });
 
@@ -119,7 +121,7 @@ async function execute(args: string): Promise<string> {
             const existing = pm.getPositionsByPlatform(platform as any)
               .find(p => p.tokenId === marketId && p.status === 'open');
             if (existing) {
-              pm.closePosition(existing.id, result.avgFillPrice || price || 0.50, 'manual');
+              pm.closePosition(existing.id, result.avgFillPrice ?? (price ?? 0.50), 'manual');
             }
           } catch { /* position tracking non-critical */ }
         }
@@ -174,7 +176,8 @@ async function execute(args: string): Promise<string> {
       case 'estimate': {
         if (!parts[1]) return 'Usage: /exec slippage <market-id> <size> [--platform <name>]';
         const marketId = parts[1];
-        const size = parseFloat(parts[2] || '100');
+        const rawSize = parseFloat(parts[2] || '100');
+        const size = isNaN(rawSize) || rawSize <= 0 ? 100 : rawSize;
         const estimate = await service.estimateSlippage({ platform, marketId, side: 'buy', price: 0.50, size });
         return `**Slippage Estimate**\n\nMarket: ${marketId}\nSize: ${size}\nEstimated slippage: ${(estimate.slippage * 100).toFixed(2)}%\nExpected price: ${estimate.expectedPrice.toFixed(4)}`;
       }
@@ -188,8 +191,10 @@ async function execute(args: string): Promise<string> {
         const marketId = parts[2];
         const totalSize = parseFloat(parts[3]);
         const twapPrice = parseFloat(parts[4]);
-        const slices = parts[5] ? parseInt(parts[5], 10) : 5;
-        const intervalSec = parts[6] ? parseInt(parts[6], 10) : 30;
+        const rawSlices = parts[5] ? parseInt(parts[5], 10) : NaN;
+        const slices = !isNaN(rawSlices) && rawSlices > 0 ? rawSlices : 5;
+        const rawInterval = parts[6] ? parseInt(parts[6], 10) : NaN;
+        const intervalSec = !isNaN(rawInterval) && rawInterval > 0 ? rawInterval : 30;
 
         if (isNaN(totalSize) || totalSize <= 0) return 'Invalid total size.';
         if (isNaN(twapPrice) || twapPrice < 0.01 || twapPrice > 0.99) return 'Invalid price (0.01-0.99).';

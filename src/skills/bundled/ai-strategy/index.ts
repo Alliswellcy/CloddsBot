@@ -178,7 +178,7 @@ function parseStrategy(text: string): Partial<ParsedStrategy> {
     for (const [, { pattern, mult }] of Object.entries(TIME_PATTERNS)) {
       const match = text.match(pattern);
       if (match) {
-        intervalMs = parseInt(match[1]) * mult;
+        intervalMs = parseInt(match[1], 10) * mult;
         break;
       }
     }
@@ -186,12 +186,12 @@ function parseStrategy(text: string): Partial<ParsedStrategy> {
     let count = 10; // Default
     const countMatch = text.match(/(\d+)\s*(?:times|iterations|rounds)/i);
     if (countMatch) {
-      count = parseInt(countMatch[1]);
+      count = parseInt(countMatch[1], 10);
     }
 
     const forMatch = text.match(/for\s*(\d+)/i);
     if (forMatch) {
-      count = parseInt(forMatch[1]);
+      count = parseInt(forMatch[1], 10);
     }
 
     result.schedule = {
@@ -359,8 +359,10 @@ async function executeStrategy(strategy: ParsedStrategy, currentPrice: number): 
     if (strategy.amount?.unit === 'sol') {
       amount = String(Math.floor(strategy.amount.value * 1e9));
     } else if (strategy.amount?.unit === 'usd') {
-      // Convert USD to SOL (rough estimate)
       const solPrice = await getSolPrice();
+      if (solPrice <= 0) {
+        throw new Error('Could not fetch SOL price for USD conversion');
+      }
       const solAmount = strategy.amount.value / solPrice;
       amount = String(Math.floor(solAmount * 1e9));
     } else {
@@ -395,7 +397,7 @@ async function executeStrategy(strategy: ParsedStrategy, currentPrice: number): 
       let sellAmount = balance;
 
       if (strategy.amount?.unit === 'percent') {
-        sellAmount = String(Math.floor(parseInt(balance) * (strategy.amount.value / 100)));
+        sellAmount = String(Math.floor(parseInt(balance, 10) * (strategy.amount.value / 100)));
       }
 
       const result = await executeJupiterSwap(connection, keypair, {
@@ -434,7 +436,7 @@ async function getSolPrice(): Promise<number> {
   try {
     const response = await fetch('https://price.jup.ag/v4/price?ids=So11111111111111111111111111111111111111112');
     const data = await response.json() as { data: Record<string, { price: number }> };
-    return data.data['So11111111111111111111111111111111111111112']?.price || 150;
+    return data.data['So11111111111111111111111111111111111111112']?.price ?? 150;
   } catch {
     return 150; // Fallback
   }
@@ -498,6 +500,10 @@ Examples:
         // Baseline will be set on first check if fetch fails
       }
     }
+  }
+
+  if (strategies.size >= 100) {
+    return 'Too many active strategies (max 100). Cancel some first with /strategy cancel <id>';
   }
 
   strategies.set(strategy.id, strategy);

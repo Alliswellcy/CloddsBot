@@ -24,7 +24,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { ...stats, running: service.isRunning() } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to get stats');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -35,7 +35,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { addresses, count: addresses.length } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to get followed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -47,7 +47,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { trades, count: trades.length } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to get trades');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -58,7 +58,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { positions, count: positions.length } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to get positions');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -73,7 +73,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { status: 'running' } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to start');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -88,7 +88,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { status: 'stopped' } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to stop');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -104,7 +104,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { address, followed: true } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to follow');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -120,7 +120,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { address, unfollowed: true } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to unfollow');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -131,7 +131,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { tradeId: req.params.tradeId, closed: true } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to close position');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -142,7 +142,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { closedAll: true } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to close all positions');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -154,7 +154,7 @@ export function createCopyTradingRouter(deps: CopyTradingRouterDeps): Router {
       res.json({ ok: true, data: { updated: true } });
     } catch (err) {
       logger.warn({ err }, 'Copy Trading API: Failed to update config');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

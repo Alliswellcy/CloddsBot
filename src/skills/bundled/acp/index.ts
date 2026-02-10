@@ -162,7 +162,7 @@ async function handleSearch(args: string): Promise<string> {
   const services = await registry.searchServices({
     category: categoryMatch?.[1] as ServiceCategory | undefined,
     maxPrice: maxPriceMatch?.[1],
-    minRating: minRatingMatch ? parseFloat(minRatingMatch[1]) : undefined,
+    minRating: minRatingMatch ? (isNaN(parseFloat(minRatingMatch[1])) ? undefined : parseFloat(minRatingMatch[1])) : undefined,
     query: queryMatch?.[1],
   });
 
@@ -409,7 +409,7 @@ async function handleRateService(args: string): Promise<string> {
     return 'Usage: /acp rate-service <service_id> --rating <1-5> --address <your_address> [--review "review text"]';
   }
 
-  const rating = parseInt(ratingMatch[1]);
+  const rating = parseInt(ratingMatch[1], 10);
   if (rating < 1 || rating > 5) {
     return 'Rating must be between 1 and 5';
   }

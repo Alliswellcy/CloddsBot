@@ -905,8 +905,8 @@ export function createHooksService(): HooksService {
           const pattern = Array.isArray(fieldCondition.value)
             ? fieldCondition.value.join('|')
             : fieldCondition.value;
-          if (pattern.length > 1000) return false;
-          return new RegExp(pattern).test(String(fieldValue));
+          if (pattern.length > 200) return false;
+          return new RegExp(pattern).test(String(fieldValue).slice(0, 10000));
         } catch {
           return false;
         }

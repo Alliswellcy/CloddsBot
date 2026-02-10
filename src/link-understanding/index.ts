@@ -176,18 +176,19 @@ async function fetchUrl(url: string, options: FetchOptions = {}): Promise<{ cont
 
 /** Extract meta tag content */
 function extractMeta(html: string, property: string): string | undefined {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Try property attribute
-  const propRegex = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
+  const propRegex = new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["']`, 'i');
   let match = html.match(propRegex);
   if (match) return decodeHtmlEntities(match[1]);
 
   // Try name attribute
-  const nameRegex = new RegExp(`<meta[^>]+name=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
+  const nameRegex = new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']+)["']`, 'i');
   match = html.match(nameRegex);
   if (match) return decodeHtmlEntities(match[1]);
 
   // Try content before property/name
-  const reverseRegex = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${property}["']`, 'i');
+  const reverseRegex = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["']`, 'i');
   match = html.match(reverseRegex);
   if (match) return decodeHtmlEntities(match[1]);
 

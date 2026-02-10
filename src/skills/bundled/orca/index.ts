@@ -61,7 +61,11 @@ async function handleSwap(args: string[]): Promise<string> {
     const tokens = await tokenlist.getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
-    const amountBaseUnits = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return 'Invalid amount. Must be a positive number.';
+    }
+    const amountBaseUnits = Math.floor(parsedAmount * Math.pow(10, fromDecimals)).toString();
 
     const result = await orca.executeOrcaWhirlpoolSwap(connection, keypair, {
       poolAddress: pools[0].address,
@@ -109,7 +113,11 @@ async function handleQuote(args: string[]): Promise<string> {
     const tokens = await tokenlist.getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
-    const amountBaseUnits = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return 'Invalid amount. Must be a positive number.';
+    }
+    const amountBaseUnits = Math.floor(parsedAmount * Math.pow(10, fromDecimals)).toString();
 
     const quote = await orca.getOrcaWhirlpoolQuote({
       poolAddress: pools[0].address,

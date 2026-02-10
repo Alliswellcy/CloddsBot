@@ -146,6 +146,7 @@ async function handleLong(symbol?: string, sizeStr?: string, leverageStr?: strin
   if (!symbol || !sizeStr) return 'Usage: /bb long <symbol> <size> [leverage]x\nExample: /bb long BTCUSDT 0.01 10x';
 
   const size = parseFloat(sizeStr);
+  if (isNaN(size) || size <= 0) return `Invalid size: ${sizeStr}`;
   const leverage = parseLeverage(leverageStr);
 
   const result = await bb.openLong(config, symbol.toUpperCase(), size, leverage);
@@ -160,6 +161,7 @@ async function handleShort(symbol?: string, sizeStr?: string, leverageStr?: stri
   if (!symbol || !sizeStr) return 'Usage: /bb short <symbol> <size> [leverage]x\nExample: /bb short BTCUSDT 0.01 10x';
 
   const size = parseFloat(sizeStr);
+  if (isNaN(size) || size <= 0) return `Invalid size: ${sizeStr}`;
   const leverage = parseLeverage(leverageStr);
 
   const result = await bb.openShort(config, symbol.toUpperCase(), size, leverage);
@@ -198,6 +200,7 @@ async function handleLeverage(symbol?: string, leverageStr?: string): Promise<st
   if (!symbol || !leverageStr) return 'Usage: /bb leverage <symbol> <value>';
 
   const leverage = parseInt(leverageStr, 10);
+  if (isNaN(leverage) || leverage <= 0) return `Invalid leverage: ${leverageStr}`;
   await bb.setLeverage(config, symbol.toUpperCase(), leverage);
   return `Set ${symbol.toUpperCase()} leverage to ${leverage}x`;
 }
@@ -245,7 +248,8 @@ async function handleMarkets(query?: string): Promise<string> {
 
 async function handleDbTrades(symbol?: string, limitStr?: string): Promise<string> {
   const db = await initDatabase();
-  const limit = limitStr ? parseInt(limitStr, 10) : 20;
+  const parsedLimit = limitStr ? parseInt(limitStr, 10) : NaN;
+  const limit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
   const trades = db.getBybitFuturesTrades(getUserId(), { symbol, limit });
 
   if (trades.length === 0) return symbol ? `No trades found for ${symbol}` : 'No trades found';
@@ -279,7 +283,8 @@ async function handleDbStats(symbol?: string, period?: string): Promise<string> 
 
 async function handleDbFunding(symbol?: string, limitStr?: string): Promise<string> {
   const db = await initDatabase();
-  const limit = limitStr ? parseInt(limitStr, 10) : 20;
+  const parsedLimit = limitStr ? parseInt(limitStr, 10) : NaN;
+  const limit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
   const funding = db.getBybitFuturesFunding(getUserId(), { symbol, limit });
 
   if (funding.length === 0) return 'No funding payments found';

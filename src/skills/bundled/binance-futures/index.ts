@@ -136,7 +136,7 @@ async function handlePositions(): Promise<string> {
   for (const p of positions) {
     const side = p.positionAmt > 0 ? '🟢 LONG' : '🔴 SHORT';
     const notional = Math.abs(p.positionAmt) * p.entryPrice;
-    const pnlPct = notional > 0 ? (p.unrealizedProfit / notional) * 100 : 0;
+    const pnlPct = notional !== 0 ? (p.unrealizedProfit / notional) * 100 : 0;
     lines.push(
       `  ${side} ${p.symbol} | ${Math.abs(p.positionAmt)} @ $${p.entryPrice.toFixed(2)} | ${p.leverage}x`
     );
@@ -186,6 +186,9 @@ async function handleLong(symbol?: string, sizeStr?: string, leverageStr?: strin
   }
 
   const size = parseFloat(sizeStr);
+  if (isNaN(size) || size <= 0) {
+    return 'Invalid size. Must be a positive number.';
+  }
   const leverage = parseLeverage(leverageStr);
 
   const result = await bf.openLong(config, symbol.toUpperCase(), size, leverage);
@@ -205,6 +208,9 @@ async function handleShort(symbol?: string, sizeStr?: string, leverageStr?: stri
   }
 
   const size = parseFloat(sizeStr);
+  if (isNaN(size) || size <= 0) {
+    return 'Invalid size. Must be a positive number.';
+  }
   const leverage = parseLeverage(leverageStr);
 
   const result = await bf.openShort(config, symbol.toUpperCase(), size, leverage);
@@ -276,6 +282,9 @@ async function handleLeverage(symbol?: string, leverageStr?: string): Promise<st
   }
 
   const leverage = parseInt(leverageStr, 10);
+  if (isNaN(leverage) || leverage < 1) {
+    return 'Invalid leverage. Must be a positive integer.';
+  }
   await bf.setLeverage(config, symbol.toUpperCase(), leverage);
   return `Set ${symbol.toUpperCase()} leverage to ${leverage}x`;
 }
@@ -341,7 +350,8 @@ async function handleMarkets(query?: string): Promise<string> {
 
 async function handleDbTrades(symbol?: string, limitStr?: string): Promise<string> {
   const db = await initDatabase();
-  const limit = limitStr ? parseInt(limitStr, 10) : 20;
+  const parsedLimit = limitStr ? parseInt(limitStr, 10) : 20;
+  const limit = isNaN(parsedLimit) || parsedLimit <= 0 ? 20 : parsedLimit;
   const trades = db.getBinanceFuturesTrades(getUserId(), { symbol, limit });
 
   if (trades.length === 0) {
@@ -389,7 +399,8 @@ async function handleDbStats(symbol?: string, period?: string): Promise<string> 
 
 async function handleDbFunding(symbol?: string, limitStr?: string): Promise<string> {
   const db = await initDatabase();
-  const limit = limitStr ? parseInt(limitStr, 10) : 20;
+  const parsedLimit = limitStr ? parseInt(limitStr, 10) : 20;
+  const limit = isNaN(parsedLimit) || parsedLimit <= 0 ? 20 : parsedLimit;
   const funding = db.getBinanceFuturesFunding(getUserId(), { symbol, limit });
 
   if (funding.length === 0) {

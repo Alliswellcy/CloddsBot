@@ -456,11 +456,17 @@ export function createArbitrageService(
 
       // Poll for arbitrage
       pollInterval = setInterval(async () => {
-        await emitter.checkArbitrage();
+        try {
+          await emitter.checkArbitrage();
+        } catch (err) {
+          logger.error({ err }, 'Arbitrage check failed');
+        }
       }, config.pollIntervalMs);
 
       // Initial check
-      emitter.checkArbitrage();
+      emitter.checkArbitrage().catch(err => {
+        logger.error({ err }, 'Initial arbitrage check failed');
+      });
     },
 
     stop() {

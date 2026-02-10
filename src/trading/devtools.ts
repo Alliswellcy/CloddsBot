@@ -507,7 +507,7 @@ export function createDevTools(config: DevToolsConfig = {}): DevTools {
       processEvent({
         type: 'error',
         timestamp: new Date(),
-        data: { message: error.message, stack: error.stack, ...context },
+        data: { message: error.message, ...context },
       });
 
       // Also send to Sentry if configured

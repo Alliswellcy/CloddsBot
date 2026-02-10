@@ -349,7 +349,7 @@ export async function executeUniswapSwap(
     const router = new Contract(config.swapRouter, SWAP_ROUTER_ABI, wallet);
 
     // Use the best fee tier found during quoting
-    const fee = quote.feeTier || 3000;
+    const fee = quote.feeTier ?? 3000;
 
     const swapParams = {
       tokenIn: quote.inputToken,
@@ -376,6 +376,10 @@ export async function executeUniswapSwap(
     });
 
     const receipt = await tx.wait();
+
+    if (!receipt || receipt.status !== 1) {
+      throw new Error(`Swap reverted on-chain (txHash: ${receipt?.hash})`);
+    }
 
     logger.info({ txHash: receipt.hash, gasUsed: receipt.gasUsed.toString() }, 'Swap complete');
 

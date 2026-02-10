@@ -33,7 +33,8 @@ function now(): number {
 
 function formatError(error: unknown): string {
   if (error instanceof Error) {
-    return error.stack || error.message || String(error);
+    const stack = error.stack || error.message || String(error);
+    return stack.replace(/\(\/[^\)]+\)/g, '(<path>)').replace(/at \/[^\s]+/g, 'at <path>');
   }
   if (typeof error === 'string') return error;
   try {

@@ -349,7 +349,7 @@ async function pumpfunHoldersHandler(toolInput: ToolInput): Promise<HandlerResul
 
 async function pumpfunTradesHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const mint = toolInput.mint as string;
-  const limit = (toolInput.limit as number) || 20;
+  const limit = (toolInput.limit as number) ?? 20;
   return safeHandler(async () => {
     const trades = await pumpFrontendRequest<Array<{
       signature: string; type: 'buy' | 'sell'; solAmount: number; tokenAmount: number;
@@ -361,8 +361,8 @@ async function pumpfunTradesHandler(toolInput: ToolInput): Promise<HandlerResult
 
 async function pumpfunChartHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const mint = toolInput.mint as string;
-  const interval = (toolInput.interval as string) || '1h';
-  const limit = (toolInput.limit as number) || 24;
+  const interval = (toolInput.interval as string) ?? '1h';
+  const limit = (toolInput.limit as number) ?? 24;
   return safeHandler(async () => {
     const ohlcv = await pumpFrontendRequest<Array<{
       timestamp: number; open: number; high: number; low: number; close: number; volume: number;
@@ -495,7 +495,7 @@ async function pumpfunMetasHandler(): Promise<HandlerResult> {
 }
 
 async function pumpfunLatestTradesHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 50;
+  const limit = (toolInput.limit as number) ?? 50;
   return safeHandler(async () => {
     const trades = await pumpFrontendRequest<Array<{
       mint: string; signature: string; type: 'buy' | 'sell'; solAmount: number;
@@ -802,10 +802,10 @@ async function swarmDisableHandler(toolInput: ToolInput): Promise<HandlerResult>
 
 async function swarmPresetSaveHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const name = toolInput.name as string;
-  const type = (toolInput.type as string) || 'strategy';
+  const type = (toolInput.type as string) ?? 'strategy';
   const description = toolInput.description as string | undefined;
   const config = toolInput.config as Record<string, unknown>;
-  const userId = (toolInput.user_id as string) || 'agent_user';
+  const userId = (toolInput.user_id as string) ?? 'agent_user';
 
   return safeHandler(async () => {
     const { getSwarmPresetService } = await import('../../solana/swarm-presets');
@@ -841,7 +841,7 @@ async function swarmPresetSaveHandler(toolInput: ToolInput): Promise<HandlerResu
 
 async function swarmPresetListHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const type = toolInput.type as string | undefined;
-  const userId = (toolInput.user_id as string) || 'agent_user';
+  const userId = (toolInput.user_id as string) ?? 'agent_user';
 
   return safeHandler(async () => {
     const { getSwarmPresetService } = await import('../../solana/swarm-presets');
@@ -867,7 +867,7 @@ async function swarmPresetListHandler(toolInput: ToolInput): Promise<HandlerResu
 
 async function swarmPresetGetHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const name = toolInput.name as string;
-  const userId = (toolInput.user_id as string) || 'agent_user';
+  const userId = (toolInput.user_id as string) ?? 'agent_user';
 
   return safeHandler(async () => {
     const { getSwarmPresetService } = await import('../../solana/swarm-presets');
@@ -897,7 +897,7 @@ async function swarmPresetGetHandler(toolInput: ToolInput): Promise<HandlerResul
 
 async function swarmPresetDeleteHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const name = toolInput.name as string;
-  const userId = (toolInput.user_id as string) || 'agent_user';
+  const userId = (toolInput.user_id as string) ?? 'agent_user';
 
   return safeHandler(async () => {
     const { getSwarmPresetService } = await import('../../solana/swarm-presets');
@@ -1159,8 +1159,8 @@ async function autoQuoteHandler(toolInput: ToolInput): Promise<HandlerResult> {
           });
           results.push({ dex, pool, quote });
         }
-      } catch {
-        // Skip failed quotes
+      } catch (_err: unknown) {
+        results.push({ dex, pool, error: `Quote failed for ${dex}` });
       }
     }
 
@@ -1257,7 +1257,7 @@ async function bagsSwapHandler(toolInput: ToolInput): Promise<HandlerResult> {
 
 // Discovery
 async function bagsPoolsHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 50;
+  const limit = (toolInput.limit as number) ?? 50;
 
   return safeHandler(async () => {
     const pools = await bagsRequest<Array<{
@@ -1290,7 +1290,7 @@ async function bagsTokenHandler(toolInput: ToolInput): Promise<HandlerResult> {
       bagsRequest<Array<{ wallet: string; username: string; royaltyBps: number; isCreator: boolean; provider?: string | null; providerUsername?: string | null }>>(`/token-launch/creator/v3?tokenMint=${mint}`).catch(() => null),
       bagsRequest<string>(`/token-launch/lifetime-fees?tokenMint=${mint}`).catch(() => null),
     ]);
-    return { creators, lifetimeFees: lifetimeFees ? { lamports: lifetimeFees, sol: Number(BigInt(lifetimeFees)) / 1e9 } : null };
+    return { creators, lifetimeFees: lifetimeFees ? { lamports: lifetimeFees, sol: parseInt(lifetimeFees, 10) / 1e9 } : null };
   });
 }
 
@@ -1312,7 +1312,7 @@ async function bagsLifetimeFeesHandler(toolInput: ToolInput): Promise<HandlerRes
     const lamports = await bagsRequest<string>(
       `/token-launch/lifetime-fees?tokenMint=${mint}`
     );
-    return { lamports, sol: Number(BigInt(lamports)) / 1e9 };
+    return { lamports, sol: parseInt(lamports, 10) / 1e9 };
   });
 }
 
@@ -1377,7 +1377,7 @@ async function bagsClaimHandler(toolInput: ToolInput): Promise<HandlerResult> {
             signatures.push(sig);
           }
         }
-      } catch { /* skip failed */ }
+      } catch (_err: unknown) { /* skip failed token claim */ }
     }
 
     return { claimed: signatures.length > 0, signatures };
@@ -1421,7 +1421,7 @@ async function bagsLaunchHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const twitter = toolInput.twitter as string | undefined;
   const website = toolInput.website as string | undefined;
   const telegram = toolInput.telegram as string | undefined;
-  const initialBuyLamports = Math.floor(((toolInput.initial_sol as number) || 0) * 1e9);
+  const initialBuyLamports = Math.floor(((toolInput.initial_sol as number) ?? 0) * 1e9);
 
   return safeHandler(async () => {
     const { wallet } = await getSolanaModules();

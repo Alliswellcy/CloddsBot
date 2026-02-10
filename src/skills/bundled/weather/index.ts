@@ -67,8 +67,8 @@ function formatForecast(forecast: WeatherForecast): string {
 }
 
 function formatMarket(market: WeatherMarket): string {
-  const yesPrice = market.outcomes.find(o => o.name.toLowerCase().includes('yes'))?.price || 0;
-  const noPrice = market.outcomes.find(o => o.name.toLowerCase().includes('no'))?.price || 0;
+  const yesPrice = market.outcomes.find(o => o.name.toLowerCase().includes('yes'))?.price ?? 0;
+  const noPrice = market.outcomes.find(o => o.name.toLowerCase().includes('no'))?.price ?? 0;
 
   let output = `**${market.question}**\n`;
   output += `  ID: \`${market.id.slice(0, 12)}...\`\n`;
@@ -169,7 +169,8 @@ async function handleScan(args: string[]): Promise<string> {
   let minEdge = 5;
   const thresholdIndex = args.indexOf('--threshold');
   if (thresholdIndex >= 0 && args[thresholdIndex + 1]) {
-    minEdge = parseFloat(args[thresholdIndex + 1]);
+    const parsed = parseFloat(args[thresholdIndex + 1]);
+    if (!isNaN(parsed)) minEdge = parsed;
   }
 
   try {
@@ -385,18 +386,24 @@ async function handleAuto(args: string[]): Promise<string> {
     const next = args[i + 1];
 
     switch (arg) {
-      case '--threshold':
-        threshold = parseFloat(next);
+      case '--threshold': {
+        const v = parseFloat(next);
+        if (!isNaN(v)) threshold = v;
         i++;
         break;
-      case '--max-bets':
-        maxBets = parseInt(next);
+      }
+      case '--max-bets': {
+        const v = parseInt(next, 10);
+        if (!isNaN(v) && v > 0) maxBets = v;
         i++;
         break;
-      case '--bankroll':
-        bankroll = parseFloat(next);
+      }
+      case '--bankroll': {
+        const v = parseFloat(next);
+        if (!isNaN(v) && v > 0) bankroll = v;
         i++;
         break;
+      }
     }
   }
 

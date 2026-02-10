@@ -40,7 +40,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: stats });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: Cache stats failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -51,7 +51,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: { cleared: true } });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: Cache clear failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -69,7 +69,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: { markets, count: markets.length } });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: Search failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -82,7 +82,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: { news, count: news.length } });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: News failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -98,7 +98,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: { news, count: news.length } });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: News search failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -115,7 +115,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: market });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: Get market failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -127,7 +127,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: { platform: req.params.platform, marketId: req.params.marketId, price } });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: Get price failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -143,7 +143,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: orderbook });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: Get orderbook failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -160,7 +160,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: edge });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: Analyze edge failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -177,7 +177,7 @@ export function createFeedsRouter(deps: FeedsRouterDeps): Router {
       res.json({ ok: true, data: kelly });
     } catch (err) {
       logger.warn({ err }, 'Feeds API: Kelly calculation failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

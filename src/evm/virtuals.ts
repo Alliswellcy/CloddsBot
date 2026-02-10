@@ -570,6 +570,16 @@ export async function buyAgentToken(params: VirtualsSwapParams): Promise<Virtual
     }
 
     const receipt = await tx.wait();
+
+    if (!receipt || receipt.status !== 1) {
+      return {
+        success: false,
+        txHash: receipt?.hash,
+        inputAmount: amount,
+        error: `Buy reverted on-chain (txHash: ${receipt?.hash})`,
+      };
+    }
+
     logger.info({ txHash: receipt.hash, route: quote.route }, 'Virtuals buy complete');
 
     return {
@@ -636,6 +646,16 @@ export async function sellAgentToken(params: VirtualsSwapParams): Promise<Virtua
     }
 
     const receipt = await tx.wait();
+
+    if (!receipt || receipt.status !== 1) {
+      return {
+        success: false,
+        txHash: receipt?.hash,
+        inputAmount: amount,
+        error: `Sell reverted on-chain (txHash: ${receipt?.hash})`,
+      };
+    }
+
     logger.info({ txHash: receipt.hash, route: quote.route }, 'Virtuals sell complete');
 
     return {
@@ -846,6 +866,10 @@ export async function stakeVirtual(params: StakeParams): Promise<StakeResult> {
     const tx = await veToken.stake(stakeAmount, receiver, delegatee);
     const receipt = await tx.wait();
 
+    if (!receipt || receipt.status !== 1) {
+      return { success: false, amount, error: `Stake reverted on-chain (txHash: ${receipt?.hash})` };
+    }
+
     logger.info({ txHash: receipt.hash }, 'Stake complete');
     return { success: true, txHash: receipt.hash, amount };
   } catch (error) {
@@ -878,6 +902,10 @@ export async function delegateVotingPower(delegatee: string): Promise<StakeResul
     logger.info({ delegatee }, 'Delegating voting power');
     const tx = await veToken.delegate(delegatee);
     const receipt = await tx.wait();
+
+    if (!receipt || receipt.status !== 1) {
+      return { success: false, amount: '0', error: `Delegation reverted on-chain (txHash: ${receipt?.hash})` };
+    }
 
     logger.info({ txHash: receipt.hash }, 'Delegation complete');
     return { success: true, txHash: receipt.hash, amount: '0' };

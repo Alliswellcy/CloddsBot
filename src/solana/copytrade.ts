@@ -114,14 +114,14 @@ export class CopyTrader extends EventEmitter {
   private processing: Set<string> = new Set();
   private recentTrades: Map<string, number> = new Map();
   private tradeHistory: CopyTradeHistoryEntry[] = [];
+  private cleanupInterval: NodeJS.Timeout;
 
   constructor(connection?: Connection, keypair?: Keypair) {
     super();
     this.connection = connection || getSolanaConnection();
     this.keypair = keypair || loadSolanaKeypair();
 
-    // Clean up old trade signatures periodically
-    setInterval(() => this.cleanupRecentTrades(), 60000);
+    this.cleanupInterval = setInterval(() => this.cleanupRecentTrades(), 60000);
   }
 
   // --------------------------------------------------------------------------
@@ -423,6 +423,9 @@ export class CopyTrader extends EventEmitter {
       createdAt: Date.now(),
     };
     this.tradeHistory.push(historyEntry);
+    if (this.tradeHistory.length > 10000) {
+      this.tradeHistory = this.tradeHistory.slice(-5000);
+    }
 
     try {
       // Execute via Jupiter
@@ -433,7 +436,7 @@ export class CopyTrader extends EventEmitter {
           inputMint: SOL_MINT,
           outputMint: trade.mint,
           amount: String(Math.floor(copyAmount * 1e9)), // Convert to lamports
-          slippageBps: config.slippageBps || 500,
+          slippageBps: config.slippageBps ?? 500,
         });
 
         historyEntry.ourTx = result.signature;
@@ -467,7 +470,7 @@ export class CopyTrader extends EventEmitter {
           inputMint: trade.mint,
           outputMint: SOL_MINT,
           amount: balanceInfo.rawAmount, // Use raw amount from token account (respects actual decimals)
-          slippageBps: config.slippageBps || 500,
+          slippageBps: config.slippageBps ?? 500,
         });
 
         historyEntry.ourTx = result.signature;
@@ -578,6 +581,7 @@ export class CopyTrader extends EventEmitter {
   // --------------------------------------------------------------------------
 
   destroy(): void {
+    clearInterval(this.cleanupInterval);
     for (const target of this.targets.values()) {
       this.stopMonitoring(target);
     }

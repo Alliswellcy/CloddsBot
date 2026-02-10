@@ -68,7 +68,7 @@ function validateExchange(exchange: string, configured: string[]): string | null
 }
 
 function validateLeverage(leverageStr: string): number | null {
-  const lev = parseInt(leverageStr);
+  const lev = parseInt(leverageStr, 10);
   if (isNaN(lev) || lev < 1 || lev > 200) return null;
   return lev;
 }
@@ -516,7 +516,8 @@ Order ID: ${order.id}`;
         if (exErr) return exErr;
         const symbol = parseFlag(parts, '--symbol', '').toUpperCase() || undefined;
         const limitStr = parseFlag(parts, '--limit', '20');
-        const limit = parseInt(limitStr) || 20;
+        const parsed = parseInt(limitStr, 10);
+        const limit = isNaN(parsed) ? 20 : parsed;
 
         const lines: string[] = [];
         let totalAmount = 0;
@@ -760,7 +761,8 @@ Order ID: ${order.id}`;
         const exErr = validateExchange(exchange, configuredExchanges);
         if (exErr) return exErr;
         const limitStr = parseFlag(parts, '--limit', '20');
-        const limit = parseInt(limitStr) || 20;
+        const parsedLimit = parseInt(limitStr, 10);
+        const limit = isNaN(parsedLimit) ? 20 : parsedLimit;
 
         const sym = symbol ? normalizeSymbol(symbol, exchange) : undefined;
         const trades = await service.getTradeHistory(exchange, sym, limit);
@@ -787,7 +789,8 @@ Order ID: ${order.id}`;
         const exErr = validateExchange(exchange, configuredExchanges);
         if (exErr) return exErr;
         const limitStr = parseFlag(parts, '--limit', '20');
-        const limit = parseInt(limitStr) || 20;
+        const parsedLimit = parseInt(limitStr, 10);
+        const limit = isNaN(parsedLimit) ? 20 : parsedLimit;
 
         const sym = symbol ? normalizeSymbol(symbol, exchange) : undefined;
         const orders = await service.getOrderHistory(exchange, sym, limit);

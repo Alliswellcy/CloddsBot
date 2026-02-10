@@ -113,7 +113,8 @@ async function execute(args: string): Promise<string> {
       const assets = assetArg ? assetArg.toUpperCase().split(',') : (presetConfig.assets ?? DEFAULT_CONFIG.assets);
       const dryRun = args.includes('--dry-run') || args.includes('--dry') || (presetConfig.dryRun ?? DEFAULT_CONFIG.dryRun);
       const sizeMatch = args.match(/--size\s+(\d+)/);
-      const sizeUsd = sizeMatch ? parseInt(sizeMatch[1], 10) : (presetConfig.sizeUsd ?? DEFAULT_CONFIG.sizeUsd);
+      const rawSize = sizeMatch ? parseInt(sizeMatch[1], 10) : NaN;
+      const sizeUsd = !isNaN(rawSize) && rawSize > 0 ? rawSize : (presetConfig.sizeUsd ?? DEFAULT_CONFIG.sizeUsd);
 
       engine = createCryptoHftEngine(feed, exec, {
         ...presetConfig,
@@ -181,7 +182,7 @@ async function execute(args: string): Promise<string> {
       if (p.length > 0) {
         out += `\n**Open Positions:**\n`;
         for (const pos of p) {
-          const pnl = ((pos.currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
+          const pnl = pos.entryPrice !== 0 ? ((pos.currentPrice - pos.entryPrice) / pos.entryPrice) * 100 : 0;
           const secsLeft = Math.max(0, (pos.expiresAt - Date.now()) / 1000);
           out += `  ${pos.asset} ${pos.direction.toUpperCase()} @ ${pos.entryPrice.toFixed(2)} -> ${pos.currentPrice.toFixed(2)} (${fmtPct(pnl)}) [${pos.strategy}] ${secsLeft.toFixed(0)}s left\n`;
         }

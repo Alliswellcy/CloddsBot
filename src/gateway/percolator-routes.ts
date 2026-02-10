@@ -49,7 +49,7 @@ export function createPercolatorRouter(deps: PercolatorRouterDeps): Router {
       });
     } catch (err) {
       logger.warn({ err }, 'Percolator API: Failed to get status');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -70,7 +70,7 @@ export function createPercolatorRouter(deps: PercolatorRouterDeps): Router {
       res.json({ ok: true, data: { positions: serialized, count: serialized.length } });
     } catch (err) {
       logger.warn({ err }, 'Percolator API: Failed to get positions');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -97,7 +97,7 @@ export function createPercolatorRouter(deps: PercolatorRouterDeps): Router {
       res.json({ ok: true, data: { signature: result.signature, slot: result.slot, direction, size } });
     } catch (err) {
       logger.warn({ err }, 'Percolator API: Trade failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -119,7 +119,7 @@ export function createPercolatorRouter(deps: PercolatorRouterDeps): Router {
       res.json({ ok: true, data: { signature: result.signature, slot: result.slot, amount } });
     } catch (err) {
       logger.warn({ err }, 'Percolator API: Deposit failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -141,7 +141,7 @@ export function createPercolatorRouter(deps: PercolatorRouterDeps): Router {
       res.json({ ok: true, data: { signature: result.signature, slot: result.slot, amount } });
     } catch (err) {
       logger.warn({ err }, 'Percolator API: Withdraw failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

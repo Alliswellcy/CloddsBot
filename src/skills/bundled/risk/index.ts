@@ -157,7 +157,7 @@ function handleCheck(notionalStr: string): string {
     return `Trade **BLOCKED** - Circuit breaker is ${circuitBreakerState}.\nReason: ${tripReason || 'N/A'}`;
   }
 
-  const maxOrderSize = limits['max-loss'] || 1000;
+  const maxOrderSize = limits['max-loss'] ?? 1000;
   const result = enforceMaxOrderSize(
     { tradingContext: { maxOrderSize }, db: { getUser: () => undefined, getPositions: () => [] } },
     notional,

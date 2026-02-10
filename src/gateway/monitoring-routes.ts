@@ -26,7 +26,7 @@ export function createMonitoringRouter(deps: MonitoringRouterDeps): Router {
       res.json({ ok: true, data: health });
     } catch (err) {
       logger.warn({ err }, 'Monitoring API: Health check failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -42,7 +42,7 @@ export function createMonitoringRouter(deps: MonitoringRouterDeps): Router {
       res.json({ ok: true, data: { ...snapshot, running: providerHealth.isRunning() } });
     } catch (err) {
       logger.warn({ err }, 'Monitoring API: Provider health failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -68,7 +68,7 @@ export function createMonitoringRouter(deps: MonitoringRouterDeps): Router {
       });
     } catch (err) {
       logger.warn({ err }, 'Monitoring API: Process info failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

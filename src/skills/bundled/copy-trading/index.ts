@@ -47,7 +47,7 @@ async function execute(args: string): Promise<string> {
         service.follow(addr);
         const configUpdates: Record<string, unknown> = {};
         if (sizeIdx >= 0) configUpdates.fixedSize = parseFloat(size);
-        if (delayIdx >= 0) configUpdates.copyDelayMs = parseInt(delay);
+        if (delayIdx >= 0) configUpdates.copyDelayMs = parseInt(delay, 10);
         if (Object.keys(configUpdates).length > 0) service.updateConfig(configUpdates);
         return `**Following Wallet**\n\nAddress: \`${addr}\`\nSize: $${size}\nDelay: ${delay}ms\nStatus: Active\nMode: Dry run (use /copy config set dryRun false to go live)`;
       }
@@ -84,7 +84,7 @@ async function execute(args: string): Promise<string> {
       }
 
       case 'trades': {
-        const limit = parseInt(parts[1] || '10');
+        const limit = parseInt(parts[1] || '10', 10);
         const trades = service.getCopiedTrades(limit);
         if (!trades.length) return 'No copied trades yet.';
         let output = `**Recent Copied Trades** (last ${trades.length})\n\n`;
@@ -139,7 +139,7 @@ async function execute(args: string): Promise<string> {
           else if (key === 'fixedSize') updates.fixedSize = parseFloat(value);
           else if (key === 'maxPosition') updates.maxPositionSize = parseFloat(value);
           else if (key === 'minTradeSize') updates.minTradeSize = parseFloat(value);
-          else if (key === 'copyDelay') updates.copyDelayMs = parseInt(value);
+          else if (key === 'copyDelay') updates.copyDelayMs = parseInt(value, 10);
           else if (key === 'stopLoss') updates.stopLoss = parseFloat(value);
           else if (key === 'takeProfit') updates.takeProfit = parseFloat(value);
           else return `Unknown config key: ${key}`;

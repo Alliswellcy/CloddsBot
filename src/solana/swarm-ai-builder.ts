@@ -317,7 +317,7 @@ export class AIStrategyBuilder {
   private extractInterval(text: string): number | undefined {
     for (const { pattern, multiplier } of TIME_PATTERNS) {
       const match = text.match(pattern);
-      if (match) return parseInt(match[1]) * multiplier;
+      if (match) return parseInt(match[1], 10) * multiplier;
     }
     return undefined;
   }
@@ -325,7 +325,7 @@ export class AIStrategyBuilder {
   private extractCount(text: string): number | undefined {
     for (const pattern of COUNT_PATTERNS) {
       const match = text.match(pattern);
-      if (match) return parseInt(match[1]);
+      if (match) return parseInt(match[1], 10);
     }
     return undefined;
   }
@@ -472,10 +472,10 @@ export class AIStrategyBuilder {
   private buildBuyStrategy(params: ParsedParams): Strategy | null {
     if (!params.mint) return null;
 
-    const amount = params.amount || 0.1;
+    const amount = params.amount ?? 0.1;
     const builder = new StrategyBuilder('Buy Strategy', params.mint)
       .type('custom')
-      .maxSlippage(params.slippageBps || 500);
+      .maxSlippage(params.slippageBps ?? 500);
 
     if (params.price && params.priceChange && params.priceChange < 0) {
       builder.buyAt(params.price, amount, {
@@ -502,12 +502,12 @@ export class AIStrategyBuilder {
     if (!params.mint) return null;
 
     const amount = params.amountUnit === 'percent'
-      ? `${params.amount || 100}%`
-      : (params.amount || 0);
+      ? `${params.amount ?? 100}%`
+      : (params.amount ?? 0);
 
     const builder = new StrategyBuilder('Sell Strategy', params.mint)
       .type('custom')
-      .maxSlippage(params.slippageBps || 500);
+      .maxSlippage(params.slippageBps ?? 500);
 
     if (params.price && params.priceChange && params.priceChange > 0) {
       builder.sellAt(params.price, amount, {
@@ -527,9 +527,9 @@ export class AIStrategyBuilder {
   private buildDCAStrategy(params: ParsedParams): Strategy | null {
     if (!params.mint) return null;
 
-    const amount = params.amount || 0.1;
-    const count = params.count || 10;
-    const interval = params.interval || 3600000; // Default 1 hour
+    const amount = params.amount ?? 0.1;
+    const count = params.count ?? 10;
+    const interval = params.interval ?? 3600000; // Default 1 hour
 
     return StrategyTemplates.dca(params.mint, amount, count, interval);
   }
@@ -537,8 +537,8 @@ export class AIStrategyBuilder {
   private buildScaleInStrategy(params: ParsedParams): Strategy | null {
     if (!params.mint) return null;
 
-    const totalSol = params.amount || 1;
-    const currentPrice = params.price || 1; // Need current price
+    const totalSol = params.amount ?? 1;
+    const currentPrice = params.price ?? 1; // Need current price
     const levels: PriceLevel[] = params.levels
       ? params.levels.map((price, i, arr) => ({
           price,
@@ -556,7 +556,7 @@ export class AIStrategyBuilder {
   private buildScaleOutStrategy(params: ParsedParams): Strategy | null {
     if (!params.mint) return null;
 
-    const currentPrice = params.price || 1;
+    const currentPrice = params.price ?? 1;
     const levels: PriceLevel[] = params.levels
       ? params.levels.map((price, i, arr) => ({
           price,
@@ -574,10 +574,10 @@ export class AIStrategyBuilder {
   private buildSnipeStrategy(params: ParsedParams): Strategy | null {
     if (!params.mint) return null;
 
-    const sol = params.amount || 0.5;
-    const tp = params.takeProfitPct || 100;
-    const sl = params.stopLossPct || 20;
-    const currentPrice = params.price || 1;
+    const sol = params.amount ?? 0.5;
+    const tp = params.takeProfitPct ?? 100;
+    const sl = params.stopLossPct ?? 20;
+    const currentPrice = params.price ?? 1;
 
     return StrategyTemplates.snipeExit(params.mint, sol, tp, sl, currentPrice);
   }
@@ -585,10 +585,10 @@ export class AIStrategyBuilder {
   private buildLadderStrategy(params: ParsedParams): Strategy | null {
     if (!params.mint) return null;
 
-    const totalSol = params.amount || 1;
-    const levels = params.count || 5;
-    const dropPercent = Math.abs(params.priceChange || 5);
-    const currentPrice = params.price || 1;
+    const totalSol = params.amount ?? 1;
+    const levels = params.count ?? 5;
+    const dropPercent = Math.abs(params.priceChange ?? 5);
+    const currentPrice = params.price ?? 1;
 
     return StrategyTemplates.ladderBuy(params.mint, totalSol, levels, dropPercent, currentPrice);
   }
@@ -596,9 +596,9 @@ export class AIStrategyBuilder {
   private buildTWAPStrategy(params: ParsedParams): Strategy | null {
     if (!params.mint) return null;
 
-    const amount = params.amount || 1;
-    const intervals = params.count || 10;
-    const delayMs = params.interval || 60000;
+    const amount = params.amount ?? 1;
+    const intervals = params.count ?? 10;
+    const delayMs = params.interval ?? 60000;
 
     return StrategyTemplates.twap(params.mint, 'buy', amount, intervals, delayMs);
   }
@@ -606,8 +606,8 @@ export class AIStrategyBuilder {
   private buildStopLossStrategy(params: ParsedParams): Strategy | null {
     if (!params.mint) return null;
 
-    const stopPct = params.stopLossPct || 10;
-    const currentPrice = params.price || 1;
+    const stopPct = params.stopLossPct ?? 10;
+    const currentPrice = params.price ?? 1;
     const slPrice = currentPrice * (1 - stopPct / 100);
 
     const builder = new StrategyBuilder('Stop Loss', params.mint)
@@ -624,8 +624,8 @@ export class AIStrategyBuilder {
   private buildTakeProfitStrategy(params: ParsedParams): Strategy | null {
     if (!params.mint) return null;
 
-    const takeProfitPct = params.takeProfitPct || 50;
-    const currentPrice = params.price || 1;
+    const takeProfitPct = params.takeProfitPct ?? 50;
+    const currentPrice = params.price ?? 1;
     const tpPrice = currentPrice * (1 + takeProfitPct / 100);
 
     const builder = new StrategyBuilder('Take Profit', params.mint)

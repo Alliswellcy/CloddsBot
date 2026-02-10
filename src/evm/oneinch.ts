@@ -235,7 +235,7 @@ export async function getOneInchQuote(
     toAmount,
     toAmountMin,
     protocols,
-    estimatedGas: response.estimatedGas?.toString() || '0',
+    estimatedGas: response.estimatedGas?.toString() ?? '0',
   };
 }
 
@@ -315,18 +315,25 @@ export async function executeOneInchSwap(
       'Executing 1inch swap'
     );
 
-    // Send transaction
+    const MAX_GAS_LIMIT = 5_000_000n;
+    const apiGasLimit = BigInt(swapResponse.tx.gas);
+    const gasLimit = apiGasLimit > MAX_GAS_LIMIT ? MAX_GAS_LIMIT : apiGasLimit;
+
     const tx = await wallet.sendTransaction({
       to: swapResponse.tx.to,
       data: swapResponse.tx.data,
       value: BigInt(swapResponse.tx.value),
-      gasLimit: BigInt(swapResponse.tx.gas),
+      gasLimit,
       gasPrice: BigInt(swapResponse.tx.gasPrice),
     });
 
     const receipt = await tx.wait();
     if (!receipt) {
       throw new Error('Transaction receipt is null');
+    }
+
+    if (receipt.status !== 1) {
+      throw new Error(`Transaction reverted on-chain (txHash: ${receipt.hash})`);
     }
 
     // Get output token info for formatting

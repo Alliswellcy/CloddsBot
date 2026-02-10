@@ -174,7 +174,7 @@ export async function createZaloChannel(
       chatType: 'dm',
       text,
       attachments: attachments.length > 0 ? attachments : undefined,
-      timestamp: new Date(parseInt(event.timestamp) || Date.now()),
+      timestamp: new Date(parseInt(event.timestamp, 10) || Date.now()),
     };
 
     logger.info({ userId }, 'Received Zalo message');

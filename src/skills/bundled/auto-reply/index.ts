@@ -217,8 +217,10 @@ async function execute(args: string): Promise<string> {
               case 'endsWith': matched = text.endsWith(pattern); break;
               case 'regex': {
                 try {
+                  const pat = condition.pattern || '';
+                  if (pat.length > 200) { matched = false; break; }
                   const flags = condition.ignoreCase ? 'i' : '';
-                  matched = new RegExp(condition.pattern || '', flags).test(testMsg);
+                  matched = new RegExp(pat, flags).test(testMsg.slice(0, 10000));
                 } catch { matched = false; }
                 break;
               }
@@ -242,7 +244,7 @@ async function execute(args: string): Promise<string> {
 
       case 'cooldown': {
         const ruleId = parts[1];
-        const seconds = parseInt(parts[2]);
+        const seconds = parseInt(parts[2], 10);
         if (!ruleId || isNaN(seconds)) return 'Usage: /autoreply cooldown <id> <seconds>';
         const updated = service.updateRule(ruleId, { cooldownMs: seconds * 1000 });
         if (updated) {
@@ -258,8 +260,8 @@ async function execute(args: string): Promise<string> {
         if (!ruleId || !timeRange) return 'Usage: /autoreply schedule <id> <start-end> (e.g. 9-17)';
         const match = timeRange.match(/^(\d{1,2})-(\d{1,2})$/);
         if (!match) return 'Invalid time range. Use format: 9-17 (start hour - end hour, 24h)';
-        const startHour = parseInt(match[1]);
-        const endHour = parseInt(match[2]);
+        const startHour = parseInt(match[1], 10);
+        const endHour = parseInt(match[2], 10);
         if (startHour < 0 || startHour > 23 || endHour < 0 || endHour > 23) {
           return 'Hours must be 0-23.';
         }
@@ -275,7 +277,7 @@ async function execute(args: string): Promise<string> {
 
       case 'priority': {
         const ruleId = parts[1];
-        const priority = parseInt(parts[2]);
+        const priority = parseInt(parts[2], 10);
         if (!ruleId || isNaN(priority)) return 'Usage: /autoreply priority <id> <number>';
         const updated = service.updateRule(ruleId, { priority });
         if (updated) {

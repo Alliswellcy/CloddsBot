@@ -33,7 +33,7 @@ export function createWebhooksRouter(deps: WebhooksRouterDeps): Router {
       res.json({ ok: true, data: { webhooks, count: webhooks.length } });
     } catch (err) {
       logger.warn({ err }, 'Webhooks API: List failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -48,7 +48,7 @@ export function createWebhooksRouter(deps: WebhooksRouterDeps): Router {
       res.json({ ok: true, data: webhook });
     } catch (err) {
       logger.warn({ err }, 'Webhooks API: Get failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -64,7 +64,7 @@ export function createWebhooksRouter(deps: WebhooksRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, enabled: true } });
     } catch (err) {
       logger.warn({ err }, 'Webhooks API: Enable failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -80,7 +80,7 @@ export function createWebhooksRouter(deps: WebhooksRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, enabled: false } });
     } catch (err) {
       logger.warn({ err }, 'Webhooks API: Disable failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -95,7 +95,7 @@ export function createWebhooksRouter(deps: WebhooksRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, deleted: true } });
     } catch (err) {
       logger.warn({ err }, 'Webhooks API: Delete failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -110,7 +110,7 @@ export function createWebhooksRouter(deps: WebhooksRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, secret } });
     } catch (err) {
       logger.warn({ err }, 'Webhooks API: Regenerate secret failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

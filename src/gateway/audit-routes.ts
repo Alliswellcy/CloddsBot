@@ -32,7 +32,7 @@ export function createAuditRouter(): Router {
       res.json({ ok: true, data: result });
     } catch (err) {
       logger.warn({ err }, 'Audit API: Token audit failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -46,7 +46,7 @@ export function createAuditRouter(): Router {
       res.json({ ok: true, data: { address, chain, safe } });
     } catch (err) {
       logger.warn({ err }, 'Audit API: Safety check failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

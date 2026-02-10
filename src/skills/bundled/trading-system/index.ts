@@ -280,7 +280,7 @@ To resume: /trading resume`;
 
       case 'log':
       case 'trades': {
-        const limit = parseInt(parts[1]) || 10;
+        const limit = parseInt(parts[1], 10) || 10;
         const trades = system.logger.getTrades({ limit });
 
         if (trades.length === 0) return 'No trades logged yet.';
@@ -297,7 +297,7 @@ To resume: /trading resume`;
       }
 
       case 'pnl': {
-        const days = parseInt(parts[1]) || 30;
+        const days = parseInt(parts[1], 10) || 30;
         const dailyPnl = system.getDailyPnL(days);
 
         if (dailyPnl.length === 0) return 'No PnL data available.';

@@ -550,14 +550,21 @@ export function createCorrelationFinder(
     }>('SELECT * FROM correlation_rules');
 
     for (const row of savedRules) {
-      customRules.push({
-        id: row.id,
-        patternA: new RegExp(row.pattern_a.replace(/^\/|\/[a-z]*$/g, ''), 'i'),
-        patternB: new RegExp(row.pattern_b.replace(/^\/|\/[a-z]*$/g, ''), 'i'),
-        type: row.type as CorrelationType,
-        correlation: row.correlation,
-        description: row.description,
-      });
+      try {
+        const srcA = row.pattern_a.replace(/^\/|\/[a-z]*$/g, '');
+        const srcB = row.pattern_b.replace(/^\/|\/[a-z]*$/g, '');
+        if (srcA.length > 500 || srcB.length > 500) continue;
+        customRules.push({
+          id: row.id,
+          patternA: new RegExp(srcA, 'i'),
+          patternB: new RegExp(srcB, 'i'),
+          type: row.type as CorrelationType,
+          correlation: row.correlation,
+          description: row.description,
+        });
+      } catch {
+        logger.warn({ id: row.id }, 'Skipping correlation rule with invalid regex');
+      }
     }
   } catch (error) {
     logger.warn({ error }, 'Failed to initialize correlation rules table');

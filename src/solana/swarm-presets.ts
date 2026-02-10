@@ -341,16 +341,16 @@ export function createSwarmPresetService(): SwarmPresetService {
       if (config.mint && !result.mint) {
         result.mint = config.mint;
       }
-      if (config.amountPerWallet !== undefined && !result.amountPerWallet) {
+      if (config.amountPerWallet !== undefined && result.amountPerWallet === undefined) {
         result.amountPerWallet = config.amountPerWallet;
       }
       if (config.denominatedInSol !== undefined && result.denominatedInSol === undefined) {
         result.denominatedInSol = config.denominatedInSol;
       }
-      if (config.slippageBps !== undefined && !result.slippageBps) {
+      if (config.slippageBps !== undefined && result.slippageBps === undefined) {
         result.slippageBps = config.slippageBps;
       }
-      if (config.priorityFeeLamports !== undefined && !result.priorityFeeLamports) {
+      if (config.priorityFeeLamports !== undefined && result.priorityFeeLamports === undefined) {
         result.priorityFeeLamports = config.priorityFeeLamports;
       }
       if (config.pool && !result.pool) {

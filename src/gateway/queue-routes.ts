@@ -29,7 +29,7 @@ export function createQueueRouter(deps: QueueRouterDeps): Router {
       res.json({ ok: true, data: status });
     } catch (err) {
       logger.warn({ err }, 'Queue API: Get job status failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -42,7 +42,7 @@ export function createQueueRouter(deps: QueueRouterDeps): Router {
       res.json({ ok: true, data: status });
     } catch (err) {
       logger.warn({ err }, 'Queue API: Wait for job failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

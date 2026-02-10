@@ -64,7 +64,7 @@ async function handlePrice(market: string): Promise<string> {
     `Bid: $${price.bid.toFixed(2)}`,
     `Ask: $${price.ask.toFixed(2)}`,
     `Mid: $${price.mid.toFixed(2)}`,
-    `Spread: ${price.bid > 0 ? ((price.ask - price.bid) / price.bid * 100).toFixed(4) : '0'}%`,
+    `Spread: ${price.mid > 0 ? ((price.ask - price.bid) / price.mid * 100).toFixed(4) : '0'}%`,
   ].join('\n');
 }
 
@@ -118,7 +118,7 @@ async function handlePositions(): Promise<string> {
 
   const lines = ['**Lighter Positions**', ''];
   for (const p of positions) {
-    const pnl = parseFloat(p.unrealizedPnl);
+    const pnl = parseFloat(p.unrealizedPnl) || 0;
     const pnlStr = pnl >= 0 ? `+$${formatNumber(pnl)}` : `-$${formatNumber(Math.abs(pnl))}`;
     lines.push(`  ${p.market} ${p.side} ${p.size} @ $${p.entryPrice} (${pnlStr})`);
     lines.push(`    Mark: $${p.markPrice} | Lev: ${p.leverage}x | Liq: $${p.liquidationPrice}`);
@@ -154,12 +154,17 @@ async function handleLong(market: string, size: string, price?: string): Promise
     return 'Usage: /lighter long <market> <size> [price]\nExample: /lighter long ETH-USD 1 3000';
   }
 
+  const parsedSize = parseFloat(size);
+  if (isNaN(parsedSize) || parsedSize <= 0) return `Invalid size: ${size}`;
+  const parsedPrice = price ? parseFloat(price) : undefined;
+  if (parsedPrice !== undefined && (isNaN(parsedPrice) || parsedPrice <= 0)) return `Invalid price: ${price}`;
+
   const result = await lighter.placeOrder(config, {
     market,
     side: 'BUY',
-    size: parseFloat(size),
-    price: price ? parseFloat(price) : undefined,
-    type: price ? 'LIMIT' : 'MARKET',
+    size: parsedSize,
+    price: parsedPrice,
+    type: parsedPrice !== undefined ? 'LIMIT' : 'MARKET',
   });
 
   if (result.success) {
@@ -176,12 +181,17 @@ async function handleShort(market: string, size: string, price?: string): Promis
     return 'Usage: /lighter short <market> <size> [price]\nExample: /lighter short BTC-USD 0.1 45000';
   }
 
+  const parsedSize = parseFloat(size);
+  if (isNaN(parsedSize) || parsedSize <= 0) return `Invalid size: ${size}`;
+  const parsedPrice = price ? parseFloat(price) : undefined;
+  if (parsedPrice !== undefined && (isNaN(parsedPrice) || parsedPrice <= 0)) return `Invalid price: ${price}`;
+
   const result = await lighter.placeOrder(config, {
     market,
     side: 'SELL',
-    size: parseFloat(size),
-    price: price ? parseFloat(price) : undefined,
-    type: price ? 'LIMIT' : 'MARKET',
+    size: parsedSize,
+    price: parsedPrice,
+    type: parsedPrice !== undefined ? 'LIMIT' : 'MARKET',
   });
 
   if (result.success) {
@@ -204,6 +214,7 @@ async function handleClose(market: string): Promise<string> {
   }
 
   const size = parseFloat(pos.size);
+  if (isNaN(size) || size <= 0) return `Invalid position size for ${market}`;
   const result = await lighter.placeOrder(config, {
     market: pos.market,
     side: pos.side === 'LONG' ? 'SELL' : 'BUY',
@@ -213,7 +224,7 @@ async function handleClose(market: string): Promise<string> {
   });
 
   if (result.success) {
-    const pnl = parseFloat(pos.unrealizedPnl);
+    const pnl = parseFloat(pos.unrealizedPnl) || 0;
     const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
     return `Closed ${pos.market} ${pos.side} ${pos.size} (PnL: ${pnlStr})`;
   }
@@ -235,7 +246,11 @@ async function handleCloseAll(): Promise<string> {
 
   for (const pos of positions) {
     const size = parseFloat(pos.size);
-    const pnl = parseFloat(pos.unrealizedPnl);
+    if (isNaN(size) || size <= 0) {
+      results.push(`${pos.market}: invalid position size`);
+      continue;
+    }
+    const pnl = parseFloat(pos.unrealizedPnl) || 0;
 
     const result = await lighter.placeOrder(config, {
       market: pos.market,

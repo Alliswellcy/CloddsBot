@@ -37,7 +37,7 @@ export function createTwapRouter(deps: TwapRouterDeps): Router {
       res.json({ ok: true, data: { orders, count: orders.length } });
     } catch (err) {
       logger.warn({ err }, 'TWAP API: Failed to list orders');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -55,7 +55,7 @@ export function createTwapRouter(deps: TwapRouterDeps): Router {
       res.json({ ok: true, data: { ...order, progress } });
     } catch (err) {
       logger.warn({ err }, 'TWAP API: Failed to get order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -96,7 +96,7 @@ export function createTwapRouter(deps: TwapRouterDeps): Router {
       res.json({ ok: true, data: { id: order.id, progress } });
     } catch (err) {
       logger.warn({ err }, 'TWAP API: Failed to create order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -129,7 +129,7 @@ export function createTwapRouter(deps: TwapRouterDeps): Router {
       res.json({ ok: true, data: { id: order.id, progress } });
     } catch (err) {
       logger.warn({ err }, 'TWAP API: Failed to create iceberg order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -145,7 +145,7 @@ export function createTwapRouter(deps: TwapRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, status: 'cancelled' } });
     } catch (err) {
       logger.warn({ err }, 'TWAP API: Failed to cancel order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -167,7 +167,7 @@ export function createTwapRouter(deps: TwapRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, deleted: true } });
     } catch (err) {
       logger.warn({ err }, 'TWAP API: Failed to delete order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

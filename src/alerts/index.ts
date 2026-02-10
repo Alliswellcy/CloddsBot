@@ -530,11 +530,17 @@ export function createAlertService(
       logger.info({ interval: config.pollIntervalMs }, 'Starting alert monitoring');
 
       monitoringInterval = setInterval(async () => {
-        await emitter.checkAlerts();
+        try {
+          await emitter.checkAlerts();
+        } catch (err) {
+          logger.error({ err }, 'Alert check failed');
+        }
       }, config.pollIntervalMs);
 
       // Initial check
-      emitter.checkAlerts();
+      emitter.checkAlerts().catch(err => {
+        logger.error({ err }, 'Initial alert check failed');
+      });
     },
 
     stopMonitoring() {

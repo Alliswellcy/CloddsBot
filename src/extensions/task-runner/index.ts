@@ -639,6 +639,8 @@ Rules:
               }
             }
           }
+        }).catch(() => {
+          running.delete(taskId);
         });
       }
 

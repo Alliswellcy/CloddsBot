@@ -244,7 +244,7 @@ async function handleCandles(coin: string, interval?: string): Promise<string> {
 
   for (const c of candles.slice(-5)) {
     const time = new Date(c.time).toLocaleTimeString();
-    const chg = ((c.close - c.open) / c.open * 100);
+    const chg = c.open !== 0 ? ((c.close - c.open) / c.open * 100) : 0;
     lines.push(`  ${time}: $${c.close.toFixed(2)} (${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%)`);
   }
 
@@ -410,7 +410,7 @@ async function handleOrders(action?: string, ...args: string[]): Promise<string>
       const result = await hl.cancelAllOrders(config, coin.toUpperCase());
       return result.success ? `All ${coin.toUpperCase()} orders cancelled` : `Failed: ${result.error}`;
     }
-    const result = await hl.cancelOrder(config, coin.toUpperCase(), parseInt(oid));
+    const result = await hl.cancelOrder(config, coin.toUpperCase(), parseInt(oid, 10));
     return result.success ? `Order ${oid} cancelled` : `Failed: ${result.error}`;
   }
 
@@ -512,7 +512,13 @@ async function handleLong(coin: string, size: string, price?: string): Promise<s
 
   const coinUpper = coin.toUpperCase();
   const sizeNum = parseFloat(size);
+  if (isNaN(sizeNum) || sizeNum <= 0) {
+    return 'Invalid size. Must be a positive number.';
+  }
   const priceNum = price ? parseFloat(price) : undefined;
+  if (priceNum !== undefined && (isNaN(priceNum) || priceNum <= 0)) {
+    return 'Invalid price. Must be a positive number.';
+  }
   const isLimit = !!priceNum;
 
   const result = await hl.placePerpOrder(config, {
@@ -556,7 +562,13 @@ async function handleShort(coin: string, size: string, price?: string): Promise<
 
   const coinUpper = coin.toUpperCase();
   const sizeNum = parseFloat(size);
+  if (isNaN(sizeNum) || sizeNum <= 0) {
+    return 'Invalid size. Must be a positive number.';
+  }
   const priceNum = price ? parseFloat(price) : undefined;
+  if (priceNum !== undefined && (isNaN(priceNum) || priceNum <= 0)) {
+    return 'Invalid price. Must be a positive number.';
+  }
   const isLimit = !!priceNum;
 
   const result = await hl.placePerpOrder(config, {
@@ -734,8 +746,8 @@ async function handleLeverage(coin?: string, leverage?: string): Promise<string>
     return 'Usage: /hl leverage <coin> <leverage>\nExample: /hl leverage BTC 10';
   }
 
-  const lev = parseInt(leverage);
-  if (lev < 1 || lev > 50) {
+  const lev = parseInt(leverage, 10);
+  if (isNaN(lev) || lev < 1 || lev > 50) {
     return 'Leverage must be between 1 and 50';
   }
 
@@ -794,7 +806,7 @@ async function handleTwap(action?: string, ...args: string[]): Promise<string> {
       coin: coin.toUpperCase(),
       side: action === 'buy' ? 'BUY' : 'SELL',
       size: parseFloat(size),
-      durationMinutes: parseInt(duration),
+      durationMinutes: parseInt(duration, 10),
     });
 
     if (result.success) {
@@ -870,11 +882,20 @@ async function handleSpot(subcommand?: string, ...args: string[]): Promise<strin
       return `Usage: /hl spot ${subcommand} <coin> <amount> [price]`;
     }
 
+    const amountFloat = parseFloat(amount);
+    if (isNaN(amountFloat) || amountFloat <= 0) {
+      return 'Invalid amount. Must be a positive number.';
+    }
+    const priceFloat = price ? parseFloat(price) : 0;
+    if (price && (isNaN(priceFloat) || priceFloat <= 0)) {
+      return 'Invalid price. Must be a positive number.';
+    }
+
     const result = await hl.placeSpotOrder(config, {
       coin: coin.toUpperCase(),
       side: subcommand === 'buy' ? 'BUY' : 'SELL',
-      size: parseFloat(amount),
-      price: price ? parseFloat(price) : 0,
+      size: amountFloat,
+      price: priceFloat,
       type: price ? 'LIMIT' : 'MARKET',
     });
 
@@ -970,28 +991,36 @@ async function handleTransfer(action?: string, ...args: string[]): Promise<strin
   if (action === 'spot2perp') {
     const [amount] = args;
     if (!amount) return 'Usage: /hl transfer spot2perp <amount>';
-    const result = await hl.transferBetweenSpotAndPerp(config, parseFloat(amount), true);
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0) return 'Invalid amount. Must be a positive number.';
+    const result = await hl.transferBetweenSpotAndPerp(config, amountNum, true);
     return result.success ? `Transferred $${amount} to perps` : `Failed: ${result.error}`;
   }
 
   if (action === 'perp2spot') {
     const [amount] = args;
     if (!amount) return 'Usage: /hl transfer perp2spot <amount>';
-    const result = await hl.transferBetweenSpotAndPerp(config, parseFloat(amount), false);
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0) return 'Invalid amount. Must be a positive number.';
+    const result = await hl.transferBetweenSpotAndPerp(config, amountNum, false);
     return result.success ? `Transferred $${amount} to spot` : `Failed: ${result.error}`;
   }
 
   if (action === 'send') {
     const [address, amount] = args;
     if (!address || !amount) return 'Usage: /hl transfer send <address> <amount>';
-    const result = await hl.usdTransfer(config, address, parseFloat(amount));
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0) return 'Invalid amount. Must be a positive number.';
+    const result = await hl.usdTransfer(config, address, amountNum);
     return result.success ? `Sent $${amount} to ${address.slice(0, 8)}...` : `Failed: ${result.error}`;
   }
 
   if (action === 'withdraw') {
     const [address, amount] = args;
     if (!address || !amount) return 'Usage: /hl transfer withdraw <address> <amount>';
-    const result = await hl.withdrawToL1(config, address, parseFloat(amount));
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0) return 'Invalid amount. Must be a positive number.';
+    const result = await hl.withdrawToL1(config, address, amountNum);
     return result.success ? `Withdrawal of $${amount} initiated` : `Failed: ${result.error}`;
   }
 
@@ -1145,7 +1174,7 @@ async function handleDbTrades(coin?: string, limit?: string): Promise<string> {
   const db = await initDatabase();
   const trades = db.getHyperliquidTrades(getUserId(), {
     coin: coin?.toUpperCase(),
-    limit: limit ? parseInt(limit) : 20,
+    limit: limit ? parseInt(limit, 10) : 20,
   });
 
   if (trades.length === 0) {
@@ -1217,7 +1246,7 @@ async function handleDbFunding(coin?: string, limit?: string): Promise<string> {
   const db = await initDatabase();
   const funding = db.getHyperliquidFunding(getUserId(), {
     coin: coin?.toUpperCase(),
-    limit: limit ? parseInt(limit) : 20,
+    limit: limit ? parseInt(limit, 10) : 20,
   });
 
   if (funding.length === 0) {

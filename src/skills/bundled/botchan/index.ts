@@ -375,10 +375,12 @@ export async function execute(args: string): Promise<string> {
   switch (command) {
     case 'feeds':
       return handleFeeds();
-    case 'read':
+    case 'read': {
       const limitMatch = args.match(/--limit\s+(\d+)/);
-      const limit = limitMatch ? parseInt(limitMatch[1]) : 5;
+      const parsedLimit = limitMatch ? parseInt(limitMatch[1], 10) : 5;
+      const limit = isNaN(parsedLimit) || parsedLimit <= 0 ? 5 : parsedLimit;
       return handleRead(parts[1], limit);
+    }
     case 'profile':
       return handleProfile(parts[1]);
     case 'post':

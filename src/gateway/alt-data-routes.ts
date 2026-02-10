@@ -34,7 +34,7 @@ export function createAltDataRouter(deps: AltDataRouterDeps): Router {
       res.json({ ok: true, data: { signals, count: signals.length } });
     } catch (err) {
       logger.warn({ err }, 'Alt Data API: Signals failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -50,7 +50,7 @@ export function createAltDataRouter(deps: AltDataRouterDeps): Router {
       res.json({ ok: true, data: sentiment });
     } catch (err) {
       logger.warn({ err }, 'Alt Data API: Sentiment failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -62,7 +62,7 @@ export function createAltDataRouter(deps: AltDataRouterDeps): Router {
       res.json({ ok: true, data: stats });
     } catch (err) {
       logger.warn({ err }, 'Alt Data API: Stats failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

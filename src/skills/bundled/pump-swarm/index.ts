@@ -330,7 +330,7 @@ async function handleBuy(args: string[]): Promise<string> {
     } else if (args[i] === '--sequential') {
       executionMode = 'sequential';
     } else if (args[i] === '--slippage' && args[i + 1]) {
-      slippageBps = parseInt(args[++i]);
+      slippageBps = parseInt(args[++i], 10);
     } else if (args[i] === '--pool' && args[i + 1]) {
       pool = args[++i];
     } else if (args[i] === '--dex' && args[i + 1]) {
@@ -342,6 +342,8 @@ async function handleBuy(args: string[]): Promise<string> {
       poolAddress = args[++i];
     }
   }
+
+  if (slippageBps !== undefined && isNaN(slippageBps)) slippageBps = undefined;
 
   const swarm = getSwarm();
   const counts = swarm.getWalletCount();
@@ -374,7 +376,7 @@ async function handleBuy(args: string[]): Promise<string> {
     params = presetService.applyToParams(preset, params);
   }
 
-  const walletCount = params.walletIds?.length || counts.enabled;
+  const walletCount = params.walletIds?.length ?? counts.enabled;
   const totalSol = (typeof params.amountPerWallet === 'number' ? params.amountPerWallet : parseFloat(params.amountPerWallet as string)) * walletCount;
   let output = `**Swarm Buy**\n\n`;
   output += `Token: \`${mint}\`\n`;
@@ -448,7 +450,7 @@ async function handleSell(args: string[]): Promise<string> {
     } else if (args[i] === '--sequential') {
       executionMode = 'sequential';
     } else if (args[i] === '--slippage' && args[i + 1]) {
-      slippageBps = parseInt(args[++i]);
+      slippageBps = parseInt(args[++i], 10);
     } else if (args[i] === '--pool' && args[i + 1]) {
       pool = args[++i];
     } else if (args[i] === '--dex' && args[i + 1]) {
@@ -460,6 +462,8 @@ async function handleSell(args: string[]): Promise<string> {
       poolAddress = args[++i];
     }
   }
+
+  if (slippageBps !== undefined && isNaN(slippageBps)) slippageBps = undefined;
 
   const swarm = getSwarm();
 
@@ -625,7 +629,7 @@ async function handlePresetSave(args: string[]): Promise<string> {
     } else if (arg === '--amount' && args[i + 1]) {
       amountPerWallet = parseFloat(args[++i]);
     } else if (arg === '--slippage' && args[i + 1]) {
-      slippageBps = parseInt(args[++i]);
+      slippageBps = parseInt(args[++i], 10);
     } else if (arg === '--pool' && args[i + 1]) {
       const p = args[++i].toLowerCase();
       if (p === 'pump' || p === 'raydium' || p === 'auto') {
@@ -915,7 +919,7 @@ Buy gradually at lower price levels.
 
   const [mint, totalSolStr, levelsStr, dropStr] = args;
   const totalSol = parseFloat(totalSolStr);
-  const levels = parseInt(levelsStr);
+  const levels = parseInt(levelsStr, 10);
   const dropPercent = parseFloat(dropStr);
 
   if (isNaN(totalSol) || totalSol <= 0) return '❌ Invalid total SOL amount';
@@ -971,7 +975,7 @@ Sell gradually at higher price levels.
   }
 
   const [mint, levelsStr, riseStr] = args;
-  const levels = parseInt(levelsStr);
+  const levels = parseInt(levelsStr, 10);
   const risePercent = parseFloat(riseStr);
 
   if (isNaN(levels) || levels < 2 || levels > 10) return '❌ Levels must be 2-10';
@@ -1065,7 +1069,7 @@ Time-Weighted Average Price - split order over time.
 
   const [mint, action, amountStr, intervalsStr, delayStr] = args;
   const amount = parseFloat(amountStr);
-  const intervals = parseInt(intervalsStr);
+  const intervals = parseInt(intervalsStr, 10);
 
   if (!['buy', 'sell'].includes(action.toLowerCase())) return '❌ Action must be buy or sell';
   if (isNaN(amount) || amount <= 0) return '❌ Invalid amount';
@@ -1075,7 +1079,7 @@ Time-Weighted Average Price - split order over time.
   let delayMs = 60000;
   const delayMatch = delayStr.match(/^(\d+)(s|m|h)$/i);
   if (delayMatch) {
-    const num = parseInt(delayMatch[1]);
+    const num = parseInt(delayMatch[1], 10);
     const unit = delayMatch[2].toLowerCase();
     if (unit === 's') delayMs = num * 1000;
     else if (unit === 'm') delayMs = num * 60 * 1000;
@@ -1125,7 +1129,7 @@ Set multiple buy orders at decreasing price levels.
 
   const [mint, totalSolStr, levelsStr, dropStr] = args;
   const totalSol = parseFloat(totalSolStr);
-  const levels = parseInt(levelsStr);
+  const levels = parseInt(levelsStr, 10);
   const dropPercent = parseFloat(dropStr);
 
   if (isNaN(totalSol) || totalSol <= 0) return '❌ Invalid total SOL';
@@ -1167,7 +1171,7 @@ Dollar-cost average with time delays.
 
   const [mint, amountStr, countStr, intervalStr] = args;
   const amount = parseFloat(amountStr);
-  const count = parseInt(countStr);
+  const count = parseInt(countStr, 10);
 
   if (isNaN(amount) || amount <= 0) return '❌ Invalid amount';
   if (isNaN(count) || count < 2 || count > 100) return '❌ Count must be 2-100';
@@ -1175,7 +1179,7 @@ Dollar-cost average with time delays.
   let intervalMs = 3600000;
   const match = intervalStr.match(/^(\d+)(s|m|h)$/i);
   if (match) {
-    const num = parseInt(match[1]);
+    const num = parseInt(match[1], 10);
     const unit = match[2].toLowerCase();
     if (unit === 's') intervalMs = num * 1000;
     else if (unit === 'm') intervalMs = num * 60 * 1000;
@@ -1872,7 +1876,7 @@ function parseInterval(str: string): number {
   const match = str.match(/^(\d+)(s|m|h|d)$/i);
   if (!match) return 0;
 
-  const value = parseInt(match[1]);
+  const value = parseInt(match[1], 10);
   const unit = match[2].toLowerCase();
 
   switch (unit) {
@@ -1904,7 +1908,7 @@ Schedule DCA (Dollar Cost Averaging) buys.
   const mint = args[0];
   const amountPerInterval = parseFloat(args[1]);
   const intervalMs = parseInterval(args[2]);
-  const totalIntervals = parseInt(args[3]);
+  const totalIntervals = parseInt(args[3], 10);
 
   // Parse options
   let dex: 'pumpfun' | 'bags' | 'meteora' | undefined;
@@ -2008,7 +2012,7 @@ async function handleHistory(args: string[]): Promise<string> {
     } else if (args[i] === '--wallet' && args[i + 1]) {
       walletId = args[++i];
     } else if (args[i] === '--limit' && args[i + 1]) {
-      limit = parseInt(args[++i]);
+      limit = parseInt(args[++i], 10);
     }
   }
 
@@ -2264,7 +2268,7 @@ async function handleCopytradeAdd(args: string[]): Promise<string> {
     } else if (arg === '--min-sol' && args[i + 1]) {
       minSolPerTrade = parseFloat(args[++i]);
     } else if (arg === '--delay' && args[i + 1]) {
-      delayMs = parseInt(args[++i]);
+      delayMs = parseInt(args[++i], 10);
     } else if (arg === '--buys-only') {
       copySells = false;
     } else if (arg === '--sells-only') {
@@ -2280,7 +2284,7 @@ async function handleCopytradeAdd(args: string[]): Promise<string> {
         executionMode = m;
       }
     } else if (arg === '--slippage' && args[i + 1]) {
-      slippageBps = parseInt(args[++i]);
+      slippageBps = parseInt(args[++i], 10);
     }
   }
 
@@ -2402,7 +2406,7 @@ Update configuration for a copy target.
     } else if (arg === '--min-sol' && args[i + 1]) {
       config.minSolPerTrade = parseFloat(args[++i]);
     } else if (arg === '--delay' && args[i + 1]) {
-      config.delayMs = parseInt(args[++i]);
+      config.delayMs = parseInt(args[++i], 10);
     } else if (arg === '--buys' && args[i + 1]) {
       config.copyBuys = args[++i].toLowerCase() === 'on';
     } else if (arg === '--sells' && args[i + 1]) {

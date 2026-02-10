@@ -77,7 +77,11 @@ async function handleSwap(args: string[]): Promise<string> {
     const tokens = await tokenlist.getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
-    const amountBaseUnits = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return 'Invalid amount. Must be a positive number.';
+    }
+    const amountBaseUnits = Math.floor(parsedAmount * Math.pow(10, fromDecimals)).toString();
 
     const result = await raydium.executeRaydiumSwap(connection, keypair, {
       inputMint: fromMint,
@@ -120,7 +124,11 @@ async function handleQuote(args: string[]): Promise<string> {
     const tokens = await tokenlist.getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
-    const amountBaseUnits = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return 'Invalid amount. Must be a positive number.';
+    }
+    const amountBaseUnits = Math.floor(parsedAmount * Math.pow(10, fromDecimals)).toString();
 
     const quote = await raydium.getRaydiumQuote({
       inputMint: fromMint,
@@ -325,7 +333,11 @@ Examples:
   }
 
   const [poolId, nftMint, pctStr] = args;
-  const percentage = pctStr ? parseInt(pctStr) : 100;
+  const percentage = pctStr ? parseInt(pctStr, 10) : 100;
+
+  if (isNaN(percentage) || percentage < 1 || percentage > 100) {
+    return 'Percentage must be between 1 and 100.';
+  }
 
   try {
     const { wallet, raydium } = await getSolanaModules();

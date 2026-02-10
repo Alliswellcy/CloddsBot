@@ -194,6 +194,11 @@ async function handleQuote(args: string[]): Promise<string> {
   const fromToken = args.slice(1, toIndex).join('');
   const toToken = args.slice(toIndex + 1).join('');
 
+  const parsedAmount = parseFloat(amount);
+  if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    return 'Invalid amount. Must be a positive number.';
+  }
+
   try {
     const { resolveTokenMints, getTokenList } = await import('../../../solana/tokenlist');
     const [fromMint, toMint] = await resolveTokenMints([fromToken, toToken]);
@@ -206,7 +211,7 @@ async function handleQuote(args: string[]): Promise<string> {
     const tokens = await getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
-    const amountSmallest = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
+    const amountSmallest = Math.floor(parsedAmount * Math.pow(10, fromDecimals)).toString();
 
     const quote = await bagsRequest<BagsQuoteResponse>(
       `/trade/quote?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountSmallest}&slippageMode=auto`
@@ -237,6 +242,11 @@ async function handleSwap(args: string[]): Promise<string> {
   const fromToken = args.slice(1, toIndex).join('');
   const toToken = args.slice(toIndex + 1).join('');
 
+  const parsedAmount = parseFloat(amount);
+  if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    return 'Invalid amount. Must be a positive number.';
+  }
+
   try {
     const { resolveTokenMints, getTokenList } = await import('../../../solana/tokenlist');
     const { loadSolanaKeypair, getSolanaConnection } = await import('../../../solana/wallet');
@@ -253,7 +263,7 @@ async function handleSwap(args: string[]): Promise<string> {
     const tokens = await getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
-    const amountSmallest = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
+    const amountSmallest = Math.floor(parsedAmount * Math.pow(10, fromDecimals)).toString();
 
     // Step 1: Get quote
     const quote = await bagsRequest<BagsQuoteResponse>(
@@ -558,7 +568,8 @@ async function handleClaim(walletArg: string): Promise<string> {
 
         totalClaimedLamports += pos.totalClaimableLamportsUserShare;
       } catch (e) {
-        // Skip failed claims, continue with next token
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[bags] Claim failed for ${pos.baseMint}: ${msg}`);
       }
     }
 
@@ -590,10 +601,10 @@ async function handleClaimEvents(args: string[]): Promise<string> {
   // Parse optional flags
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--from' && args[i + 1]) {
-      fromTs = parseInt(args[i + 1]);
+      fromTs = parseInt(args[i + 1], 10);
       i++;
     } else if (args[i] === '--to' && args[i + 1]) {
-      toTs = parseInt(args[i + 1]);
+      toTs = parseInt(args[i + 1], 10);
       i++;
     }
   }
@@ -715,7 +726,8 @@ Example:
     else if (flag === '--website' && value) { website = value; i++; }
     else if (flag === '--telegram' && value) { telegram = value; i++; }
     else if (flag === '--initial' && value) {
-      initialBuyLamports = Math.floor(parseFloat(value) * 1e9);
+      const parsed = parseFloat(value);
+      if (!isNaN(parsed) && parsed > 0) initialBuyLamports = Math.floor(parsed * 1e9);
       i++;
     }
   }
@@ -881,7 +893,7 @@ Examples:
     if (!wallet || !bpsStr) {
       return `Invalid claimer format: ${arg}. Use wallet:bps format.`;
     }
-    const bps = parseInt(bpsStr);
+    const bps = parseInt(bpsStr, 10);
     if (isNaN(bps) || bps < 0 || bps > 10000) {
       return `Invalid BPS value: ${bpsStr}. Must be 0-10000.`;
     }

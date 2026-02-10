@@ -535,11 +535,11 @@ export class StrategyExecutor extends EventEmitter {
         if (stepResult.success) {
           result.stepsCompleted++;
           if (step.action === 'buy') {
-            result.totalSolSpent += stepResult.solAmount || 0;
-            result.totalTokensBought += stepResult.tokenAmount || 0;
+            result.totalSolSpent += stepResult.solAmount ?? 0;
+            result.totalTokensBought += stepResult.tokenAmount ?? 0;
           } else if (step.action === 'sell') {
-            result.totalSolReceived += stepResult.solAmount || 0;
-            result.totalTokensSold += stepResult.tokenAmount || 0;
+            result.totalSolReceived += stepResult.solAmount ?? 0;
+            result.totalTokensSold += stepResult.tokenAmount ?? 0;
           }
         } else if (stepResult.error) {
           result.errors.push(`Step ${step.id}: ${stepResult.error}`);
@@ -652,8 +652,8 @@ export class StrategyExecutor extends EventEmitter {
           const buyResult = await this.swarm.coordinatedBuy({
             mint: step.params.mint || strategy.mint,
             action: 'buy',
-            amountPerWallet: step.params.amount || 0,
-            slippageBps: step.params.slippageBps || strategy.config.maxSlippageBps,
+            amountPerWallet: step.params.amount ?? 0,
+            slippageBps: step.params.slippageBps ?? strategy.config.maxSlippageBps,
             pool: step.params.pool || strategy.config.defaultPool,
             executionMode: step.params.executionMode,
             walletIds: step.params.walletIds || strategy.config.walletIds,
@@ -671,8 +671,8 @@ export class StrategyExecutor extends EventEmitter {
           const sellResult = await this.swarm.coordinatedSell({
             mint: step.params.mint || strategy.mint,
             action: 'sell',
-            amountPerWallet: step.params.amount || step.params.amountPercent || 0,
-            slippageBps: step.params.slippageBps || strategy.config.maxSlippageBps,
+            amountPerWallet: step.params.amount ?? step.params.amountPercent ?? 0,
+            slippageBps: step.params.slippageBps ?? strategy.config.maxSlippageBps,
             pool: step.params.pool || strategy.config.defaultPool,
             executionMode: step.params.executionMode,
             walletIds: step.params.walletIds || strategy.config.walletIds,

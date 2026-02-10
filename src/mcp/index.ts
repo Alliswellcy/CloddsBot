@@ -939,7 +939,7 @@ export function createMcpRegistry(): McpRegistry {
       const promises: Promise<void>[] = [];
 
       for (const client of clients.values()) {
-        promises.push(client.disconnect());
+        promises.push(client.disconnect().catch(() => {}));
       }
 
       await Promise.all(promises);

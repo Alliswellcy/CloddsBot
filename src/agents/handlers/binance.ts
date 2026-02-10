@@ -125,7 +125,7 @@ async function longHandler(
       side: 'BUY',
       positionSide: 'LONG',
       size: result.executedQty,
-      price: result.avgPrice || 0,
+      price: result.avgPrice ?? 0,
       leverage,
       timestamp: new Date(),
     });
@@ -155,7 +155,7 @@ async function shortHandler(
       side: 'SELL',
       positionSide: 'SHORT',
       size: result.executedQty,
-      price: result.avgPrice || 0,
+      price: result.avgPrice ?? 0,
       leverage,
       timestamp: new Date(),
     });
@@ -186,7 +186,7 @@ async function closeHandler(
       side: result.side,
       positionSide: result.positionSide,
       size: result.executedQty,
-      price: result.avgPrice || 0,
+      price: result.avgPrice ?? 0,
       timestamp: new Date(),
     });
     return JSON.stringify({ success: true, order: result });

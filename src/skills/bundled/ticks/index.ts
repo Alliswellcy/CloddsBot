@@ -102,7 +102,8 @@ Example: /ticks polymarket 0x1234abcd --limit 50`;
     if (args[i] === '--outcome' && args[i + 1]) {
       outcomeId = args[++i];
     } else if (args[i] === '--limit' && args[i + 1]) {
-      limit = parseInt(args[++i], 10);
+      const parsed = parseInt(args[++i], 10);
+      if (!isNaN(parsed) && parsed > 0) limit = parsed;
     }
   }
 
@@ -204,8 +205,9 @@ Example: /ticks ohlc polymarket 0x1234 --outcome 0x5678 --interval 1h`;
     // Summary
     const latest = data.candles[data.candles.length - 1];
     const first = data.candles[0];
-    const change = (first.open > 0 ? ((latest.close - first.open) / first.open * 100) : 0).toFixed(2);
-    const direction = parseFloat(change) >= 0 ? '📈' : '📉';
+    const changeNum = first.open > 0 ? ((latest.close - first.open) / first.open * 100) : 0;
+    const change = changeNum.toFixed(2);
+    const direction = changeNum >= 0 ? '📈' : '📉';
 
     output += `\n\n${direction} Period change: ${change}%`;
 
@@ -235,7 +237,8 @@ Example: /ticks spread polymarket 0x1234 --limit 20`;
     if (args[i] === '--outcome' && args[i + 1]) {
       outcomeId = args[++i];
     } else if (args[i] === '--limit' && args[i + 1]) {
-      limit = parseInt(args[++i], 10);
+      const parsed = parseInt(args[++i], 10);
+      if (!isNaN(parsed) && parsed > 0) limit = parsed;
     }
   }
 

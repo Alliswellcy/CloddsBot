@@ -116,7 +116,7 @@ async function handleMarket(marketId: string): Promise<string> {
     for (const o of market.outcomes) {
       const odds = o.price > 0 ? (1 / o.price).toFixed(2) : '-';
       output += `- **${o.name}** (ID: ${o.id})\n`;
-      output += `  Odds: ${odds} | Volume: £${(o.volume24h || 0).toLocaleString()}\n`;
+      output += `  Odds: ${odds} | Volume: £${(o.volume24h ?? 0).toLocaleString()}\n`;
     }
 
     return output;
@@ -137,7 +137,7 @@ async function handlePrices(marketId: string): Promise<string> {
 
     let output = `**Market Prices: ${marketId}**\n\n`;
     output += `Status: ${book.status}\n`;
-    output += `Total Matched: £${(book.totalMatched || 0).toLocaleString()}\n`;
+    output += `Total Matched: £${(book.totalMatched ?? 0).toLocaleString()}\n`;
     output += `In-play: ${book.inplay ? 'Yes' : 'No'}\n\n`;
 
     for (const runner of book.runners) {
@@ -166,7 +166,11 @@ async function handleBook(marketId: string, selectionId: string): Promise<string
   if (!f) return 'Betfair not configured. Set BETFAIR_APP_KEY and BETFAIR_SESSION_TOKEN.';
 
   try {
-    const orderbook = await f.getOrderbook(marketId, parseInt(selectionId, 10));
+    const selectionIdNum = parseInt(selectionId, 10);
+    if (isNaN(selectionIdNum)) {
+      return 'Invalid selection ID.';
+    }
+    const orderbook = await f.getOrderbook(marketId, selectionIdNum);
     if (!orderbook) {
       return `Orderbook not found for ${marketId}/${selectionId}.`;
     }
@@ -201,8 +205,8 @@ async function handleBack(marketId: string, selectionId: string, odds: string, s
     const oddsNum = parseFloat(odds);
     const stakeNum = parseFloat(stake);
 
-    if (isNaN(oddsNum) || isNaN(stakeNum) || oddsNum <= 0) {
-      return 'Invalid odds or stake. Odds must be > 0.';
+    if (isNaN(oddsNum) || isNaN(stakeNum) || oddsNum <= 0 || stakeNum <= 0) {
+      return 'Invalid odds or stake. Both must be positive numbers.';
     }
 
     // Circuit breaker pre-trade check
@@ -215,7 +219,12 @@ async function handleBack(marketId: string, selectionId: string, odds: string, s
       }
     } catch { /* circuit breaker non-critical */ }
 
-    const result = await f.placeBackOrder(marketId, parseInt(selectionId, 10), oddsNum, stakeNum);
+    const selectionIdNum = parseInt(selectionId, 10);
+    if (isNaN(selectionIdNum)) {
+      return 'Invalid selection ID.';
+    }
+
+    const result = await f.placeBackOrder(marketId, selectionIdNum, oddsNum, stakeNum);
 
     // Circuit breaker post-trade recording
     try {
@@ -265,8 +274,8 @@ async function handleLay(marketId: string, selectionId: string, odds: string, st
     const oddsNum = parseFloat(odds);
     const stakeNum = parseFloat(stake);
 
-    if (isNaN(oddsNum) || isNaN(stakeNum) || oddsNum <= 0) {
-      return 'Invalid odds or stake. Odds must be > 0.';
+    if (isNaN(oddsNum) || isNaN(stakeNum) || oddsNum <= 0 || stakeNum <= 0) {
+      return 'Invalid odds or stake. Both must be positive numbers.';
     }
 
     // Circuit breaker pre-trade check
@@ -279,7 +288,12 @@ async function handleLay(marketId: string, selectionId: string, odds: string, st
       }
     } catch { /* circuit breaker non-critical */ }
 
-    const result = await f.placeLayOrder(marketId, parseInt(selectionId, 10), oddsNum, stakeNum);
+    const selectionIdNum = parseInt(selectionId, 10);
+    if (isNaN(selectionIdNum)) {
+      return 'Invalid selection ID.';
+    }
+
+    const result = await f.placeLayOrder(marketId, selectionIdNum, oddsNum, stakeNum);
 
     // Circuit breaker post-trade recording
     try {
@@ -365,8 +379,8 @@ async function handleOrders(marketId?: string): Promise<string> {
       output += `  Side: ${order.side}\n`;
       output += `  Price: ${order.priceSize.price}\n`;
       output += `  Size: £${order.priceSize.size}\n`;
-      output += `  Matched: £${order.sizeMatched || 0}\n`;
-      output += `  Remaining: £${order.sizeRemaining || 0}\n`;
+      output += `  Matched: £${order.sizeMatched ?? 0}\n`;
+      output += `  Remaining: £${order.sizeRemaining ?? 0}\n`;
       output += `  Status: ${order.status}\n\n`;
     }
     return output;
@@ -404,8 +418,8 @@ async function handlePositions(): Promise<string> {
     for (const pos of positions) {
       output += `Market: ${pos.marketId}\n`;
       output += `Selection: ${pos.selectionId}\n`;
-      output += `Matched P&L: £${(pos.matchedPL || 0).toFixed(2)}\n`;
-      output += `Unmatched P&L: £${(pos.unmatchedPL || 0).toFixed(2)}\n\n`;
+      output += `Matched P&L: £${(pos.matchedPL ?? 0).toFixed(2)}\n`;
+      output += `Unmatched P&L: £${(pos.unmatchedPL ?? 0).toFixed(2)}\n\n`;
     }
     return output;
   } catch (error) {

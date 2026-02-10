@@ -134,7 +134,7 @@ export function createTradingApiRouter(deps: TradingApiDeps): Router {
   router.get('/signals/recent', (req: Request, res: Response) => {
     if (!signalRouter) { res.status(404).json({ error: 'Signal router not enabled' }); return; }
     try {
-      const limit = parseInt(req.query.limit as string) || 50;
+      const limit = parseInt(req.query.limit as string, 10) || 50;
       const executions = signalRouter.getRecentExecutions(limit);
       const stats = signalRouter.getStats();
       res.json({ executions, stats, count: executions.length });
@@ -305,7 +305,7 @@ export function createTradingApiRouter(deps: TradingApiDeps): Router {
   router.get('/trades', (req: Request, res: Response) => {
     if (!tradeLogger) { res.status(404).json({ error: 'Trade logger not available' }); return; }
     try {
-      const limit = parseInt(req.query.limit as string) || 50;
+      const limit = parseInt(req.query.limit as string, 10) || 50;
       const platform = req.query.platform as string | undefined;
       const strategyId = req.query.strategyId as string | undefined;
       const status = req.query.status as string | undefined;
@@ -321,7 +321,7 @@ export function createTradingApiRouter(deps: TradingApiDeps): Router {
   router.get('/pnl', (req: Request, res: Response) => {
     if (!tradeLogger) { res.status(404).json({ error: 'Trade logger not available' }); return; }
     try {
-      const days = parseInt(req.query.days as string) || 30;
+      const days = parseInt(req.query.days as string, 10) || 30;
       const dailyPnl = tradeLogger.getDailyPnL(days);
       const totalPnl = dailyPnl.reduce((sum, d) => sum + d.pnl, 0);
       const totalTrades = dailyPnl.reduce((sum, d) => sum + d.trades, 0);

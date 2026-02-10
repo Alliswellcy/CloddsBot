@@ -59,7 +59,7 @@ async function handleMarkets(query?: string): Promise<string> {
     const lines = ['**Predict.fun Markets**', ''];
 
     for (const m of (markets as Array<{ id: string; question: string; outcomes?: Array<{ name: string; price?: number }> }>).slice(0, 15)) {
-      const yesPrice = m.outcomes?.find((o: { name: string }) => o.name.toLowerCase() === 'yes')?.price || 0;
+      const yesPrice = m.outcomes?.find((o: { name: string }) => o.name.toLowerCase() === 'yes')?.price ?? 0;
       lines.push(`  [${m.id}] ${m.question}`);
       lines.push(`       YES: ${(yesPrice * 100).toFixed(0)}c`);
     }
@@ -110,7 +110,7 @@ async function handleMarket(marketId: string): Promise<string> {
 
     if (market.outcomes) {
       for (const outcome of market.outcomes) {
-        const price = outcome.price || 0;
+        const price = outcome.price ?? 0;
         lines.push(`  ${outcome.name}: ${(price * 100).toFixed(0)}c`);
       }
     }

@@ -174,8 +174,9 @@ function matchFilters(
         break;
       case 'regex':
         try {
+          if (filter.value.length > 200) break;
           const regex = new RegExp(filter.value, 'i');
-          if (regex.test(content)) {
+          if (regex.test(content.slice(0, 10000))) {
             matched.push(filter);
           }
         } catch {
@@ -343,7 +344,7 @@ async function processSignal(
   source.stats.signalsMatched++;
 
   // Check cooldown
-  const lastTrade = tradeCooldowns.get(source.id) || 0;
+  const lastTrade = tradeCooldowns.get(source.id) ?? 0;
   if (Date.now() - lastTrade < source.tradeConfig.cooldownMs) {
     logger.info(`[Signals] Skipping trade (cooldown)`);
     return;
@@ -805,7 +806,7 @@ Trade actions: buy, sell, ignore`;
     }
 
     case 'remove': {
-      const index = parseInt(args[2]);
+      const index = parseInt(args[2], 10);
       if (isNaN(index) || index < 0 || index >= source.filters.length) {
         return 'Invalid filter index.';
       }
@@ -843,18 +844,24 @@ Options:
     const next = args[i + 1];
 
     switch (arg) {
-      case '--amount':
-        source.tradeConfig.amountSol = parseFloat(next);
+      case '--amount': {
+        const val = parseFloat(next);
+        if (!isNaN(val) && val > 0) source.tradeConfig.amountSol = val;
         i++;
         break;
-      case '--slippage':
-        source.tradeConfig.slippageBps = parseInt(next);
+      }
+      case '--slippage': {
+        const val = parseInt(next, 10);
+        if (!isNaN(val) && val >= 0) source.tradeConfig.slippageBps = val;
         i++;
         break;
-      case '--cooldown':
-        source.tradeConfig.cooldownMs = parseInt(next);
+      }
+      case '--cooldown': {
+        const val = parseInt(next, 10);
+        if (!isNaN(val) && val >= 0) source.tradeConfig.cooldownMs = val;
         i++;
         break;
+      }
       case '--require-mint':
         source.tradeConfig.requireMintInMessage = true;
         break;

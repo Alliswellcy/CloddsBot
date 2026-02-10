@@ -246,7 +246,7 @@ async function tradesHandler(
 ): Promise<HandlerResult> {
   const tokenId = toolInput.token_id as string;
   const maker = toolInput.maker as string | undefined;
-  const limit = (toolInput.limit as number) || 100;
+  const limit = (toolInput.limit as number) ?? 100;
 
   return safeHandler(async () => {
     let url = `https://clob.polymarket.com/trades?token_id=${tokenId}&limit=${limit}`;
@@ -371,8 +371,8 @@ async function eventBySlugHandler(toolInput: ToolInput): Promise<HandlerResult> 
 }
 
 async function eventsHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 20;
-  const offset = (toolInput.offset as number) || 0;
+  const limit = (toolInput.limit as number) ?? 20;
+  const offset = (toolInput.offset as number) ?? 0;
   const active = toolInput.active as boolean | undefined;
 
   return safeHandler(async () => {
@@ -520,7 +520,7 @@ async function userHistoryHandler(
   const asset_id = toolInput.asset_id as string | undefined;
   const before = toolInput.before as string | undefined;
   const after = toolInput.after as string | undefined;
-  const limit = (toolInput.limit as number) || 100;
+  const limit = (toolInput.limit as number) ?? 100;
   const nextCursor = toolInput.next_cursor as string | undefined;
 
   return safeHandler(async () => {
@@ -551,7 +551,7 @@ async function leaderboardHandler(
   toolInput: ToolInput,
   _context: HandlerContext
 ): Promise<HandlerResult> {
-  const limit = (toolInput.limit as number) || 100;
+  const limit = (toolInput.limit as number) ?? 100;
 
   return safeHandler(async () => {
     const response = await fetch(

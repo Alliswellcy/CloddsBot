@@ -36,7 +36,7 @@ export function createBracketRouter(deps: BracketRouterDeps): Router {
       res.json({ ok: true, data: { orders, count: orders.length } });
     } catch (err) {
       logger.warn({ err }, 'Bracket API: Failed to list orders');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -54,7 +54,7 @@ export function createBracketRouter(deps: BracketRouterDeps): Router {
       res.json({ ok: true, data: { ...order, liveStatus: status } });
     } catch (err) {
       logger.warn({ err }, 'Bracket API: Failed to get order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -98,7 +98,7 @@ export function createBracketRouter(deps: BracketRouterDeps): Router {
       res.json({ ok: true, data: { id: order.id, status } });
     } catch (err) {
       logger.warn({ err }, 'Bracket API: Failed to create order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -114,7 +114,7 @@ export function createBracketRouter(deps: BracketRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, status: 'cancelled' } });
     } catch (err) {
       logger.warn({ err }, 'Bracket API: Failed to cancel order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -135,7 +135,7 @@ export function createBracketRouter(deps: BracketRouterDeps): Router {
       res.json({ ok: true, data: { id: req.params.id, deleted: true } });
     } catch (err) {
       logger.warn({ err }, 'Bracket API: Failed to delete order');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

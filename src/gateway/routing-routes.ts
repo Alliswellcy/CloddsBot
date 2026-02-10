@@ -34,7 +34,7 @@ export function createRoutingRouter(deps: RoutingRouterDeps): Router {
       res.json({ ok: true, data: result });
     } catch (err) {
       logger.warn({ err }, 'Routing API: Quote failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -51,7 +51,7 @@ export function createRoutingRouter(deps: RoutingRouterDeps): Router {
       res.json({ ok: true, data: { quotes, count: quotes.length } });
     } catch (err) {
       logger.warn({ err }, 'Routing API: Quotes failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -68,7 +68,7 @@ export function createRoutingRouter(deps: RoutingRouterDeps): Router {
       res.json({ ok: true, data: result });
     } catch (err) {
       logger.warn({ err }, 'Routing API: Compare failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 
@@ -81,7 +81,7 @@ export function createRoutingRouter(deps: RoutingRouterDeps): Router {
       res.json({ ok: true, data: { updated: true } });
     } catch (err) {
       logger.warn({ err }, 'Routing API: Config update failed');
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      res.status(500).json({ ok: false, error: 'Internal error' });
     }
   });
 

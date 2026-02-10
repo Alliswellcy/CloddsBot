@@ -917,7 +917,7 @@ export function createPortfolioService(config: PortfolioConfig, db?: Database): 
     },
 
     async refresh() {
-      await Promise.all([this.fetchPositions(), this.fetchBalances()]);
+      await Promise.allSettled([this.fetchPositions(), this.fetchBalances()]);
       logger.info('Portfolio refreshed');
     },
 

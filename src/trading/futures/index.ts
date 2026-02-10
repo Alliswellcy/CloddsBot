@@ -1542,7 +1542,7 @@ class BinanceFuturesClient {
       symbol: string;
       countdownTime: string;
     };
-    return { symbol: data.symbol, countdownTime: parseInt(data.countdownTime) };
+    return { symbol: data.symbol, countdownTime: parseInt(data.countdownTime, 10) };
   }
 
   async getOrderModifyHistory(symbol: string, orderId?: string, limit = 50): Promise<Array<{
@@ -1904,7 +1904,7 @@ class BybitFuturesClient {
           tickSize: parseFloat(i.priceFilter.tickSize),
           lotSize: parseFloat(i.lotSizeFilter.qtyStep),
           minNotional: parseFloat(i.lotSizeFilter.minOrderQty),
-          maxLeverage: parseInt(i.leverageFilter.maxLeverage),
+          maxLeverage: parseInt(i.leverageFilter.maxLeverage, 10),
           fundingRate: parseFloat(ticker?.fundingRate || '0') * 100,
           markPrice: parseFloat(ticker?.markPrice || '0'),
           indexPrice: parseFloat(ticker?.indexPrice || '0'),
@@ -1922,7 +1922,7 @@ class BybitFuturesClient {
     const ticker = data.list[0];
     return {
       rate: parseFloat(ticker?.fundingRate || '0') * 100,
-      nextFundingTime: parseInt(ticker?.nextFundingTime || '0'),
+      nextFundingTime: parseInt(ticker?.nextFundingTime || '0', 10),
     };
   }
 
@@ -1957,7 +1957,7 @@ class BybitFuturesClient {
       status: this.mapBybitStatus(o.orderStatus),
       filledSize: parseFloat(o.cumExecQty),
       avgFillPrice: parseFloat(o.price),
-      timestamp: parseInt(o.createdTime),
+      timestamp: parseInt(o.createdTime, 10),
     }));
   }
 
@@ -2043,7 +2043,7 @@ class BybitFuturesClient {
       realizedPnl: parseFloat(t.closedPnl),
       commission: parseFloat(t.execFee),
       commissionAsset: t.feeCurrency,
-      timestamp: parseInt(t.execTime),
+      timestamp: parseInt(t.execTime, 10),
       isMaker: t.isMaker,
     }));
   }
@@ -2081,7 +2081,7 @@ class BybitFuturesClient {
       status: this.mapBybitStatus(o.orderStatus),
       filledSize: parseFloat(o.cumExecQty),
       avgFillPrice: parseFloat(o.avgPrice),
-      timestamp: parseInt(o.createdTime),
+      timestamp: parseInt(o.createdTime, 10),
     }));
   }
 
@@ -2096,13 +2096,13 @@ class BybitFuturesClient {
     };
 
     return data.list.map(k => ({
-      openTime: parseInt(k[0]),
+      openTime: parseInt(k[0], 10),
       open: parseFloat(k[1]),
       high: parseFloat(k[2]),
       low: parseFloat(k[3]),
       close: parseFloat(k[4]),
       volume: parseFloat(k[5]),
-      closeTime: parseInt(k[0]) + 60000,
+      closeTime: parseInt(k[0], 10) + 60000,
       quoteVolume: parseFloat(k[6]),
       trades: 0,
       takerBuyVolume: 0,
@@ -2151,7 +2151,7 @@ class BybitFuturesClient {
       incomeType: 'REALIZED_PNL' as const,
       income: parseFloat(i.closedPnl),
       asset: 'USDT',
-      timestamp: parseInt(i.updatedTime),
+      timestamp: parseInt(i.updatedTime, 10),
       tradeId: i.orderId,
     }));
   }
@@ -2172,7 +2172,7 @@ class BybitFuturesClient {
 
     return data.list.map(r => ({
       symbol: r.symbol,
-      maxLeverage: parseInt(r.maxLeverage),
+      maxLeverage: parseInt(r.maxLeverage, 10),
       maintenanceMarginRate: parseFloat(r.maintainMargin),
       riskLimitValue: parseFloat(r.riskLimitValue),
     }));
@@ -2285,7 +2285,7 @@ class BybitFuturesClient {
     return data.list.map(f => ({
       symbol: f.symbol,
       fundingRate: parseFloat(f.fundingRate) * 100,
-      fundingTime: parseInt(f.fundingRateTimestamp),
+      fundingTime: parseInt(f.fundingRateTimestamp, 10),
     }));
   }
 
@@ -2339,13 +2339,13 @@ class BybitFuturesClient {
       price: parseFloat(t.price),
       size: parseFloat(t.size),
       side: t.side,
-      timestamp: parseInt(t.time),
+      timestamp: parseInt(t.time, 10),
     }));
   }
 
   async getServerTime(): Promise<number> {
     const data = await this.request('GET', '/v5/market/time', {}) as { timeSecond: string; timeNano: string };
-    return parseInt(data.timeSecond) * 1000;
+    return parseInt(data.timeSecond, 10) * 1000;
   }
 
   // =========== ADDITIONAL BYBIT METHODS ===========
@@ -2414,7 +2414,7 @@ class BybitFuturesClient {
 
     return data.list.map(d => ({
       openInterest: parseFloat(d.openInterest),
-      timestamp: parseInt(d.timestamp),
+      timestamp: parseInt(d.timestamp, 10),
     }));
   }
 
@@ -2433,7 +2433,7 @@ class BybitFuturesClient {
     return data.list.map(d => ({
       buyRatio: parseFloat(d.buyRatio),
       sellRatio: parseFloat(d.sellRatio),
-      timestamp: parseInt(d.timestamp),
+      timestamp: parseInt(d.timestamp, 10),
     }));
   }
 
@@ -2474,7 +2474,7 @@ class BybitFuturesClient {
     return data.map(d => ({
       period: d.period,
       value: parseFloat(d.value),
-      time: parseInt(d.time),
+      time: parseInt(d.time, 10),
     }));
   }
 
@@ -2492,7 +2492,7 @@ class BybitFuturesClient {
     return data.list.map(d => ({
       symbol: d.symbol,
       deliveryPrice: parseFloat(d.deliveryPrice),
-      deliveryTime: parseInt(d.deliveryTime),
+      deliveryTime: parseInt(d.deliveryTime, 10),
     }));
   }
 
@@ -2570,7 +2570,7 @@ class BybitFuturesClient {
       qty: parseFloat(d.qty),
       orderPrice: parseFloat(d.orderPrice),
       closedPnl: parseFloat(d.closedPnl),
-      createdTime: parseInt(d.createdTime),
+      createdTime: parseInt(d.createdTime, 10),
     }));
   }
 
@@ -2682,7 +2682,7 @@ class BybitFuturesClient {
       fee: parseFloat(d.fee),
       change: parseFloat(d.change),
       cashFlow: parseFloat(d.cashFlow),
-      transactionTime: parseInt(d.transactionTime),
+      transactionTime: parseInt(d.transactionTime, 10),
       type: d.type,
     }));
   }
@@ -2941,7 +2941,7 @@ class HyperliquidClient {
 
     const action = {
       type: 'cancel',
-      cancels: [{ a: assetIndex, o: parseInt(orderId) }],
+      cancels: [{ a: assetIndex, o: parseInt(orderId, 10) }],
     };
 
     const signature = this.signL1Action(action, nonce);
@@ -4955,9 +4955,9 @@ export class FuturesDatabase {
     const result = await this.pool.query(query, values);
     const row = result.rows[0];
 
-    const totalTrades = parseInt(row.total_trades);
-    const winningTrades = parseInt(row.winning_trades);
-    const losingTrades = parseInt(row.losing_trades);
+    const totalTrades = parseInt(row.total_trades, 10);
+    const winningTrades = parseInt(row.winning_trades, 10);
+    const losingTrades = parseInt(row.losing_trades, 10);
 
     return {
       strategyName,
@@ -5332,10 +5332,10 @@ export class FuturesService extends EventEmitter {
   }
 
   async getAllBalances(): Promise<FuturesBalance[]> {
-    const balances = await Promise.all(
+    const results = await Promise.allSettled(
       Array.from(this.clients.keys()).map(ex => this.getBalance(ex))
     );
-    return balances;
+    return results.filter((r): r is PromiseFulfilledResult<FuturesBalance> => r.status === 'fulfilled').map(r => r.value);
   }
 
   async getPositions(exchange: FuturesExchange): Promise<FuturesPosition[]> {
@@ -5343,10 +5343,10 @@ export class FuturesService extends EventEmitter {
   }
 
   async getAllPositions(): Promise<FuturesPosition[]> {
-    const positions = await Promise.all(
+    const results = await Promise.allSettled(
       Array.from(this.clients.keys()).map(ex => this.getPositions(ex))
     );
-    return positions.flat();
+    return results.filter((r): r is PromiseFulfilledResult<FuturesPosition[]> => r.status === 'fulfilled').flatMap(r => r.value);
   }
 
   async placeOrder(exchange: FuturesExchange, order: FuturesOrderRequest): Promise<FuturesOrder> {
@@ -5419,10 +5419,13 @@ export class FuturesService extends EventEmitter {
 
   async closeAllPositions(exchange: FuturesExchange): Promise<FuturesOrder[]> {
     const positions = await this.getPositions(exchange);
-    const results = await Promise.all(
+    const settled = await Promise.allSettled(
       positions.map(p => this.closePosition(exchange, p.symbol))
     );
-    return results.filter((r): r is FuturesOrder => r !== null);
+    return settled
+      .filter((r): r is PromiseFulfilledResult<FuturesOrder | null> => r.status === 'fulfilled')
+      .map(r => r.value)
+      .filter((r): r is FuturesOrder => r !== null);
   }
 
   async cancelOrder(exchange: FuturesExchange, symbol: string, orderId: string): Promise<void> {

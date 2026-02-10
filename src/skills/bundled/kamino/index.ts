@@ -69,7 +69,7 @@ async function handleDeposit(args: string[]): Promise<string> {
 
     const tokens = await tokenlist.getTokenList();
     const tokenInfo = tokens.find(t => t.address === mint);
-    const decimals = tokenInfo?.decimals || 6;
+    const decimals = tokenInfo?.decimals ?? 6;
     const amountLamports = (parseFloat(amount) * Math.pow(10, decimals)).toString();
 
     const result = await kamino.depositToKamino(connection, keypair, {
@@ -110,7 +110,7 @@ async function handleWithdraw(args: string[]): Promise<string> {
 
     const tokens = await tokenlist.getTokenList();
     const tokenInfo = tokens.find(t => t.address === mint);
-    const decimals = tokenInfo?.decimals || 6;
+    const decimals = tokenInfo?.decimals ?? 6;
     const amountLamports = withdrawAll ? '0' : (parseFloat(amount) * Math.pow(10, decimals)).toString();
 
     const result = await kamino.withdrawFromKamino(connection, keypair, {
@@ -151,7 +151,7 @@ async function handleBorrow(args: string[]): Promise<string> {
 
     const tokens = await tokenlist.getTokenList();
     const tokenInfo = tokens.find(t => t.address === mint);
-    const decimals = tokenInfo?.decimals || 6;
+    const decimals = tokenInfo?.decimals ?? 6;
     const amountLamports = (parseFloat(amount) * Math.pow(10, decimals)).toString();
 
     const result = await kamino.borrowFromKamino(connection, keypair, {
@@ -192,7 +192,7 @@ async function handleRepay(args: string[]): Promise<string> {
 
     const tokens = await tokenlist.getTokenList();
     const tokenInfo = tokens.find(t => t.address === mint);
-    const decimals = tokenInfo?.decimals || 6;
+    const decimals = tokenInfo?.decimals ?? 6;
     const amountLamports = repayAll ? '0' : (parseFloat(amount) * Math.pow(10, decimals)).toString();
 
     const result = await kamino.repayToKamino(connection, keypair, {

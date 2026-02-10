@@ -2841,8 +2841,9 @@ export async function initDatabase(): Promise<Database> {
       }
 
       if (options.textQuery) {
-        where.push('(question LIKE ? OR description LIKE ? OR tags_json LIKE ?)');
-        const like = `%${options.textQuery}%`;
+        where.push("(question LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR tags_json LIKE ? ESCAPE '\\')");
+        const escaped = options.textQuery.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+        const like = `%${escaped}%`;
         params.push(like, like, like);
       }
 

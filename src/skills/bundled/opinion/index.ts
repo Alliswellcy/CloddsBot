@@ -69,7 +69,7 @@ async function handleMarkets(query?: string): Promise<string> {
   const lines = ['**Opinion.trade Markets**', ''];
 
   for (const m of markets.slice(0, 15)) {
-    const yesPrice = m.outcomes.find(o => o.name.toLowerCase() === 'yes')?.price || 0;
+    const yesPrice = m.outcomes.find(o => o.name.toLowerCase() === 'yes')?.price ?? 0;
     lines.push(`  [${m.id}] ${m.question}`);
     lines.push(`       YES: ${(yesPrice * 100).toFixed(0)}c | Vol: $${formatNumber(m.volume24h)}`);
   }
@@ -214,6 +214,10 @@ async function handleBuy(
   const priceNum = parseFloat(price);
   const sizeNum = parseFloat(size);
 
+  if (isNaN(priceNum) || priceNum <= 0 || isNaN(sizeNum) || sizeNum <= 0) {
+    return 'Invalid price or size. Both must be positive numbers.';
+  }
+
   // Circuit breaker pre-trade check
   try {
     const { getGlobalCircuitBreaker } = await import('../../../execution/circuit-breaker');
@@ -295,6 +299,10 @@ async function handleSell(
   const tokenId = outcomeData.tokenId || outcomeData.id;
   const priceNum = parseFloat(price);
   const sizeNum = parseFloat(size);
+
+  if (isNaN(priceNum) || priceNum <= 0 || isNaN(sizeNum) || sizeNum <= 0) {
+    return 'Invalid price or size. Both must be positive numbers.';
+  }
 
   // Circuit breaker pre-trade check
   try {

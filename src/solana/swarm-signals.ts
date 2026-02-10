@@ -517,7 +517,7 @@ export class SwarmSignalMonitor extends EventEmitter {
     source.lastSignalAt = Date.now();
 
     // Check cooldown
-    const lastTrade = this.tradeCooldowns.get(source.id) || 0;
+    const lastTrade = this.tradeCooldowns.get(source.id) ?? 0;
     if (Date.now() - lastTrade < source.tradeConfig.cooldownMs!) {
       logger.info(`[SignalMonitor] Skipping trade (cooldown)`);
       return;
@@ -621,15 +621,16 @@ export class SwarmSignalMonitor extends EventEmitter {
           break;
 
         case 'sentiment':
-          if (sentiment.sentiment === filter.value && sentiment.confidence >= (filter.confidence || 0.5)) {
+          if (sentiment.sentiment === filter.value && sentiment.confidence >= (filter.confidence ?? 0.5)) {
             matched.push(filter);
           }
           break;
 
         case 'regex':
           try {
+            if (filter.value.length > 200) break;
             const regex = new RegExp(filter.value, 'i');
-            if (regex.test(content)) {
+            if (regex.test(content.slice(0, 10000))) {
               matched.push(filter);
             }
           } catch {
@@ -670,15 +671,15 @@ export class SwarmSignalMonitor extends EventEmitter {
 
       // Calculate total SOL received for sells from wallet results
       const totalSolReceived = action === 'sell'
-        ? result.walletResults.reduce((sum, r) => sum + (r.solAmount || 0), 0)
+        ? result.walletResults.reduce((sum, r) => sum + (r.solAmount ?? 0), 0)
         : undefined;
 
       if (result.success) {
         source.stats.tradesSuccessful++;
         if (action === 'buy') {
-          source.stats.totalSolSpent += result.totalSolSpent || 0;
+          source.stats.totalSolSpent += result.totalSolSpent ?? 0;
         } else {
-          source.stats.totalSolReceived += totalSolReceived || 0;
+          source.stats.totalSolReceived += totalSolReceived ?? 0;
         }
       } else {
         source.stats.tradesFailed++;

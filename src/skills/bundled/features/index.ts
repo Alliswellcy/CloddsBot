@@ -116,7 +116,7 @@ function formatSignal(value: number, name: string): string {
 }
 
 function getBar(value: number, width = 10): string {
-  const filled = Math.round(Math.abs(value) * width);
+  const filled = Math.min(Math.round(Math.abs(value) * width), width);
   const empty = width - filled;
   if (value >= 0) {
     return '[' + '+'.repeat(filled) + '-'.repeat(empty) + ']';

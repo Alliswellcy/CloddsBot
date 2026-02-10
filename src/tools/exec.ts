@@ -224,12 +224,14 @@ async function runInDockerSandbox(
   const timeoutPromise = new Promise<{ exitCode: number }>((resolve) => {
     setTimeout(async () => {
       timedOut = true;
-      await runProcess('docker', ['kill', '-s', 'TERM', containerName], { env, timeout: 3000 });
+      try {
+        await runProcess('docker', ['kill', '-s', 'TERM', containerName], { env, timeout: 3000 });
+      } catch {}
       setTimeout(() => {
-        void runProcess('docker', ['kill', '-s', 'KILL', containerName], {
+        runProcess('docker', ['kill', '-s', 'KILL', containerName], {
           env,
           timeout: 3000,
-        });
+        }).catch(() => {});
       }, 1000);
       resolve({ exitCode: 124 });
     }, timeout);

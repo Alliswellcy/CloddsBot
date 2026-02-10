@@ -224,20 +224,26 @@ Example:
         options.website = value; i++;
         break;
       case '--vault':
-        options.vault = parseInt(value); i++;
+        options.vault = parseInt(value, 10); i++;
         break;
       case '--vault-lockup':
-        options.vaultLockup = parseInt(value); i++;
+        options.vaultLockup = parseInt(value, 10); i++;
         break;
       case '--vault-vesting':
-        options.vaultVesting = parseInt(value); i++;
+        options.vaultVesting = parseInt(value, 10); i++;
         break;
-      case '--dev-buy':
-        options.devBuy = parseFloat(value); i++;
+      case '--dev-buy': {
+        const devBuyParsed = parseFloat(value);
+        if (!isNaN(devBuyParsed)) options.devBuy = devBuyParsed;
+        i++;
         break;
-      case '--market-cap':
-        options.marketCap = parseFloat(value); i++;
+      }
+      case '--market-cap': {
+        const mcapParsed = parseFloat(value);
+        if (!isNaN(mcapParsed)) options.marketCap = mcapParsed;
+        i++;
         break;
+      }
       case '--vanity':
         options.vanity = true;
         break;

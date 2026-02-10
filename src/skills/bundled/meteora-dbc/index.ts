@@ -97,15 +97,15 @@ Example:
 
   const mcap = parseFloat(parseFlag(args, '--mcap') || '30');
   const grad = parseFloat(parseFlag(args, '--grad') || '500');
-  const supply = parseInt(parseFlag(args, '--supply') || '1000000000');
-  const decimals = parseInt(parseFlag(args, '--decimals') || '6');
-  const feeStart = parseInt(parseFlag(args, '--fee-start') || '500');
-  const feeEnd = parseInt(parseFlag(args, '--fee-end') || '100');
-  const feeDecay = parseInt(parseFlag(args, '--fee-decay') || '3600');
-  const migration = parseInt(parseFlag(args, '--migration') || '1');
+  const supply = parseInt(parseFlag(args, '--supply') || '1000000000', 10);
+  const decimals = parseInt(parseFlag(args, '--decimals') || '6', 10);
+  const feeStart = parseInt(parseFlag(args, '--fee-start') || '500', 10);
+  const feeEnd = parseInt(parseFlag(args, '--fee-end') || '100', 10);
+  const feeDecay = parseInt(parseFlag(args, '--fee-decay') || '3600', 10);
+  const migration = parseInt(parseFlag(args, '--migration') || '1', 10);
   const metadataUri = parseFlag(args, '--metadata-uri');
   const initialBuy = parseFlag(args, '--initial');
-  const creatorFee = parseInt(parseFlag(args, '--creator-fee') || '80');
+  const creatorFee = parseInt(parseFlag(args, '--creator-fee') || '80', 10);
   const dryRun = hasFlag(args, '--dry-run');
 
   if (dryRun) {
@@ -231,8 +231,8 @@ Creator: \`${status.creator}\`
 Migrated: ${status.isMigrated ? 'Yes' : 'No'}
 
 **Bonding Curve:**
-  Quote Reserve: ${(parseInt(status.quoteReserve) / 1e9).toFixed(4)} SOL
-  Migration Threshold: ${(parseInt(status.migrationThreshold) / 1e9).toFixed(4)} SOL
+  Quote Reserve: ${(Number(status.quoteReserve) / 1e9).toFixed(4)} SOL
+  Migration Threshold: ${(Number(status.migrationThreshold) / 1e9).toFixed(4)} SOL
   Progress: ${status.progressPercent}%`;
 
     if (status.fees) {
@@ -240,9 +240,9 @@ Migrated: ${status.isMigrated ? 'Yes' : 'No'}
 
 **Unclaimed Fees:**
   Creator Base: ${status.fees.creatorBase}
-  Creator Quote: ${(parseInt(status.fees.creatorQuote) / 1e9).toFixed(6)} SOL
+  Creator Quote: ${(Number(status.fees.creatorQuote) / 1e9).toFixed(6)} SOL
   Partner Base: ${status.fees.partnerBase}
-  Partner Quote: ${(parseInt(status.fees.partnerQuote) / 1e9).toFixed(6)} SOL`;
+  Partner Quote: ${(Number(status.fees.partnerQuote) / 1e9).toFixed(6)} SOL`;
     }
 
     return output;
@@ -389,8 +389,8 @@ async function handleQuote(args: string[]): Promise<string> {
     });
 
     const outDecimals = isSell ? 9 : tokenDecimals;
-    const outAmount = parseInt(quote.amountOut) / Math.pow(10, outDecimals);
-    const minOut = parseInt(quote.minimumAmountOut) / Math.pow(10, outDecimals);
+    const outAmount = Number(quote.amountOut) / Math.pow(10, outDecimals);
+    const minOut = Number(quote.minimumAmountOut) / Math.pow(10, outDecimals);
     const unit = isSell ? 'SOL' : 'tokens';
 
     return `**DBC Quote**

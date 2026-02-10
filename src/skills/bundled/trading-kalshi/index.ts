@@ -130,7 +130,13 @@ function startPricePolling(): void {
   pricePollingInterval = setInterval(async () => {
     if (priceSubscriptions.size === 0) return;
 
-    const feed = await getFeed();
+    let feed;
+    try {
+      feed = await getFeed();
+    } catch (err) {
+      logger.warn({ err }, 'Failed to get Kalshi feed for price polling');
+      return;
+    }
 
     for (const [ticker, callbacks] of priceSubscriptions) {
       try {
@@ -281,8 +287,8 @@ async function handleSearch(query: string): Promise<string> {
     const lines = ['**Kalshi Markets**', ''];
 
     for (const m of markets.slice(0, 15)) {
-      const yesPrice = m.outcomes.find(o => o.name === 'Yes')?.price || 0;
-      const noPrice = m.outcomes.find(o => o.name === 'No')?.price || 0;
+      const yesPrice = m.outcomes.find(o => o.name === 'Yes')?.price ?? 0;
+      const noPrice = m.outcomes.find(o => o.name === 'No')?.price ?? 0;
       lines.push(`  [${m.id}] ${m.question}`);
       lines.push(`       YES: ${(yesPrice * 100).toFixed(0)}c | NO: ${(noPrice * 100).toFixed(0)}c | Vol: $${formatNumber(m.volume24h)}`);
     }
@@ -444,8 +450,8 @@ async function handleEvent(eventTicker: string): Promise<string> {
     ];
 
     for (const m of event.markets) {
-      const yesPrice = m.outcomes.find(o => o.name === 'Yes')?.price || 0;
-      const noPrice = m.outcomes.find(o => o.name === 'No')?.price || 0;
+      const yesPrice = m.outcomes.find(o => o.name === 'Yes')?.price ?? 0;
+      const noPrice = m.outcomes.find(o => o.name === 'No')?.price ?? 0;
       const status = m.resolved ? '(resolved)' : '';
       lines.push(`  [${m.id}] ${m.question} ${status}`);
       lines.push(`       YES: ${(yesPrice * 100).toFixed(0)}c | NO: ${(noPrice * 100).toFixed(0)}c | Vol: $${formatNumber(m.volume24h)}`);
@@ -933,8 +939,8 @@ async function handleBalance(): Promise<string> {
     }
 
     const data = await response.json() as { balance?: number; portfolio_value?: number };
-    const balance = (data.balance || 0) / 100; // Kalshi returns cents
-    const portfolioValue = (data.portfolio_value || 0) / 100;
+    const balance = (data.balance ?? 0) / 100; // Kalshi returns cents
+    const portfolioValue = (data.portfolio_value ?? 0) / 100;
 
     return [
       '**Kalshi Balance**',

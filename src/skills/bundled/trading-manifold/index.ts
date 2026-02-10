@@ -98,7 +98,7 @@ async function handleSearch(query: string): Promise<string> {
     const lines = ['**Manifold Markets**', ''];
 
     for (const m of markets.slice(0, 15)) {
-      const yesPrice = m.outcomes.find(o => o.name === 'Yes' || o.name === 'Higher')?.price || m.outcomes[0]?.price || 0;
+      const yesPrice = m.outcomes.find(o => o.name === 'Yes' || o.name === 'Higher')?.price ?? m.outcomes[0]?.price ?? 0;
       lines.push(`  [${m.id}] ${m.question}`);
       lines.push(`       ${(yesPrice * 100).toFixed(0)}% | Vol: M$${formatNumber(m.volume24h)} | Liq: M$${formatNumber(m.liquidity)}`);
     }
@@ -367,7 +367,7 @@ async function handleBalance(): Promise<string> {
     const lines = [
       `**Manifold Balance** (${data.name || data.username || 'unknown'})`,
       '',
-      `Mana: M$${formatNumber(data.balance || 0)}`,
+      `Mana: M$${formatNumber(data.balance ?? 0)}`,
     ];
 
     if (data.totalDeposits !== undefined) {

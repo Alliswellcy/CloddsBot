@@ -46,7 +46,7 @@ async function execute(args: string): Promise<string> {
 
       case 'lookup': {
         if (!parts[1]) return 'Usage: /verify lookup <agent-id>';
-        const agentId = parseInt(parts[1]);
+        const agentId = parseInt(parts[1], 10);
         if (isNaN(agentId)) return 'Agent ID must be a number.';
         const client = erc8004.createERC8004Client();
         const agent = await client.getAgent(agentId);
@@ -83,7 +83,7 @@ async function execute(args: string): Promise<string> {
       case 'reputation':
       case 'rep': {
         if (!parts[1]) return 'Usage: /verify reputation <agent-id>';
-        const agentId = parseInt(parts[1]);
+        const agentId = parseInt(parts[1], 10);
         if (isNaN(agentId)) return 'Agent ID must be a number.';
         const client = erc8004.createERC8004Client();
         const rep = await client.getReputation(agentId);

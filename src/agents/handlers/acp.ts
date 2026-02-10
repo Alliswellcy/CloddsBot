@@ -57,9 +57,9 @@ async function acpListServiceHandler(toolInput: ToolInput): Promise<HandlerResul
   const agentId = toolInput.agent_id as string;
   const name = toolInput.name as string;
   const category = (toolInput.category as ServiceCategory) || 'other';
-  const price = toolInput.price as string || '0';
-  const currency = toolInput.currency as string || 'SOL';
-  const description = toolInput.description as string || name;
+  const price = (toolInput.price as string) ?? '0';
+  const currency = (toolInput.currency as string) ?? 'SOL';
+  const description = (toolInput.description as string) ?? name;
 
   if (!agentId || !name) {
     return errorResult('agent_id and name are required');
@@ -234,8 +234,8 @@ async function acpCreateAgreementHandler(toolInput: ToolInput): Promise<HandlerR
   const buyer = toolInput.buyer as string;
   const seller = toolInput.seller as string;
   const price = toolInput.price as string;
-  const currency = toolInput.currency as string || 'SOL';
-  const description = toolInput.description as string || title;
+  const currency = (toolInput.currency as string) ?? 'SOL';
+  const description = (toolInput.description as string) ?? title;
 
   if (!title || !buyer || !seller || !price) {
     return errorResult('title, buyer, seller, and price are required');
@@ -353,7 +353,7 @@ async function acpCreateEscrowHandler(toolInput: ToolInput): Promise<HandlerResu
   const seller = toolInput.seller as string;
   const amount = toolInput.amount as string;
   const arbiter = toolInput.arbiter as string | undefined;
-  const rpcUrl = toolInput.rpc_url as string || 'https://api.mainnet-beta.solana.com';
+  const rpcUrl = (toolInput.rpc_url as string) ?? 'https://api.mainnet-beta.solana.com';
 
   if (!buyer || !seller || !amount) {
     return errorResult('buyer, seller, and amount (in lamports) are required');
@@ -591,7 +591,7 @@ async function acpCreateBidHandler(toolInput: ToolInput): Promise<HandlerResult>
   const handle = toolInput.handle as string;
   const bidderAddress = toolInput.bidder_address as string;
   const amount = toolInput.amount as string;
-  const currency = toolInput.currency as string || 'SOL';
+  const currency = (toolInput.currency as string) ?? 'SOL';
 
   if (!handle || !bidderAddress || !amount) {
     return errorResult('handle, bidder_address, and amount are required');
@@ -810,8 +810,8 @@ async function acpUpdateProfileHandler(toolInput: ToolInput): Promise<HandlerRes
 }
 
 async function acpGetLeaderboardHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const count = toolInput.count as number || 10;
-  const period = toolInput.period as string || 'all_time';
+  const count = (toolInput.count as number) ?? 10;
+  const period = (toolInput.period as string) ?? 'all_time';
 
   return safeHandler(async () => {
     const identity = getIdentityService();
@@ -901,7 +901,7 @@ async function acpGetPredictionHandler(toolInput: ToolInput): Promise<HandlerRes
 
 async function acpGetPredictionsByAgentHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const agentId = toolInput.agent_id as string;
-  const limit = toolInput.limit as number || 20;
+  const limit = (toolInput.limit as number) ?? 20;
 
   if (!agentId) {
     return errorResult('agent_id is required');
@@ -952,7 +952,7 @@ async function acpGetPredictionsByMarketHandler(toolInput: ToolInput): Promise<H
 }
 
 async function acpGetPredictionFeedHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const limit = toolInput.limit as number || 20;
+  const limit = (toolInput.limit as number) ?? 20;
   const category = toolInput.category as MarketCategory | undefined;
 
   return safeHandler(async () => {
@@ -1024,7 +1024,7 @@ async function acpGetPredictionStatsHandler(toolInput: ToolInput): Promise<Handl
 }
 
 async function acpGetPredictionLeaderboardHandler(toolInput: ToolInput): Promise<HandlerResult> {
-  const limit = toolInput.limit as number || 10;
+  const limit = (toolInput.limit as number) ?? 10;
 
   return safeHandler(async () => {
     const predictions = getPredictionService();

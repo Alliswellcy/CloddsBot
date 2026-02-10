@@ -97,7 +97,8 @@ async function execute(args: string): Promise<string> {
         }
 
         // Default: recent Polymarket whale trades
-        const limit = parseInt(parts[1] || '20');
+        const parsedLimit = parseInt(parts[1] || '20', 10);
+        const limit = isNaN(parsedLimit) || parsedLimit <= 0 ? 20 : parsedLimit;
         const trades = polyTracker.getRecentTrades(limit);
         const state = polyTracker.getConnectionState();
 
@@ -125,7 +126,8 @@ async function execute(args: string): Promise<string> {
         const chain = parts[1]?.toLowerCase();
         const validChains = ['solana', 'ethereum', 'polygon', 'arbitrum', 'base', 'optimism'];
         const filterChain = chain && validChains.includes(chain) ? chain as any : undefined;
-        const limit = parseInt(parts[2] || '20');
+        const parsedLimit = parseInt(parts[2] || '20', 10);
+        const limit = isNaN(parsedLimit) || parsedLimit <= 0 ? 20 : parsedLimit;
 
         const txs = cryptoTracker.getRecentTransactions(filterChain, limit);
         const stats = cryptoTracker.getStats();
@@ -211,7 +213,8 @@ async function execute(args: string): Promise<string> {
 
         if (subCmd === 'crypto' || subCmd === 'onchain') {
           const chain = (parts[2] || 'solana') as any;
-          const limit = parseInt(parts[3] || '10');
+          const parsedLimit = parseInt(parts[3] || '10', 10);
+          const limit = isNaN(parsedLimit) || parsedLimit <= 0 ? 10 : parsedLimit;
           const topWhales = await cryptoTracker.getTopWhales(chain, limit);
 
           if (topWhales.length === 0) {
@@ -234,7 +237,8 @@ async function execute(args: string): Promise<string> {
         }
 
         // Default: Polymarket top whales
-        const limit = parseInt(parts[1] || '10');
+        const parsedLimit = parseInt(parts[1] || '10', 10);
+        const limit = isNaN(parsedLimit) || parsedLimit <= 0 ? 10 : parsedLimit;
         const topWhales = polyTracker.getTopWhales(limit);
 
         if (topWhales.length === 0) {
@@ -254,8 +258,10 @@ async function execute(args: string): Promise<string> {
       }
 
       case 'profitable': {
-        const minWR = parseFloat(parts[1] || '55') / 100;
-        const minTrades = parseInt(parts[2] || '5');
+        const parsedWR = parseFloat(parts[1] || '55');
+        const minWR = (isNaN(parsedWR) ? 55 : parsedWR) / 100;
+        const parsedMinTrades = parseInt(parts[2] || '5', 10);
+        const minTrades = isNaN(parsedMinTrades) || parsedMinTrades <= 0 ? 5 : parsedMinTrades;
         const whales = polyTracker.getProfitableWhales(minWR, minTrades);
 
         if (whales.length === 0) {
@@ -498,9 +504,11 @@ async function execute(args: string): Promise<string> {
       }
 
       case 'recent': {
-        const limit = parseInt(parts[1] || '20');
+        const parsedLimit = parseInt(parts[1] || '20', 10);
+        const limit = isNaN(parsedLimit) || parsedLimit <= 0 ? 20 : parsedLimit;
         const minSizeIdx = parts.indexOf('--min-size');
-        const minSize = minSizeIdx >= 0 ? parseInt(parts[minSizeIdx + 1]) : 0;
+        const parsedMinSize = minSizeIdx >= 0 ? parseInt(parts[minSizeIdx + 1], 10) : 0;
+        const minSize = isNaN(parsedMinSize) ? 0 : parsedMinSize;
 
         let polyTrades = polyTracker.getRecentTrades(limit);
         if (minSize > 0) {

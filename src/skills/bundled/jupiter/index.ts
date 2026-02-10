@@ -46,7 +46,9 @@ function isConfigured(): boolean {
 }
 
 function formatAmount(amount: string, decimals: number): string {
-  const num = parseFloat(amount) / Math.pow(10, decimals);
+  const raw = parseFloat(amount);
+  if (isNaN(raw)) return '0';
+  const num = raw / Math.pow(10, decimals);
   if (num < 0.000001) return num.toExponential(2);
   if (num < 1) return num.toFixed(6);
   return num.toLocaleString(undefined, { maximumFractionDigits: 4 });
@@ -121,7 +123,11 @@ async function handleQuote(args: string[]): Promise<string> {
     const tokens = await tokenlist.getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
-    const amountBaseUnits = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return 'Invalid amount. Must be a positive number.';
+    }
+    const amountBaseUnits = Math.floor(parsedAmount * Math.pow(10, fromDecimals)).toString();
 
     const quote = await jupiter.getJupiterQuote({
       inputMint: fromMint,
@@ -212,12 +218,13 @@ Example:
   let expiryHours = 168; // Default 1 week
   const expiryIndex = args.findIndex(a => a === '--expiry');
   if (expiryIndex >= 0 && args[expiryIndex + 1]) {
-    expiryHours = parseInt(args[expiryIndex + 1]);
+    const parsed = parseInt(args[expiryIndex + 1], 10);
+    if (!isNaN(parsed) && parsed > 0) expiryHours = parsed;
   }
 
   const price = parseFloat(priceStr);
-  if (isNaN(price)) {
-    return 'Price must be a number.';
+  if (isNaN(price) || price <= 0) {
+    return 'Price must be a positive number.';
   }
 
   try {
@@ -234,8 +241,12 @@ Example:
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
 
-    const inAmount = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
-    const outAmount = Math.floor(parseFloat(amount) * price * Math.pow(10, toDecimals)).toString();
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return 'Invalid amount. Must be a positive number.';
+    }
+    const inAmount = Math.floor(parsedAmount * Math.pow(10, fromDecimals)).toString();
+    const outAmount = Math.floor(parsedAmount * price * Math.pow(10, toDecimals)).toString();
     const expiredAtMs = Date.now() + expiryHours * 60 * 60 * 1000;
 
     const result = await jupiter.createJupiterLimitOrder(connection, keypair, {
@@ -404,7 +415,7 @@ Example:
   const fromToken = args.slice(1, toIndex).join(' ');
   const toToken = args.slice(toIndex + 1, perIndex).join(' ');
   const perAmount = args[perIndex + 1];
-  const everySeconds = parseInt(args[everyIndex + 1]);
+  const everySeconds = parseInt(args[everyIndex + 1], 10);
 
   if (isNaN(everySeconds) || everySeconds < 30) {
     return 'Interval must be at least 30 seconds.';
@@ -423,8 +434,17 @@ Example:
     const tokens = await tokenlist.getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
 
-    const inAmount = Math.floor(parseFloat(total) * Math.pow(10, fromDecimals)).toString();
-    const inAmountPerCycle = Math.floor(parseFloat(perAmount) * Math.pow(10, fromDecimals)).toString();
+    const parsedTotal = parseFloat(total);
+    const parsedPerAmount = parseFloat(perAmount);
+    if (isNaN(parsedTotal) || parsedTotal <= 0) {
+      return 'Invalid total amount. Must be a positive number.';
+    }
+    if (isNaN(parsedPerAmount) || parsedPerAmount <= 0) {
+      return 'Invalid per-cycle amount. Must be a positive number.';
+    }
+
+    const inAmount = Math.floor(parsedTotal * Math.pow(10, fromDecimals)).toString();
+    const inAmountPerCycle = Math.floor(parsedPerAmount * Math.pow(10, fromDecimals)).toString();
 
     const result = await jupiter.createJupiterDCA(connection, keypair, {
       inputMint: fromMint,
@@ -434,7 +454,7 @@ Example:
       cycleSecondsApart: everySeconds,
     });
 
-    const numCycles = Math.ceil(parseFloat(total) / parseFloat(perAmount));
+    const numCycles = Math.ceil(parsedTotal / parsedPerAmount);
 
     return `**DCA Created**
 

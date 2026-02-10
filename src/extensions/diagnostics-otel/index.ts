@@ -100,7 +100,9 @@ export async function createOTelExtension(config: OTelConfig): Promise<OTelExten
   // Start periodic flush
   if (config.enabled) {
     flushTimer = setInterval(async () => {
-      await flush();
+      try {
+        await flush();
+      } catch {}
     }, 10000);
   }
 

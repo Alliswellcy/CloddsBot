@@ -222,8 +222,8 @@ async function processArbExecute(
     'Processing arbitrage execution job'
   );
 
-  // Execute both legs in parallel
-  const [buyResult, sellResult] = await Promise.all([
+  // Execute both legs in parallel — use allSettled so one failure doesn't mask the other
+  const [buySettled, sellSettled] = await Promise.allSettled([
     execService.buyLimit({
       platform: opportunity.buyPlatform,
       marketId: opportunity.buyMarketId,
@@ -239,6 +239,19 @@ async function processArbExecute(
       size: opportunity.size,
     }),
   ]);
+
+  const failedResult = (reason: unknown) => ({
+    success: false as const,
+    error: reason instanceof Error ? reason.message : String(reason),
+    orderId: undefined,
+    avgFillPrice: undefined,
+    filledSize: undefined,
+    status: undefined,
+    transactionHash: undefined,
+  });
+
+  const buyResult = buySettled.status === 'fulfilled' ? buySettled.value : failedResult(buySettled.reason);
+  const sellResult = sellSettled.status === 'fulfilled' ? sellSettled.value : failedResult(sellSettled.reason);
 
   logger.info(
     { jobId: job.id, buySuccess: buyResult.success, sellSuccess: sellResult.success },

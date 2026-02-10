@@ -79,7 +79,11 @@ async function handleSwap(args: string[]): Promise<string> {
     const tokens = await tokenlist.getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
-    const amountBaseUnits = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return 'Invalid amount. Must be a positive number.';
+    }
+    const amountBaseUnits = Math.floor(parsedAmount * Math.pow(10, fromDecimals)).toString();
 
     const result = await meteora.executeMeteoraDlmmSwap(connection, keypair, {
       poolAddress: pools[0].address,
@@ -135,7 +139,11 @@ async function handleSwapExactOut(args: string[]): Promise<string> {
     const tokens = await tokenlist.getTokenList();
     const fromDecimals = tokens.find(t => t.address === fromMint)?.decimals ?? 9;
     const toDecimals = tokens.find(t => t.address === toMint)?.decimals ?? 9;
-    const outAmount = Math.floor(parseFloat(outAmountHuman) * Math.pow(10, toDecimals)).toString();
+    const parsedOutAmount = parseFloat(outAmountHuman);
+    if (isNaN(parsedOutAmount) || parsedOutAmount <= 0) {
+      return 'Invalid amount. Must be a positive number.';
+    }
+    const outAmount = Math.floor(parsedOutAmount * Math.pow(10, toDecimals)).toString();
 
     const result = await meteora.executeMeteoraDlmmSwapExactOut(connection, keypair, {
       poolAddress: pools[0].address,
@@ -459,8 +467,8 @@ Example:
   const maxIndex = args.findIndex(a => a === '--max');
 
   const strategyType = strategyIndex >= 0 ? args[strategyIndex + 1] as 'Spot' | 'BidAsk' | 'Curve' : 'Spot';
-  const minBinId = minIndex >= 0 ? parseInt(args[minIndex + 1]) : undefined;
-  const maxBinId = maxIndex >= 0 ? parseInt(args[maxIndex + 1]) : undefined;
+  const minBinId = minIndex >= 0 ? parseInt(args[minIndex + 1], 10) : undefined;
+  const maxBinId = maxIndex >= 0 ? parseInt(args[maxIndex + 1], 10) : undefined;
 
   try {
     const { wallet, meteora } = await getSolanaModules();
@@ -539,7 +547,7 @@ Use --close to also close the position after removal`;
   }
 
   const [poolAddress, positionAddress, bpsStr] = args;
-  const bps = parseInt(bpsStr);
+  const bps = parseInt(bpsStr, 10);
   const shouldClose = args.includes('--close');
 
   if (isNaN(bps) || bps < 1 || bps > 10000) {
@@ -741,9 +749,9 @@ Example:
 
   const tokenX = args[0];
   const tokenY = args[1];
-  const binStep = parseInt(args[binStepIndex + 1]);
+  const binStep = parseInt(args[binStepIndex + 1], 10);
   const activeIdIndex = args.findIndex(a => a === '--active-id');
-  const activeId = activeIdIndex >= 0 ? parseInt(args[activeIdIndex + 1]) : undefined;
+  const activeId = activeIdIndex >= 0 ? parseInt(args[activeIdIndex + 1], 10) : undefined;
 
   try {
     const { wallet, meteora, tokenlist } = await getSolanaModules();
@@ -790,9 +798,9 @@ Example:
 
   const tokenX = args[0];
   const tokenY = args[1];
-  const binStep = parseInt(args[binStepIndex + 1]);
+  const binStep = parseInt(args[binStepIndex + 1], 10);
   const feeIndex = args.findIndex(a => a === '--fee');
-  const feeBps = feeIndex >= 0 ? parseInt(args[feeIndex + 1]) : 25;
+  const feeBps = feeIndex >= 0 ? parseInt(args[feeIndex + 1], 10) : 25;
   const hasAlphaVault = args.includes('--has-alpha-vault');
 
   try {

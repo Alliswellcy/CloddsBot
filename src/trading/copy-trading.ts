@@ -821,7 +821,12 @@ export function createCopyTradingService(
 
     async closeAllPositions(): Promise<void> {
       const positions = Array.from(openPositions.keys());
-      await Promise.all(positions.map(tradeId => emitter.closePosition(tradeId)));
+      const results = await Promise.allSettled(positions.map(tradeId => emitter.closePosition(tradeId)));
+      for (const r of results) {
+        if (r.status === 'rejected') {
+          logger.error({ error: r.reason }, 'Failed to close position during closeAll');
+        }
+      }
     },
 
     updateConfig(newConfig: Partial<CopyTradingConfig>): void {

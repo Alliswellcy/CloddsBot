@@ -268,6 +268,16 @@ export async function writeContract(request: ContractWriteRequest): Promise<Cont
       };
     }
 
+    if (receipt.status !== 1) {
+      return {
+        success: false,
+        txHash: receipt.hash,
+        receipt,
+        gasUsed: receipt.gasUsed,
+        error: `Transaction reverted on-chain (txHash: ${receipt.hash})`,
+      };
+    }
+
     return {
       success: true,
       txHash: receipt.hash,

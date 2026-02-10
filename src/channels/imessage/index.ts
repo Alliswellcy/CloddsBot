@@ -103,6 +103,7 @@ export async function createiMessageChannel(
 
     try {
       // Query using sqlite3
+      const safeLastMessageId = Number.isFinite(lastMessageId) ? Math.floor(lastMessageId) : 0;
       const query = `
         SELECT
           m.ROWID as rowid,
@@ -117,7 +118,7 @@ export async function createiMessageChannel(
         JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
         JOIN chat c ON cmj.chat_id = c.ROWID
         LEFT JOIN handle h ON m.handle_id = h.ROWID
-        WHERE m.ROWID > ${lastMessageId}
+        WHERE m.ROWID > ${safeLastMessageId}
           AND m.is_from_me = 0
           AND (m.text IS NOT NULL OR EXISTS (
             SELECT 1 FROM message_attachment_join maj WHERE maj.message_id = m.ROWID
@@ -330,6 +331,7 @@ export async function createiMessageChannel(
 
   async function getAttachmentsForMessage(messageId: number): Promise<MessageAttachment[]> {
     try {
+      const safeMessageId = Number.isFinite(messageId) ? Math.floor(messageId) : 0;
       const query = `
         SELECT
           a.filename as filename,
@@ -337,7 +339,7 @@ export async function createiMessageChannel(
           a.total_bytes as total_bytes
         FROM message_attachment_join maj
         JOIN attachment a ON a.ROWID = maj.attachment_id
-        WHERE maj.message_id = ${messageId}
+        WHERE maj.message_id = ${safeMessageId}
       `;
       const { stdout } = await execAsync(
         `sqlite3 -json "${dbPath}" "${query.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,

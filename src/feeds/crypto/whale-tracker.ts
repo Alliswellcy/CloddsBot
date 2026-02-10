@@ -321,7 +321,11 @@ export function createCryptoWhaleTracker(
 
     // Start polling for wallet updates
     const pollInterval = setInterval(async () => {
-      await pollSolanaWallets();
+      try {
+        await pollSolanaWallets();
+      } catch (err) {
+        logger.error({ err }, 'Solana wallet poll failed');
+      }
     }, cfg.pollIntervalMs);
 
     pollIntervals.set('solana', pollInterval);
@@ -541,7 +545,11 @@ export function createCryptoWhaleTracker(
 
     // Start polling for wallet updates and transactions
     const pollInterval = setInterval(async () => {
-      await pollEvmChain(chain);
+      try {
+        await pollEvmChain(chain);
+      } catch (err) {
+        logger.error({ err, chain }, 'EVM chain poll failed');
+      }
     }, cfg.pollIntervalMs);
 
     pollIntervals.set(chain, pollInterval);
