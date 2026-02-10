@@ -85,7 +85,7 @@ export class ToolRegistry<T extends RegistryTool = RegistryTool> {
   }
 
   searchByPlatform(platform: string): T[] {
-    const names = this.byPlatform.get(platform);
+    const names = this.byPlatform.get(platform.toLowerCase());
     if (!names) return [];
     return Array.from(names)
       .map(n => this.tools.get(n)!)
@@ -93,7 +93,7 @@ export class ToolRegistry<T extends RegistryTool = RegistryTool> {
   }
 
   searchByCategory(category: string): T[] {
-    const names = this.byCategory.get(category);
+    const names = this.byCategory.get(category.toLowerCase());
     if (!names) return [];
     return Array.from(names)
       .map(n => this.tools.get(n)!)
