@@ -280,38 +280,52 @@ export function inferToolMetadata(toolName: string, description: string): ToolMe
 
 /**
  * Keyword → platform mapping for preloading tools from user messages.
- * Matches common ways users refer to platforms.
+ * Matches common ways users refer to platforms, including typos and abbreviations.
  */
 const PLATFORM_KEYWORDS: [RegExp, string][] = [
-  [/\bpoly(?:market)?\b/i, 'polymarket'],
-  [/\bkalshi\b/i, 'kalshi'],
-  [/\bmanifold\b/i, 'manifold'],
-  [/\bmetaculus\b/i, 'metaculus'],
+  // Polymarket: polymarkt, polymaket, pollymarket, ploymarket, polimarket, poly, ploy, pm
+  [/\bp(?:o?ly|oli|olly|loy)(?:[\s._-]?ma?r?ke?t?)?\b|\bpm\b/i, 'polymarket'],
+  // Kalshi: kashi, kalhi, klashi
+  [/\bk(?:a?lshi|ashi|alhi|lashi)\b/i, 'kalshi'],
+  // Manifold: maniflod, manfiold, manifodl
+  [/\bmanif(?:o?ld|lod|odl)\b|\bmanfi(?:old|lod)\b/i, 'manifold'],
+  // Metaculus: metaculus, metaculis, metaculas
+  [/\bmetacul[uia]s\b/i, 'metaculus'],
   [/\bpredictit\b/i, 'predictit'],
   [/\bpredict[\s._-]?fun\b/i, 'predictfun'],
   [/\bdrift\b/i, 'drift'],
   [/\bopinion\b/i, 'opinion'],
-  [/\bbinance\b|futures\b/i, 'binance'],
-  [/\bbybit\b/i, 'bybit'],
+  // Binance: bianance, binanace, binnance, bnb, perps
+  [/\bb(?:i(?:na?n(?:a?ce|ace)|ana(?:n?ce))|inna?nce)\b|\bbnb\b|\bperps\b|\bfutures\b/i, 'binance'],
+  // Bybit: bybi, bibit
+  [/\bb(?:y?bit|ibit|ybi)\b/i, 'bybit'],
   [/\bmexc\b/i, 'mexc'],
-  [/\bhyper(?:liquid)?\b/i, 'hyperliquid'],
-  [/\b(?:solana|sol)\b/i, 'solana'],
-  [/\b(?:jupiter|jup)\b/i, 'solana'],
-  [/\bpump[\s._-]?fun\b|pumpfun\b/i, 'pumpfun'],
+  // Hyperliquid: hyperliqiud, hyperliuid, hperliquid, hl
+  [/\bh(?:y?per)?[\s._-]?li(?:qu?i[du]{0,2}|uid|qiud)\b|\bhl\b/i, 'hyperliquid'],
+  // Solana: solona, soalana, soalna
+  [/\bs(?:ol(?:a?na|ona)?|oala?na)\b/i, 'solana'],
+  // Jupiter: jupter, jupitor, jup
+  [/\bjup(?:i?ter|itor)?\b/i, 'solana'],
+  // PumpFun: pumfun, pumpfn, pump.fun, pump fun
+  [/\bpump?[\s._-]?fu?n\b/i, 'pumpfun'],
   [/\bbags(?:\.fm)?\b/i, 'bags'],
   [/\bmeteora\b/i, 'meteora'],
-  [/\braydium\b/i, 'raydium'],
+  // Raydium: raydim, radyium
+  [/\br(?:ay?di?u?m|adyium)\b/i, 'raydium'],
   [/\borca\b/i, 'orca'],
-  [/\bcoingecko\b|coin\s?gecko\b/i, 'coingecko'],
+  // CoinGecko: coingeeko, coingeko, coin gecko, cg
+  [/\bcoin[\s._-]?ge{0,2}c?k[eo]?\b|\bcg\b/i, 'coingecko'],
   [/\byahoo\b/i, 'yahoo'],
-  [/\bacp\b|marketplace\b/i, 'acp'],
+  [/\bacp\b|\bmarketplace\b/i, 'acp'],
   [/\bswarm\b/i, 'swarm'],
   [/\bwormhole\b/i, 'wormhole'],
   [/\bdocker\b/i, 'docker'],
   [/\bgit\b/i, 'git'],
+  // EVM: ethereum, eth
   [/\b(?:evm|ethereum|eth)\b/i, 'evm'],
   [/\busdc[\s._-]?bridge\b|\bcross[\s._-]?chain\b/i, 'usdc_bridge'],
-  [/\bbittensor\b|\btao\b|\bbtcli\b/i, 'bittensor'],
+  // Bittensor: bitensor, bittnesor, btcli, tao
+  [/\bbit?t?(?:en?|ne)?sor\b|\btao\b|\bbtcli\b/i, 'bittensor'],
   [/\bqmd\b/i, 'qmd'],
   [/\bshell\b/i, 'shell'],
   [/\b(?:python|script|exec)\b/i, 'exec'],
@@ -320,6 +334,9 @@ const PLATFORM_KEYWORDS: [RegExp, string][] = [
   [/\bsms\b|\btext\s+message\b/i, 'sms'],
   [/\bsql\b|\bquery\s+db\b|\bdatabase\b/i, 'sql'],
   [/\bsubagent\b|\bagent\s+task\b/i, 'subagent'],
+  // Generic CEX/DEX keywords → preload binance (most common) + solana (most common DEX)
+  [/\bcex\b/i, 'binance'],
+  [/\bdex\b/i, 'solana'],
 ];
 
 /**
