@@ -45,6 +45,7 @@ interface ParsedStrategy {
   createdAt: number;
   lastCheckAt?: number;
   executedAt?: number;
+  baselinePrice?: number;
   result?: {
     success: boolean;
     signature?: string;
@@ -315,6 +316,14 @@ async function checkStrategy(strategy: ParsedStrategy): Promise<void> {
       shouldExecute = price <= strategy.condition.value;
     } else if (strategy.condition?.type === 'price_above') {
       shouldExecute = price >= strategy.condition.value;
+    } else if (strategy.condition?.type === 'price_change' && strategy.baselinePrice) {
+      const changePct = ((price - strategy.baselinePrice) / strategy.baselinePrice) * 100;
+      // condition.value is negative for drops, positive for rises
+      if (strategy.condition.value < 0) {
+        shouldExecute = changePct <= strategy.condition.value;
+      } else {
+        shouldExecute = changePct >= strategy.condition.value;
+      }
     }
 
     // For DCA, check if it's time for next execution
@@ -476,6 +485,20 @@ Examples:
     platform: 'solana',
     createdAt: Date.now(),
   };
+
+  // Store baseline price for price_change conditions
+  if (strategy.condition?.type === 'price_change') {
+    const mint = strategy.asset?.mint || TOKEN_SYMBOLS[strategy.asset?.symbol || ''];
+    if (mint) {
+      try {
+        const resp = await fetch(`https://price.jup.ag/v4/price?ids=${mint}`);
+        const data = await resp.json() as { data: Record<string, { price: number }> };
+        strategy.baselinePrice = data.data[mint]?.price;
+      } catch {
+        // Baseline will be set on first check if fetch fails
+      }
+    }
+  }
 
   strategies.set(strategy.id, strategy);
   startMonitoring();
@@ -733,6 +756,6 @@ export async function executeCommand(args: string): Promise<string> {
 export default {
   name: 'ai-strategy',
   description: 'AI Strategy - Convert natural language to automated trades on Solana',
-  commands: ['/ai-strategy'],
+  commands: ['/ai-strategy', '/strategy', '/strategies'],
   handle: execute,
 };

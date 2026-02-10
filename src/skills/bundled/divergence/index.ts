@@ -28,6 +28,7 @@ async function getFeed(): Promise<CryptoFeed | null> {
     feedInstance.start();
     return feedInstance;
   } catch {
+    feedInstance = null;
     return null;
   }
 }

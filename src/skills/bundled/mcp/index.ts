@@ -12,6 +12,8 @@
 
 import { logger } from '../../../utils/logger';
 
+let registryInstance: any = null;
+
 function helpText(): string {
   return `**MCP Commands**
 
@@ -40,9 +42,12 @@ async function execute(args: string): Promise<string> {
       initializeFromConfig,
     } = await import('../../../mcp/index');
 
-    const registry = createMcpRegistry();
-    const config = loadMcpConfig();
-    initializeFromConfig(registry, config);
+    if (!registryInstance) {
+      registryInstance = createMcpRegistry();
+      const config = loadMcpConfig();
+      initializeFromConfig(registryInstance, config);
+    }
+    const registry = registryInstance;
 
     switch (cmd) {
       case 'list':
@@ -108,7 +113,7 @@ async function execute(args: string): Promise<string> {
 
         const allTools = await registry.getAllTools();
         const tools = serverFilter
-          ? allTools.filter(t => t.server === serverFilter)
+          ? allTools.filter((t: any) => t.server === serverFilter)
           : allTools;
 
         if (tools.length === 0) {
@@ -155,7 +160,7 @@ async function execute(args: string): Promise<string> {
         const result = await registry.callTool(toolName, toolArgs);
 
         if (result.isError) {
-          return `**Tool Error**\n\n${result.content.map(c => c.text || '').join('\n')}`;
+          return `**Tool Error**\n\n${result.content.map((c: any) => c.text || '').join('\n')}`;
         }
 
         let output = `**Tool Result: ${toolName}**\n\n`;

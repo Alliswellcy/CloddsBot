@@ -383,6 +383,8 @@ export async function execute(args: string): Promise<string> {
       return handleProfile(parts[1]);
     case 'post':
       return handlePost(parts[1], parts.slice(2).join(' ').replace(/^["']|["']$/g, ''));
+    case 'comments':
+      return handleRead(parts[1] && parts[2] ? `${parts[1]}:reply:${parts[2]}` : parts[1], 10);
     case 'comment':
       return handleComment(parts[1], parts[2], parts.slice(3).join(' '));
     case 'register':

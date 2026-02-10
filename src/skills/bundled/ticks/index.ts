@@ -204,7 +204,7 @@ Example: /ticks ohlc polymarket 0x1234 --outcome 0x5678 --interval 1h`;
     // Summary
     const latest = data.candles[data.candles.length - 1];
     const first = data.candles[0];
-    const change = ((latest.close - first.open) / first.open * 100).toFixed(2);
+    const change = (first.open > 0 ? ((latest.close - first.open) / first.open * 100) : 0).toFixed(2);
     const direction = parseFloat(change) >= 0 ? '📈' : '📉';
 
     output += `\n\n${direction} Period change: ${change}%`;

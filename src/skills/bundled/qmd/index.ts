@@ -11,6 +11,11 @@
 
 import { execSync } from 'child_process';
 
+function sanitizeShellArg(input: string): string {
+  // Whitelist: only allow alphanumeric, spaces, hyphens, underscores, dots, slashes, and common punctuation
+  return input.replace(/[^a-zA-Z0-9 \-_./,;:!?'"@#%&()+=\[\]{}|<>~]/g, '');
+}
+
 function checkQmd(): string | null {
   try {
     execSync('which qmd', { stdio: 'pipe' });
@@ -45,7 +50,7 @@ async function execute(args: string): Promise<string> {
       case 's': {
         const query = parts.slice(1).join(' ');
         if (!query) return 'Usage: /qmd search <query>';
-        const result = execSync(`qmd search "${query.replace(/"/g, '\\"')}"`, {
+        const result = execSync(`qmd search "${sanitizeShellArg(query)}"`, {
           encoding: 'utf-8',
           timeout: 10000,
         });
@@ -56,7 +61,7 @@ async function execute(args: string): Promise<string> {
       case 'vs': {
         const query = parts.slice(1).join(' ');
         if (!query) return 'Usage: /qmd vsearch <query>';
-        const result = execSync(`qmd vsearch "${query.replace(/"/g, '\\"')}"`, {
+        const result = execSync(`qmd vsearch "${sanitizeShellArg(query)}"`, {
           encoding: 'utf-8',
           timeout: 30000,
         });
@@ -67,7 +72,7 @@ async function execute(args: string): Promise<string> {
       case 'q': {
         const query = parts.slice(1).join(' ');
         if (!query) return 'Usage: /qmd query <query>';
-        const result = execSync(`qmd query "${query.replace(/"/g, '\\"')}"`, {
+        const result = execSync(`qmd query "${sanitizeShellArg(query)}"`, {
           encoding: 'utf-8',
           timeout: 60000,
         });
@@ -77,7 +82,7 @@ async function execute(args: string): Promise<string> {
       case 'index': {
         const path = parts[1];
         if (!path) return 'Usage: /qmd index <directory-path>';
-        const result = execSync(`qmd index "${path.replace(/"/g, '\\"')}"`, {
+        const result = execSync(`qmd index "${sanitizeShellArg(path)}"`, {
           encoding: 'utf-8',
           timeout: 120000,
         });

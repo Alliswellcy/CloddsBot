@@ -212,7 +212,8 @@ Status: ${result.status}
 Order ID: ${result.id}`;
       }
 
-      case 'closeall': {
+      case 'closeall':
+      case 'close-all': {
         const exchangeInput = parseFlag(parts, '--exchange', 'all');
         const exErr = validateExchange(exchangeInput, configuredExchanges);
         if (exErr) return exErr;
@@ -452,7 +453,8 @@ Status: ${order.status}
 Order ID: ${order.id}`;
       }
 
-      case 'stop': {
+      case 'stop':
+      case 'sl': {
         const symbol = parts[1]?.toUpperCase();
         const triggerPrice = parseFloat(parts[2]);
         if (!symbol || isNaN(triggerPrice)) {

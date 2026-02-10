@@ -9,6 +9,8 @@
  * /voice wake <word> - Set wake word
  */
 
+let activeAssistant: any = null;
+
 async function execute(args: string): Promise<string> {
   const parts = args.trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase() || 'help';
@@ -31,6 +33,7 @@ async function execute(args: string): Promise<string> {
         if (langIdx >= 0) config.language = parts[langIdx + 1];
 
         const assistant = createVoiceAssistant(config);
+        activeAssistant = assistant;
 
         try {
           await assistant.start();
@@ -46,9 +49,14 @@ async function execute(args: string): Promise<string> {
       }
 
       case 'stop': {
+        if (activeAssistant) {
+          activeAssistant.stop();
+          activeAssistant = null;
+          return 'Voice recognition stopped.';
+        }
         const recognition = new VoiceRecognition();
         recognition.stopListening();
-        return 'Voice recognition stopped.';
+        return 'Voice recognition stopped (no active assistant found, attempted fallback).';
       }
 
       case 'status': {

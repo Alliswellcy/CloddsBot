@@ -16,6 +16,15 @@ function isConfigured(): boolean {
   return !!(process.env.SOLANA_PRIVATE_KEY || process.env.SOLANA_KEYPAIR_PATH);
 }
 
+const KNOWN_STABLECOIN_MINTS: Record<string, number> = {
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': 6, // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 6, // USDT
+};
+
+function getTokenDecimals(mint: string): number {
+  return KNOWN_STABLECOIN_MINTS[mint] ?? 9;
+}
+
 // ============================================
 // SWAP & QUOTE
 // ============================================
@@ -279,11 +288,12 @@ async function handleOpenPosition(args: string[]): Promise<string> {
     const keypair = wallet.loadSolanaKeypair();
     const connection = wallet.getSolanaConnection();
 
-    // Default to 9 decimals (SOL standard); most Solana SPL tokens use 9
-    // Orca pool API doesn't support lookup by pool address, so we pass raw amounts
-    const decimals = 9;
-    const tokenAmountA = Math.floor(parseFloat(amountA) * Math.pow(10, decimals)).toString();
-    const tokenAmountB = amountB ? Math.floor(parseFloat(amountB) * Math.pow(10, decimals)).toString() : undefined;
+    const mintA = args.find((a, i) => args[i - 1] === '--mint-a') || '';
+    const mintB = args.find((a, i) => args[i - 1] === '--mint-b') || '';
+    const decimalsA = getTokenDecimals(mintA);
+    const decimalsB = getTokenDecimals(mintB);
+    const tokenAmountA = Math.floor(parseFloat(amountA) * Math.pow(10, decimalsA)).toString();
+    const tokenAmountB = amountB ? Math.floor(parseFloat(amountB) * Math.pow(10, decimalsB)).toString() : undefined;
 
     const result = await orca.openOrcaFullRangePosition(connection, keypair, {
       poolAddress,
@@ -326,10 +336,12 @@ async function handleOpenConcentrated(args: string[]): Promise<string> {
     const keypair = wallet.loadSolanaKeypair();
     const connection = wallet.getSolanaConnection();
 
-    // Default to 9 decimals (SOL standard); most Solana SPL tokens use 9
-    const decimals = 9;
-    const tokenAmountA = Math.floor(parseFloat(amountA) * Math.pow(10, decimals)).toString();
-    const tokenAmountB = amountB ? Math.floor(parseFloat(amountB) * Math.pow(10, decimals)).toString() : undefined;
+    const mintA = args.find((a, i) => args[i - 1] === '--mint-a') || '';
+    const mintB = args.find((a, i) => args[i - 1] === '--mint-b') || '';
+    const decimalsA = getTokenDecimals(mintA);
+    const decimalsB = getTokenDecimals(mintB);
+    const tokenAmountA = Math.floor(parseFloat(amountA) * Math.pow(10, decimalsA)).toString();
+    const tokenAmountB = amountB ? Math.floor(parseFloat(amountB) * Math.pow(10, decimalsB)).toString() : undefined;
 
     const result = await orca.openOrcaConcentratedPosition(connection, keypair, {
       poolAddress,
@@ -398,8 +410,10 @@ async function handleAddLiquidity(args: string[]): Promise<string> {
     const keypair = wallet.loadSolanaKeypair();
     const connection = wallet.getSolanaConnection();
 
-    const tokenAmountA = Math.floor(parseFloat(amountA) * 1e9).toString();
-    const tokenAmountB = amountB ? Math.floor(parseFloat(amountB) * 1e9).toString() : undefined;
+    const mintA = args.find((a, i) => args[i - 1] === '--mint-a') || '';
+    const mintB = args.find((a, i) => args[i - 1] === '--mint-b') || '';
+    const tokenAmountA = Math.floor(parseFloat(amountA) * Math.pow(10, getTokenDecimals(mintA))).toString();
+    const tokenAmountB = amountB ? Math.floor(parseFloat(amountB) * Math.pow(10, getTokenDecimals(mintB))).toString() : undefined;
 
     const result = await orca.increaseOrcaLiquidity(connection, keypair, {
       positionAddress,
@@ -446,10 +460,12 @@ async function handleRemoveLiquidity(args: string[]): Promise<string> {
     if (args[1] === '--tokens') {
       const amountA = args[2];
       const amountB = args[3];
+      const mintA = args.find((a, i) => args[i - 1] === '--mint-a') || '';
+      const mintB = args.find((a, i) => args[i - 1] === '--mint-b') || '';
       params = {
         positionAddress,
-        tokenAmountA: Math.floor(parseFloat(amountA) * 1e9).toString(),
-        tokenAmountB: amountB ? Math.floor(parseFloat(amountB) * 1e9).toString() : undefined,
+        tokenAmountA: Math.floor(parseFloat(amountA) * Math.pow(10, getTokenDecimals(mintA))).toString(),
+        tokenAmountB: amountB ? Math.floor(parseFloat(amountB) * Math.pow(10, getTokenDecimals(mintB))).toString() : undefined,
         slippageBps: 100,
       };
     } else {

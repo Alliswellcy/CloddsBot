@@ -22,7 +22,7 @@ async function getCronService() {
     const db = await initDatabase();
     cronInstance = createCronService({
       db,
-      feeds: null as any, // Triggers don't need feeds
+      feeds: {} as any, // Triggers don't need feeds
       sendMessage: async () => null,
     });
     return cronInstance;

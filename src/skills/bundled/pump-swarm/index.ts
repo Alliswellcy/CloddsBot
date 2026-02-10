@@ -941,7 +941,7 @@ Buy gradually at lower price levels.
   // Run async
   executor.execute(strategy).then(result => {
     activeStrategies.delete(strategy.id);
-  });
+  }).catch(err => { activeStrategies.delete(strategy.id); console.error('Strategy execution failed:', err); });
 
   return `**Scale-In Strategy Started**
 
@@ -990,7 +990,7 @@ Sell gradually at higher price levels.
   const executor = new StrategyExecutor(swarm);
   activeStrategies.set(strategy.id, { strategy, executor });
 
-  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id));
+  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id)).catch(err => { activeStrategies.delete(strategy.id); console.error('Strategy execution failed:', err); });
 
   return `**Scale-Out Strategy Started**
 
@@ -1034,7 +1034,7 @@ Fast entry with automatic take-profit and stop-loss.
   const executor = new StrategyExecutor(swarm);
   activeStrategies.set(strategy.id, { strategy, executor });
 
-  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id));
+  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id)).catch(err => { activeStrategies.delete(strategy.id); console.error('Strategy execution failed:', err); });
 
   return `**Snipe + Exit Strategy Started**
 
@@ -1088,7 +1088,7 @@ Time-Weighted Average Price - split order over time.
   const executor = new StrategyExecutor(swarm);
   activeStrategies.set(strategy.id, { strategy, executor });
 
-  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id));
+  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id)).catch(err => { activeStrategies.delete(strategy.id); console.error('Strategy execution failed:', err); });
 
   const amountPer = amount / intervals;
   const totalTime = (intervals - 1) * delayMs;
@@ -1139,7 +1139,7 @@ Set multiple buy orders at decreasing price levels.
   const executor = new StrategyExecutor(swarm);
   activeStrategies.set(strategy.id, { strategy, executor });
 
-  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id));
+  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id)).catch(err => { activeStrategies.delete(strategy.id); console.error('Strategy execution failed:', err); });
 
   return `**Ladder Buy Strategy Started**
 
@@ -1188,7 +1188,7 @@ Dollar-cost average with time delays.
   const executor = new StrategyExecutor(swarm);
   activeStrategies.set(strategy.id, { strategy, executor });
 
-  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id));
+  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id)).catch(err => { activeStrategies.delete(strategy.id); console.error('Strategy execution failed:', err); });
 
   return `**Smart DCA Strategy Started**
 
@@ -1228,7 +1228,7 @@ Different wallets execute different actions simultaneously.
   const executor = new StrategyExecutor(swarm);
   activeStrategies.set(strategy.id, { strategy, executor });
 
-  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id));
+  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id)).catch(err => { activeStrategies.delete(strategy.id); console.error('Strategy execution failed:', err); });
 
   return `**Split Strategy Started**
 
@@ -1267,7 +1267,7 @@ Exit one token and enter another atomically.
   const executor = new StrategyExecutor(swarm);
   activeStrategies.set(strategy.id, { strategy, executor });
 
-  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id));
+  executor.execute(strategy).then(() => activeStrategies.delete(strategy.id)).catch(err => { activeStrategies.delete(strategy.id); console.error('Strategy execution failed:', err); });
 
   return `**Rotation Strategy Started**
 

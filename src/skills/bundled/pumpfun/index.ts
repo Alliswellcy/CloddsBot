@@ -934,7 +934,7 @@ async function handlePrice(mint: string): Promise<string> {
     if (ohlcv?.length) {
       const first = ohlcv[0];
       const last = ohlcv[ohlcv.length - 1];
-      const change = ((last.close - first.open) / first.open) * 100;
+      const change = first.open > 0 ? ((last.close - first.open) / first.open) * 100 : 0;
       const high = Math.max(...ohlcv.map(c => c.high));
       const low = Math.min(...ohlcv.map(c => c.low));
 

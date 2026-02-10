@@ -22,11 +22,11 @@ function isConfigured(): boolean {
 function parseMarket(market: string): { marketIndex: number; marketType: 'perp' | 'spot' } {
   // Common perp markets
   const perpMarkets: Record<string, number> = {
-    'SOL-PERP': 0,
-    'BTC-PERP': 1,
+    'BTC-PERP': 0,
+    'SOL-PERP': 1,
     'ETH-PERP': 2,
-    'SOL': 0,
-    'BTC': 1,
+    'BTC': 0,
+    'SOL': 1,
     'ETH': 2,
   };
 
@@ -41,7 +41,7 @@ function parseMarket(market: string): { marketIndex: number; marketType: 'perp' 
     return { marketIndex: index, marketType: 'perp' };
   }
 
-  return { marketIndex: 0, marketType: 'perp' };
+  return { marketIndex: -1, marketType: 'perp' };
 }
 
 async function handleLong(market: string, size: string, price?: string): Promise<string> {
@@ -59,6 +59,7 @@ async function handleLong(market: string, size: string, price?: string): Promise
     const connection = wallet.getSolanaConnection();
 
     const { marketIndex, marketType } = parseMarket(market);
+    if (marketIndex < 0) return `Unknown market: ${market}. Use SOL-PERP, BTC-PERP, ETH-PERP, or a numeric index.`;
 
     const result = await drift.executeDriftDirectOrder(connection, keypair, {
       marketType,
@@ -95,6 +96,7 @@ async function handleShort(market: string, size: string, price?: string): Promis
     const connection = wallet.getSolanaConnection();
 
     const { marketIndex, marketType } = parseMarket(market);
+    if (marketIndex < 0) return `Unknown market: ${market}. Use SOL-PERP, BTC-PERP, ETH-PERP, or a numeric index.`;
 
     const result = await drift.executeDriftDirectOrder(connection, keypair, {
       marketType,
@@ -239,6 +241,7 @@ async function handleLeverage(market: string, leverage: string): Promise<string>
     const connection = wallet.getSolanaConnection();
 
     const { marketIndex } = parseMarket(market);
+    if (marketIndex < 0) return `Unknown market: ${market}. Use SOL-PERP, BTC-PERP, ETH-PERP, or a numeric index.`;
     const leverageNum = parseFloat(leverage);
 
     const result = await drift.setDriftLeverage(connection, keypair, {

@@ -175,7 +175,7 @@ export const skill = {
     },
   ],
 
-  async handler(args: string): Promise<string> {
+  async handle(args: string): Promise<string> {
     const parts = args.trim().split(/\s+/);
     const cmd = parts[0]?.toLowerCase();
 

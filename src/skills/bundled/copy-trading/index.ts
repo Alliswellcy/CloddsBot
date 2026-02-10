@@ -39,11 +39,16 @@ async function execute(args: string): Promise<string> {
       case 'follow': {
         if (!parts[1]) return 'Usage: /copy follow <address> [--size <amount>] [--delay <ms>]';
         const addr = parts[1];
-        service.follow(addr);
         const sizeIdx = parts.indexOf('--size');
         const size = sizeIdx >= 0 ? parts[sizeIdx + 1] : '100';
         const delayIdx = parts.indexOf('--delay');
         const delay = delayIdx >= 0 ? parts[delayIdx + 1] : '5000';
+        // follow() only accepts address; apply size/delay via updateConfig
+        service.follow(addr);
+        const configUpdates: Record<string, unknown> = {};
+        if (sizeIdx >= 0) configUpdates.fixedSize = parseFloat(size);
+        if (delayIdx >= 0) configUpdates.copyDelayMs = parseInt(delay);
+        if (Object.keys(configUpdates).length > 0) service.updateConfig(configUpdates);
         return `**Following Wallet**\n\nAddress: \`${addr}\`\nSize: $${size}\nDelay: ${delay}ms\nStatus: Active\nMode: Dry run (use /copy config set dryRun false to go live)`;
       }
 

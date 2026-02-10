@@ -78,7 +78,7 @@ function getWalletClient() {
 
 function encodeEIN(ein: string): `0x${string}` {
   // Remove any dashes and convert to bytes32
-  const normalized = ein.replace(/-/g, '-');
+  const normalized = ein.replace(/-/g, '');
   const hex = stringToHex(normalized, { size: 32 });
   return hex;
 }

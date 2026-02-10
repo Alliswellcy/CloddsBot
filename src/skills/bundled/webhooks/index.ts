@@ -31,7 +31,8 @@ async function execute(args: string): Promise<string> {
         return output;
       }
 
-      case 'register': {
+      case 'register':
+      case 'create': {
         const id = parts[1];
         const path = parts[2];
         if (!id || !path) return 'Usage: /webhooks register <id> <path> [--secret <key>]';
@@ -43,7 +44,8 @@ async function execute(args: string): Promise<string> {
 
       case 'unregister':
       case 'remove':
-      case 'delete': {
+      case 'delete':
+      case 'del': {
         if (!parts[1]) return 'Usage: /webhooks unregister <webhook-id>';
         const removed = manager.unregister(parts[1]);
         return removed ? `Webhook ${parts[1]} removed.` : `Webhook ${parts[1]} not found.`;
@@ -61,7 +63,8 @@ async function execute(args: string): Promise<string> {
         return `Webhook ${parts[1]} disabled.`;
       }
 
-      case 'get': {
+      case 'get':
+      case 'info': {
         if (!parts[1]) return 'Usage: /webhooks get <webhook-id>';
         const hook = manager.get(parts[1]);
         if (!hook) return `Webhook ${parts[1]} not found.`;

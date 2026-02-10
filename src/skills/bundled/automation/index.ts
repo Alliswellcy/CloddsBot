@@ -13,17 +13,21 @@
 // Store command strings for each cron job
 const jobCommands = new Map<string, string>();
 
+let schedulerInstance: any = null;
+
 async function execute(args: string): Promise<string> {
   const parts = args.trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase() || 'help';
 
   try {
     const { createCronScheduler, CronSchedules } = await import('../../../automation/cron');
+    if (!schedulerInstance) schedulerInstance = createCronScheduler();
+    const scheduler = schedulerInstance;
 
     switch (cmd) {
       case 'list':
       case 'ls': {
-        const scheduler = createCronScheduler();
+
         const jobs = scheduler.list();
         if (!jobs.length) return 'No scheduled jobs configured. Use `/auto cron` to create one.';
         let output = `**Scheduled Jobs** (${jobs.length})\n\n`;
@@ -49,7 +53,7 @@ async function execute(args: string): Promise<string> {
         // Resolve preset schedules
         const presetMap: Record<string, string> = CronSchedules;
         const resolvedSchedule = presetMap[schedule.toUpperCase()] || schedule;
-        const scheduler = createCronScheduler();
+
         jobCommands.set(id, command);
         scheduler.add(id, resolvedSchedule, async () => {
           const { logger } = await import('../../../utils/logger');
@@ -62,21 +66,21 @@ async function execute(args: string): Promise<string> {
       case 'remove':
       case 'delete': {
         if (!parts[1]) return 'Usage: /auto remove <job-id>';
-        const scheduler = createCronScheduler();
+
         const removed = scheduler.remove(parts[1]);
         return removed ? `Job \`${parts[1]}\` removed.` : `Job \`${parts[1]}\` not found.`;
       }
 
       case 'enable': {
         if (!parts[1]) return 'Usage: /auto enable <job-id>';
-        const scheduler = createCronScheduler();
+
         scheduler.setEnabled(parts[1], true);
         return `Job \`${parts[1]}\` enabled.`;
       }
 
       case 'disable': {
         if (!parts[1]) return 'Usage: /auto disable <job-id>';
-        const scheduler = createCronScheduler();
+
         scheduler.setEnabled(parts[1], false);
         return `Job \`${parts[1]}\` disabled.`;
       }
@@ -84,7 +88,7 @@ async function execute(args: string): Promise<string> {
       case 'trigger':
       case 'run': {
         if (!parts[1]) return 'Usage: /auto trigger <job-id>';
-        const scheduler = createCronScheduler();
+
         const jobCmd = jobCommands.get(parts[1]);
         await scheduler.trigger(parts[1]);
         return `Job \`${parts[1]}\` triggered manually.${jobCmd ? `\nCommand: \`${jobCmd}\`` : ''}`;

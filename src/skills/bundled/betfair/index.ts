@@ -177,13 +177,13 @@ async function handleBook(marketId: string, selectionId: string): Promise<string
 
     output += `**Back (Bids):**\n`;
     for (const [prob, size] of orderbook.bids.slice(0, 5)) {
-      const odds = (1 / prob).toFixed(2);
+      const odds = prob > 0 ? (1 / prob).toFixed(2) : '0';
       output += `  ${odds} - £${size.toFixed(2)}\n`;
     }
 
     output += `\n**Lay (Asks):**\n`;
     for (const [prob, size] of orderbook.asks.slice(0, 5)) {
-      const odds = (1 / prob).toFixed(2);
+      const odds = prob > 0 ? (1 / prob).toFixed(2) : '0';
       output += `  ${odds} - £${size.toFixed(2)}\n`;
     }
 

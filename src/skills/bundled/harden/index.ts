@@ -421,7 +421,7 @@ export function formatReport(report: AuditReport): string {
     '',
     `**Host:** ${report.host}`,
     `**Date:** ${report.timestamp.toISOString()}`,
-    `**Score:** ${report.score}/${report.maxScore} (${Math.round(report.score / report.maxScore * 100)}%)`,
+    `**Score:** ${report.score}/${report.maxScore} (${report.maxScore > 0 ? Math.round(report.score / report.maxScore * 100) : 0}%)`,
     '',
     '## Results',
     '',

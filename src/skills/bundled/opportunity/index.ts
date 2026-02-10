@@ -205,6 +205,16 @@ export async function execute(args: string): Promise<string> {
   const rest = parts.slice(1);
   const { args: restArgs, flags } = parseFlags(rest);
 
+  if (!finder) {
+    try {
+      const { createDatabase } = await import('../../../db/index');
+      const { createFeedManager } = await import('../../../feeds/index');
+      const db = createDatabase();
+      const feeds = await createFeedManager({} as any);
+      finder = createOpportunityFinder(db, feeds);
+    } catch { /* leave null if dependencies missing */ }
+  }
+
   switch (command) {
     case 'scan':
     case 'search':

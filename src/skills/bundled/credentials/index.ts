@@ -37,7 +37,8 @@ async function execute(args: string): Promise<string> {
         return output;
       }
 
-      case 'set': {
+      case 'set':
+      case 'add': {
         if (parts.length < 4) return 'Usage: /creds set <platform> <key> <value>\n\nPlatforms: polymarket, kalshi, manifold\nKeys vary by platform (api_key, api_secret, api_passphrase, etc.)';
         const platform = parts[1].toLowerCase();
         const validPlatforms = ['polymarket', 'kalshi', 'manifold', 'binance', 'bybit', 'hyperliquid', 'drift'];
@@ -62,7 +63,8 @@ async function execute(args: string): Promise<string> {
       }
 
       case 'check':
-      case 'verify': {
+      case 'verify':
+      case 'test': {
         if (!parts[1]) return 'Usage: /creds check <platform>';
         const platform = parts[1].toLowerCase();
         const has = await manager.hasCredentials(userId, platform as any);

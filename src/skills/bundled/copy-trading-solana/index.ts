@@ -64,26 +64,36 @@ function parseOptions(args: string[]): {
         i++;
         break;
       case '--mult':
-      case '--multiplier':
-        opts.mult = parseFloat(next);
+      case '--multiplier': {
+        const v = parseFloat(next);
+        if (!isNaN(v)) opts.mult = v;
         i++;
         break;
-      case '--max':
-        opts.max = parseFloat(next);
+      }
+      case '--max': {
+        const v = parseFloat(next);
+        if (!isNaN(v)) opts.max = v;
         i++;
         break;
-      case '--min':
-        opts.min = parseFloat(next);
+      }
+      case '--min': {
+        const v = parseFloat(next);
+        if (!isNaN(v)) opts.min = v;
         i++;
         break;
-      case '--delay':
-        opts.delay = parseInt(next);
+      }
+      case '--delay': {
+        const v = parseInt(next);
+        if (!isNaN(v)) opts.delay = v;
         i++;
         break;
-      case '--slippage':
-        opts.slippage = parseInt(next);
+      }
+      case '--slippage': {
+        const v = parseInt(next);
+        if (!isNaN(v)) opts.slippage = v;
         i++;
         break;
+      }
       case '--buys-only':
         opts.buysOnly = true;
         break;

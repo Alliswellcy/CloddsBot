@@ -183,6 +183,6 @@ Note: Metaculus is a forecasting platform (no trading).`;
 export default {
   name: 'metaculus',
   description: 'Metaculus forecasting platform - search questions, view predictions, and browse tournaments',
-  commands: ['/metaculus'],
+  commands: ['/metaculus', '/mc'],
   handle: execute,
 };

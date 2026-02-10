@@ -13,6 +13,8 @@
  * /trading config - View/set config
  */
 
+let safetyInstance: any = null;
+
 function helpText(): string {
   return `**Trading System Commands**
 
@@ -56,8 +58,8 @@ async function execute(args: string): Promise<string> {
         const safetyMod = await import('../../../trading/safety');
         let safetyStatus = 'unknown';
         try {
-          const safety = safetyMod.createSafetyManager(db);
-          safetyStatus = safety.canTrade() ? 'OK' : 'BLOCKED';
+          if (!safetyInstance) safetyInstance = safetyMod.createSafetyManager(db);
+          safetyStatus = safetyInstance.canTrade() ? 'OK' : 'BLOCKED';
         } catch {
           safetyStatus = 'not initialized';
         }
@@ -213,10 +215,10 @@ Fees: $${stats.netFees.toFixed(2)} (maker: ${stats.makerTrades}, taker: ${stats.
 
       case 'safety': {
         const safetyMod = await import('../../../trading/safety');
-        const safety = safetyMod.createSafetyManager(db);
-        const state = safety.getState();
+        if (!safetyInstance) safetyInstance = safetyMod.createSafetyManager(db);
+        const state = safetyInstance.getState();
 
-        const breakerTripped = state.alerts.some(a => a.type === 'breaker_tripped');
+        const breakerTripped = state.alerts.some((a: any) => a.type === 'breaker_tripped');
 
         const lines = [
           '**Safety Status**',
@@ -251,9 +253,9 @@ Fees: $${stats.netFees.toFixed(2)} (maker: ${stats.makerTrades}, taker: ${stats.
       case 'killswitch': {
         const reason = parts.slice(1).join(' ') || 'Manual kill via CLI';
         const safetyMod = await import('../../../trading/safety');
-        const safety = safetyMod.createSafetyManager(db);
+        if (!safetyInstance) safetyInstance = safetyMod.createSafetyManager(db);
 
-        safety.killSwitch(reason);
+        safetyInstance.killSwitch(reason);
 
         // Also shutdown all bots
         await system.shutdown();
@@ -267,9 +269,9 @@ To resume: /trading resume`;
 
       case 'resume': {
         const safetyMod = await import('../../../trading/safety');
-        const safety = safetyMod.createSafetyManager(db);
+        if (!safetyInstance) safetyInstance = safetyMod.createSafetyManager(db);
 
-        const resumed = safety.resumeTrading();
+        const resumed = safetyInstance.resumeTrading();
         if (resumed) {
           return 'Trading resumed. Safety checks still active.\nRestart bots manually with /trading start <strategy>.';
         }

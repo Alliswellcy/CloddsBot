@@ -24,14 +24,19 @@ import { logger } from '../../../utils/logger';
 
 let service: PairingService | null = null;
 
-function getService(): PairingService | null {
-  // Service needs to be initialized with a database externally
-  // This is a lightweight wrapper
+async function getService(): Promise<PairingService | null> {
+  if (!service) {
+    try {
+      const { createDatabase } = await import('../../../db/index');
+      const db = createDatabase();
+      service = createPairingService(db);
+    } catch { /* leave null if dependencies missing */ }
+  }
   return service;
 }
 
 async function handlePair(channel: string, userId: string, username?: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized. Database required.';
 
   const code = await svc.createPairingRequest(channel, userId, username);
@@ -49,7 +54,7 @@ async function handlePair(channel: string, userId: string, username?: string): P
 }
 
 async function handlePairCode(code: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized.';
   if (!code) return 'Usage: /pair-code <code>';
 
@@ -62,7 +67,7 @@ async function handlePairCode(code: string): Promise<string> {
 }
 
 async function handleUnpair(channel: string, userId: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized.';
 
   if (!svc.isPaired(channel, userId)) {
@@ -74,7 +79,7 @@ async function handleUnpair(channel: string, userId: string): Promise<string> {
 }
 
 async function handleList(channel: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized.';
 
   const pending = svc.listPendingRequests(channel);
@@ -93,7 +98,7 @@ async function handleList(channel: string): Promise<string> {
 }
 
 async function handleApprove(channel: string, code: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized.';
   if (!code) return 'Usage: /pairing approve <code>';
 
@@ -106,7 +111,7 @@ async function handleApprove(channel: string, code: string): Promise<string> {
 }
 
 async function handleReject(channel: string, code: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized.';
   if (!code) return 'Usage: /pairing reject <code>';
 
@@ -119,7 +124,7 @@ async function handleReject(channel: string, code: string): Promise<string> {
 }
 
 async function handleUsers(channel: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized.';
 
   const users = svc.listPairedUsers(channel);
@@ -139,7 +144,7 @@ async function handleUsers(channel: string): Promise<string> {
 }
 
 async function handleRemove(channel: string, userId: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized.';
   if (!userId) return 'Usage: /pairing remove <user>';
 
@@ -148,7 +153,7 @@ async function handleRemove(channel: string, userId: string): Promise<string> {
 }
 
 async function handleTrust(channel: string, userId: string, level: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized.';
 
   if (level === 'owner') {
@@ -163,7 +168,7 @@ async function handleTrust(channel: string, userId: string, level: string): Prom
 }
 
 async function handleTrustList(channel: string): Promise<string> {
-  const svc = getService();
+  const svc = await getService();
   if (!svc) return 'Pairing service not initialized.';
 
   const owners = svc.listOwners(channel);
@@ -222,12 +227,14 @@ export async function execute(args: string): Promise<string> {
       if (rest.length < 2) return 'Usage: /trust <user> owner|paired';
       return handleTrust(channel, rest[0], rest[1]);
 
-    case 'cleanup':
-      if (getService()) {
-        getService()!.cleanupExpired();
+    case 'cleanup': {
+      const cleanupSvc = await getService();
+      if (cleanupSvc) {
+        cleanupSvc.cleanupExpired();
         return 'Expired pairing requests cleaned up.';
       }
       return 'Pairing service not initialized.';
+    }
 
     case 'help':
     default:

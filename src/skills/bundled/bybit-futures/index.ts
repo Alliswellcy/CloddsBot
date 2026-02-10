@@ -114,7 +114,7 @@ async function handlePositions(): Promise<string> {
   const lines = ['**Bybit Positions**', ''];
   for (const p of positions) {
     const side = p.side === 'Buy' ? '🟢 LONG' : '🔴 SHORT';
-    const pnlPct = (p.unrealisedPnl / p.positionValue) * 100;
+    const pnlPct = p.positionValue > 0 ? (p.unrealisedPnl / p.positionValue) * 100 : 0;
     lines.push(`  ${side} ${p.symbol} | ${p.size} @ $${p.entryPrice.toFixed(2)} | ${p.leverage}x`);
     lines.push(`       Mark: $${p.markPrice.toFixed(2)} | PnL: $${formatNumber(p.unrealisedPnl)} (${formatPct(pnlPct)})`);
     if (p.liqPrice > 0) lines.push(`       Liq: $${p.liqPrice.toFixed(2)}`);

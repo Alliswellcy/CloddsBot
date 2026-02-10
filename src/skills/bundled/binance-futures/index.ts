@@ -135,7 +135,8 @@ async function handlePositions(): Promise<string> {
   const lines = ['**Binance Futures Positions**', ''];
   for (const p of positions) {
     const side = p.positionAmt > 0 ? '🟢 LONG' : '🔴 SHORT';
-    const pnlPct = (p.unrealizedProfit / (Math.abs(p.positionAmt) * p.entryPrice)) * 100;
+    const notional = Math.abs(p.positionAmt) * p.entryPrice;
+    const pnlPct = notional > 0 ? (p.unrealizedProfit / notional) * 100 : 0;
     lines.push(
       `  ${side} ${p.symbol} | ${Math.abs(p.positionAmt)} @ $${p.entryPrice.toFixed(2)} | ${p.leverage}x`
     );
@@ -442,7 +443,7 @@ async function handleDbPositions(showAll?: string): Promise<string> {
 const skill = {
   name: 'binance-futures',
   description: 'Binance Futures trading with DB tracking',
-  commands: ['/binance', '/binance-futures'],
+  commands: ['/binance', '/binance-futures', '/bf'],
 
   async handle(args: string): Promise<string> {
     const parts = args.trim().split(/\s+/);

@@ -10,6 +10,16 @@
  * /stream interrupt <platform> <chatId> - Interrupt a stream
  */
 
+let serviceInstance: any = null;
+
+async function getService() {
+  const { createStreamingService } = await import('../../../streaming/index');
+  if (!serviceInstance) {
+    serviceInstance = createStreamingService();
+  }
+  return serviceInstance;
+}
+
 async function execute(args: string): Promise<string> {
   const parts = args.trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase() || 'config';
@@ -17,7 +27,7 @@ async function execute(args: string): Promise<string> {
   try {
     const { createStreamingService, chunkForPlatform } = await import('../../../streaming/index');
 
-    const service = createStreamingService();
+    const service = await getService();
 
     switch (cmd) {
       case 'config': {
@@ -44,8 +54,8 @@ async function execute(args: string): Promise<string> {
         else if (key === 'typingIndicator') updates.typingIndicator = value === 'true';
         else return `Unknown config key: ${key}. Valid keys: enabled, minChunkSize, flushIntervalMs, typingIndicator`;
 
-        const updated = createStreamingService({ ...currentConfig, ...updates });
-        const newConfig = updated.getConfig();
+        serviceInstance = createStreamingService({ ...currentConfig, ...updates });
+        const newConfig = serviceInstance.getConfig();
 
         return `**Config Updated**\n\n` +
           `Enabled: ${newConfig.enabled}\n` +
@@ -71,7 +81,7 @@ async function execute(args: string): Promise<string> {
         if (active.length === 0) {
           return '**Active Streams**\n\nNo active streams.';
         }
-        const lines = active.map(ctx =>
+        const lines = active.map((ctx: any) =>
           `- ${ctx.platform}:${ctx.chatId} | Buffer: ${ctx.buffer.length} chars | Interrupted: ${ctx.interrupted || false}`
         );
         return `**Active Streams (${active.length})**\n\n${lines.join('\n')}`;

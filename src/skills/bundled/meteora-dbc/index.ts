@@ -36,6 +36,15 @@ function isConfigured(): boolean {
   return !!(process.env.SOLANA_PRIVATE_KEY || process.env.SOLANA_KEYPAIR_PATH);
 }
 
+const KNOWN_STABLECOIN_MINTS: Record<string, number> = {
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': 6, // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 6, // USDT
+};
+
+function getTokenDecimals(mint: string): number {
+  return KNOWN_STABLECOIN_MINTS[mint] ?? 9;
+}
+
 // ============================================================================
 // Flag parsing helper
 // ============================================================================
@@ -322,8 +331,8 @@ async function handleSell(args: string[]): Promise<string> {
       return `Pool has already migrated to DAMM. Use /met swap instead.`;
     }
 
-    // Default to 6 decimals for DBC tokens
-    const amountLamports = dbc.toLamports(amountTokens, 6).toString();
+    const tokenDecimals = getTokenDecimals(mint);
+    const amountLamports = dbc.toLamports(amountTokens, tokenDecimals).toString();
 
     const result = await dbc.swapOnDbcPool(connection, keypair, {
       poolAddress: status.poolAddress,
@@ -368,8 +377,9 @@ async function handleQuote(args: string[]): Promise<string> {
       return `Pool has migrated. Use /met quote instead.`;
     }
 
-    // For buy: amount is SOL (9 decimals), for sell: amount is tokens (6 decimals)
-    const decimals = isSell ? 6 : 9;
+    // For buy: amount is SOL (9 decimals), for sell: amount is tokens (variable decimals)
+    const tokenDecimals = getTokenDecimals(mint);
+    const decimals = isSell ? tokenDecimals : 9;
     const amountLamports = dbc.toLamports(amount, decimals).toString();
 
     const quote = await dbc.getDbcSwapQuote(connection, {
@@ -378,7 +388,7 @@ async function handleQuote(args: string[]): Promise<string> {
       swapBaseForQuote: isSell,
     });
 
-    const outDecimals = isSell ? 9 : 6;
+    const outDecimals = isSell ? 9 : tokenDecimals;
     const outAmount = parseInt(quote.amountOut) / Math.pow(10, outDecimals);
     const minOut = parseInt(quote.minimumAmountOut) / Math.pow(10, outDecimals);
     const unit = isSell ? 'SOL' : 'tokens';
@@ -589,20 +599,21 @@ Examples:
       swapMode,
     };
 
+    const tokenDecimals = getTokenDecimals(mint);
     if (swapMode === 2) {
-      const decimals = isSell ? 9 : 6;
+      const decimals = isSell ? 9 : tokenDecimals;
       params.amountOut = dbc.toLamports(amount, decimals).toString();
       const maxIn = parseFlag(args, '--max-in');
       if (maxIn) {
-        const maxDecimals = isSell ? 6 : 9;
+        const maxDecimals = isSell ? tokenDecimals : 9;
         params.maximumAmountIn = dbc.toLamports(maxIn, maxDecimals).toString();
       }
     } else {
-      const decimals = isSell ? 6 : 9;
+      const decimals = isSell ? tokenDecimals : 9;
       params.amountIn = dbc.toLamports(amount, decimals).toString();
       const minOut = parseFlag(args, '--min-out');
       if (minOut) {
-        const minDecimals = isSell ? 9 : 6;
+        const minDecimals = isSell ? 9 : tokenDecimals;
         params.minimumAmountOut = dbc.toLamports(minOut, minDecimals).toString();
       }
     }
