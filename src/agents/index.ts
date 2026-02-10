@@ -27,6 +27,7 @@ import {
   ExecutionServiceRef,
 } from '../types';
 import { logger } from '../utils/logger';
+import { ToolRegistry, inferToolMetadata, CORE_TOOL_NAMES } from './tool-registry.js';
 import { createSkillManager, SkillManager } from '../skills/loader';
 import { FeedManager } from '../feeds';
 import { Database } from '../db';
@@ -256,6 +257,12 @@ interface ToolDefinition {
     type: 'object';
     properties: Record<string, JsonSchemaProperty>;
     required?: string[];
+  };
+  metadata?: {
+    platform?: string;
+    category?: string;
+    tags?: string[];
+    core?: boolean;
   };
 }
 
@@ -8194,6 +8201,33 @@ function buildTools(): ToolDefinition[] {
           hotkeyName: { type: 'string', description: 'Hotkey name (for register)' },
         },
         required: ['action'],
+      },
+    },
+    // Tool search meta-tool (always included in core set)
+    {
+      name: 'tool_search',
+      description: 'Search for specialized tools by platform, category, or keyword. Use this BEFORE attempting to use a tool that is not in your current tool set. Returns tool definitions you can use in follow-up requests. Available platforms include: polymarket, kalshi, manifold, metaculus, drift, opinion, predictfun, binance, bybit, mexc, hyperliquid, solana, pumpfun, bags, meteora, raydium, orca, coingecko, yahoo, acp, docker, git. Categories include: trading, market_data, portfolio, discovery, admin, infrastructure, defi, alerts.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          platform: {
+            type: 'string',
+            description: 'Platform to search: polymarket, kalshi, manifold, metaculus, drift, opinion, predictfun, binance, bybit, mexc, hyperliquid, solana, pumpfun, bags, meteora, raydium, orca, coingecko, yahoo, acp, docker, git',
+          },
+          category: {
+            type: 'string',
+            description: 'Tool category: trading, market_data, portfolio, discovery, admin, infrastructure, defi, alerts',
+          },
+          query: {
+            type: 'string',
+            description: 'Keyword search: "buy order", "balance", "swap", "liquidity" etc.',
+          },
+        },
+      },
+      metadata: {
+        category: 'admin',
+        tags: ['meta', 'search', 'discovery', 'tools'],
+        core: true,
       },
     },
   ];
@@ -16611,6 +16645,14 @@ async function executeTool(
         return JSON.stringify({ result: 'Progress updated', id });
       }
 
+      case 'tool_search': {
+        // Fallback when TOOL_SEARCH_ENABLED is false or handler not intercepted.
+        // Return a helpful message so Claude doesn't get a confusing error.
+        return JSON.stringify({
+          error: 'tool_search is not enabled. All tools are already available — use them directly.',
+        });
+      }
+
       default: {
         // Try modular handlers (Solana DEX, Bags.fm, Betfair, Smarkets, Opinion, Virtuals, etc.)
         if (hasHandler(toolName)) {
@@ -16720,7 +16762,39 @@ export async function createAgentManager(
       parseMode: 'Markdown',
     });
   });
-  const tools = buildTools();
+  const allToolDefs = buildTools();
+
+  // Build tool registry with inferred metadata
+  const toolRegistry = new ToolRegistry<ToolDefinition>();
+  for (const tool of allToolDefs) {
+    const inferred = inferToolMetadata(tool.name, tool.description);
+    const isCore = CORE_TOOL_NAMES.has(tool.name);
+    toolRegistry.register({
+      ...tool,
+      metadata: {
+        ...inferred,
+        ...tool.metadata, // explicit metadata overrides inferred
+        core: tool.metadata?.core ?? isCore,
+      },
+    });
+  }
+
+  // Feature flag: set TOOL_SEARCH_ENABLED=true to use dynamic tool loading
+  const TOOL_SEARCH_ENABLED = process.env.TOOL_SEARCH_ENABLED === 'true';
+
+  // Core tools (always sent) vs all tools (legacy mode)
+  const coreTools = toolRegistry.getCoreTools();
+  // When disabled, send all tools EXCEPT tool_search (no point confusing the LLM)
+  const tools: ToolDefinition[] = TOOL_SEARCH_ENABLED
+    ? coreTools
+    : allToolDefs.filter(t => t.name !== 'tool_search');
+
+  logger.info({
+    totalTools: allToolDefs.length,
+    coreTools: coreTools.length,
+    toolSearchEnabled: TOOL_SEARCH_ENABLED,
+  }, 'Tool registry initialized');
+
   const getConfig = configProvider || (() => config);
   const getWebhooks = webhookToolProvider || (() => undefined);
   const summarizer = createClaudeSummarizer();
@@ -17163,6 +17237,9 @@ export async function createAgentManager(
       // Track actual API token usage for accurate compaction decisions
       let lastKnownInputTokens = 0;
 
+      // Dynamic tool loading: tools discovered via tool_search during this request
+      const discoveredTools: ToolDefinition[] = [];
+
       // Add all messages to context manager for tracking
       for (const msg of messages) {
         const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
@@ -17219,13 +17296,23 @@ export async function createAgentManager(
         }
       }
 
+      // Build dynamic tool set: core tools + any discovered tools
+      const getActiveTools = (): ToolDefinition[] => {
+        if (!TOOL_SEARCH_ENABLED || discoveredTools.length === 0) return tools;
+        // Dedupe by name (core tools + discovered)
+        const seen = new Set(tools.map(t => t.name));
+        const extra = discoveredTools.filter(t => !seen.has(t.name));
+        return [...tools, ...extra];
+      };
+
       let response: Anthropic.Message;
       try {
+        const activeTools = getActiveTools();
         response = await createMessage({
           model: modelId,
           max_tokens: 1024,
           system: finalSystemPrompt,
-          tools: tools as Anthropic.Tool[],
+          tools: activeTools as Anthropic.Tool[],
           messages,
         });
       } catch (err: unknown) {
@@ -17313,11 +17400,53 @@ export async function createAgentManager(
               }, TOOL_STREAM_DELAY_MS);
             }
 
-            const result = await executeTool(
-              block.name,
-              finalParams,
-              context
-            );
+            let result: string;
+
+            // Handle tool_search in-scope (needs access to toolRegistry)
+            if (block.name === 'tool_search' && TOOL_SEARCH_ENABLED) {
+              const { platform, category, query } = finalParams as { platform?: string; category?: string; query?: string };
+              let searchResults: ToolDefinition[];
+
+              if (platform) {
+                searchResults = toolRegistry.searchByPlatform(platform);
+              } else if (category) {
+                searchResults = toolRegistry.searchByCategory(category);
+              } else if (query) {
+                searchResults = toolRegistry.searchByText(query);
+              } else {
+                searchResults = [];
+              }
+
+              // Take top 25 results
+              const topResults = searchResults.slice(0, 25);
+
+              // Store discovered tools for next API call (dedupe)
+              const alreadyDiscovered = new Set(discoveredTools.map(t => t.name));
+              for (const t of topResults) {
+                if (!alreadyDiscovered.has(t.name)) {
+                  discoveredTools.push(t);
+                }
+              }
+
+              result = JSON.stringify({
+                found: topResults.length,
+                total_available: searchResults.length,
+                tools: topResults.map(t => ({
+                  name: t.name,
+                  description: t.description,
+                })),
+                hint: topResults.length > 0
+                  ? 'These tools are now available for you to use. Call them directly.'
+                  : 'No tools found. Try a different search query or platform.',
+              });
+              logger.info({ platform, category, query, found: topResults.length }, 'tool_search executed');
+            } else {
+              result = await executeTool(
+                block.name,
+                finalParams,
+                context
+              );
+            }
 
             if (announceTimer) {
               clearTimeout(announceTimer);
@@ -17384,11 +17513,12 @@ export async function createAgentManager(
         }
 
         try {
+          const activeTools = getActiveTools();
           response = await createMessage({
             model: modelId,
             max_tokens: 1024,
             system: finalSystemPrompt,
-            tools: tools as Anthropic.Tool[],
+            tools: activeTools as Anthropic.Tool[],
             messages,
           });
         } catch (err: unknown) {
