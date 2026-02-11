@@ -17125,15 +17125,20 @@ export async function createAgentManager(
             return;
           }
 
+          // Capture text snapshot BEFORE the async flush to avoid race condition:
+          // pendingText may change while the API call is in flight, causing
+          // lastSentText to be set to a value that was never actually sent.
+          const textSnapshot = pendingText;
+
           // Start the flush and track the promise
           flushPromise = (async () => {
             try {
               if (!streamedMessageId) {
-                logger.info({ platform: processedMessage.platform, textLength: pendingText.length }, 'Streaming: sending initial message');
+                logger.info({ platform: processedMessage.platform, textLength: textSnapshot.length }, 'Streaming: sending initial message');
                 const sentId = await sendMessage({
                   platform: processedMessage.platform,
                   chatId: processedMessage.chatId,
-                  text: pendingText,
+                  text: textSnapshot,
                   parseMode: 'Markdown',
                   thread: processedMessage.thread,
                 });
@@ -17145,18 +17150,18 @@ export async function createAgentManager(
                 streamedMessageId = sentId;
                 streamedResponseSent = true;
               } else if (editMessage) {
-                logger.info({ platform: processedMessage.platform, messageId: streamedMessageId, textLength: pendingText.length }, 'Streaming: editing message');
+                logger.info({ platform: processedMessage.platform, messageId: streamedMessageId, textLength: textSnapshot.length }, 'Streaming: editing message');
                 await editMessage({
                   platform: processedMessage.platform,
                   chatId: processedMessage.chatId,
                   messageId: streamedMessageId,
-                  text: pendingText,
+                  text: textSnapshot,
                   parseMode: 'Markdown',
                   thread: processedMessage.thread,
                 });
                 logger.info({ platform: processedMessage.platform, messageId: streamedMessageId }, 'Streaming: message edited successfully');
               }
-              lastSentText = pendingText;
+              lastSentText = textSnapshot;
               lastUpdateAt = Date.now();
             } catch (error) {
               logger.warn({ error, platform: processedMessage.platform, messageId: streamedMessageId }, 'Streaming response update failed');
