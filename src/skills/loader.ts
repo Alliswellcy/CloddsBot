@@ -618,7 +618,7 @@ export function createSkillManager(workspacePath?: string, config?: SkillManager
         trade: ['execution'], order: ['execution'],
         long: ['futures'], short: ['futures'],
         // Strategy
-        arb: ['arbitrage'], arbitrage: ['arbitrage'],
+        arb: ['arbitrage', 'opportunity'], arbitrage: ['arbitrage', 'opportunity'],
         perps: ['futures'], perpetuals: ['futures'], leverage: ['futures'],
         copy: ['copy'], mirror: ['copy'],
         snipe: ['pumpfun', 'pump'], pump: ['pumpfun', 'pump'],
@@ -676,13 +676,20 @@ export function createSkillManager(workspacePath?: string, config?: SkillManager
         'help', 'info', 'view', 'update', 'delete', 'create', 'add', 'remove',
         'search', 'find', 'open', 'close', 'run', 'cancel', 'new', 'true', 'false',
         'config', 'pause', 'resume',
+        // Trading verbs too generic as subcommand names (every exchange has buy/sell)
+        'buy', 'sell', 'send', 'deposit', 'withdraw', 'balance', 'transfer',
+        // Prepositions & connectors
+        'across', 'between', 'about', 'over', 'under', 'after', 'before',
+        // Prediction market terms too generic
+        'yes', 'prediction',
       ]);
 
       // =====================================================================
       // EXPAND MESSAGE — resolve aliases to get expanded keyword set
       // =====================================================================
       const msgWords = msg.split(/\W+/).filter(w => w.length >= 2);
-      const expandedKeywords = new Set(msgWords);
+      const originalWords = new Set(msgWords); // Unaliased — for subcommand matching
+      const expandedKeywords = new Set(msgWords); // Aliased — for name/description matching
       for (const word of msgWords) {
         const aliases = ALIASES[word];
         if (aliases) {
@@ -712,12 +719,13 @@ export function createSkillManager(workspacePath?: string, config?: SkillManager
           if (expandedKeywords.has(w)) score += 1;
         }
 
-        // Match subcommand names — ONLY whole-word match, skip generic verbs
-        // that appear in many skills (check, list, show, get, set, etc.)
+        // Match subcommand names — use ORIGINAL words only (not aliases)
+        // to prevent alias expansion like pnl→"positions" from matching
+        // the "positions" subcommand in every exchange skill
         if (skill.subcommands) {
           for (const sub of skill.subcommands) {
             const subName = sub.name.toLowerCase();
-            if (subName.length >= 3 && !STOP_WORDS.has(subName) && expandedKeywords.has(subName)) score += 4;
+            if (subName.length >= 3 && !STOP_WORDS.has(subName) && originalWords.has(subName)) score += 4;
           }
         }
 
