@@ -19,6 +19,34 @@ import type { CommandRegistry } from '../../commands/registry';
 import { RateLimiter } from '../../security';
 import { sleep } from '../../infra/retry';
 
+const TELEGRAM_MAX_LENGTH = 4096;
+
+/** Split text into chunks that fit Telegram's message limit, breaking at newlines when possible */
+function splitMessage(text: string, maxLen = TELEGRAM_MAX_LENGTH): string[] {
+  if (text.length <= maxLen) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      chunks.push(remaining);
+      break;
+    }
+    // Try to break at last newline within limit
+    let splitAt = remaining.lastIndexOf('\n', maxLen);
+    if (splitAt <= 0) {
+      // Fallback: break at last space
+      splitAt = remaining.lastIndexOf(' ', maxLen);
+    }
+    if (splitAt <= 0) {
+      // Hard cut
+      splitAt = maxLen;
+    }
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).replace(/^\n/, '');
+  }
+  return chunks;
+}
+
 export async function createTelegramChannel(
   config: NonNullable<Config['channels']['telegram']>,
   callbacks: ChannelCallbacks,
@@ -737,8 +765,18 @@ export async function createTelegramChannel(
         return null;
       }
 
-      const sent = await callTelegramApi(chatId, 'sendMessage', () => bot.api.sendMessage(chatId, message.text, options));
-      return sent.message_id?.toString() || null;
+      const chunks = splitMessage(message.text);
+      if (chunks.length === 1) {
+        const sent = await callTelegramApi(chatId, 'sendMessage', () => bot.api.sendMessage(chatId, message.text, options));
+        return sent.message_id?.toString() || null;
+      }
+      // Send multiple chunks, return the first message ID (for streaming edit tracking)
+      let firstId: string | null = null;
+      for (const chunk of chunks) {
+        const sent = await callTelegramApi(chatId, 'sendMessage', () => bot.api.sendMessage(chatId, chunk, options));
+        if (!firstId) firstId = sent.message_id?.toString() || null;
+      }
+      return firstId;
     },
 
     async editMessage(message: OutgoingMessage & { messageId: string }) {
@@ -748,15 +786,30 @@ export async function createTelegramChannel(
         logger.warn({ chatId: message.chatId, messageId: message.messageId }, 'Invalid Telegram edit target');
         return;
       }
+      const parseMode = message.parseMode === 'HTML'
+        ? 'HTML' as const
+        : message.parseMode === 'MarkdownV2'
+          ? 'MarkdownV2' as const
+          : 'Markdown' as const;
+
+      // If text fits in one message, edit in place
+      if (message.text.length <= TELEGRAM_MAX_LENGTH) {
+        await callTelegramApi(chatId, 'editMessageText', () =>
+          bot.api.editMessageText(chatId, messageId, message.text, { parse_mode: parseMode })
+        );
+        return;
+      }
+
+      // Text exceeds limit: edit original with first chunk, send rest as new messages
+      const chunks = splitMessage(message.text);
       await callTelegramApi(chatId, 'editMessageText', () =>
-        bot.api.editMessageText(chatId, messageId, message.text, {
-          parse_mode: message.parseMode === 'HTML'
-            ? 'HTML'
-            : message.parseMode === 'MarkdownV2'
-              ? 'MarkdownV2'
-              : 'Markdown',
-        })
+        bot.api.editMessageText(chatId, messageId, chunks[0], { parse_mode: parseMode })
       );
+      for (let i = 1; i < chunks.length; i++) {
+        await callTelegramApi(chatId, 'sendMessage', () =>
+          bot.api.sendMessage(chatId, chunks[i], { parse_mode: parseMode })
+        );
+      }
     },
 
     /**
