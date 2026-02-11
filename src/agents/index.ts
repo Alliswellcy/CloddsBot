@@ -17530,7 +17530,7 @@ export async function createAgentManager(
         const activeTools = getActiveTools();
         response = await createMessage({
           model: modelId,
-          max_tokens: 1024,
+          max_tokens: 4096,
           system: finalSystemPrompt,
           tools: activeTools as Anthropic.Tool[],
           messages,
@@ -17741,7 +17741,7 @@ export async function createAgentManager(
           const activeTools = getActiveTools();
           response = await createMessage({
             model: modelId,
-            max_tokens: 1024,
+            max_tokens: 4096,
             system: finalSystemPrompt,
             tools: activeTools as Anthropic.Tool[],
             messages,
