@@ -101,6 +101,21 @@ export class SessionManager extends EventEmitter {
     this.localParticipantId = this.generateId();
     this.ensureStorageDir();
     this.loadSessions();
+
+    // Periodic cleanup of expired sessions (every 30 minutes)
+    setInterval(() => {
+      const now = Date.now();
+      for (const [id, session] of this.sessions) {
+        const expiresAt = session.expiresAt ? new Date(session.expiresAt).getTime() : 0;
+        const updatedAt = session.updatedAt ? new Date(session.updatedAt).getTime() : 0;
+        // Remove sessions expired > 7 days OR inactive > 30 days
+        if ((expiresAt > 0 && now - expiresAt > 7 * 24 * 60 * 60 * 1000) ||
+            (updatedAt > 0 && now - updatedAt > 30 * 24 * 60 * 60 * 1000)) {
+          this.sessions.delete(id);
+          this.messages.delete(id);
+        }
+      }
+    }, 30 * 60 * 1000).unref();
   }
 
   private ensureStorageDir(): void {

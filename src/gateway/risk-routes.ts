@@ -100,11 +100,11 @@ export function createRiskRouter(deps: RiskRouterDeps): Router {
   router.post('/record-pnl', (req: Request, res: Response) => {
     try {
       const { pnlUsd, pnlPct, positionId, timestamp } = req.body as Record<string, any>;
-      if (pnlUsd === undefined || typeof pnlUsd !== 'number') {
+      if (pnlUsd === undefined || !Number.isFinite(pnlUsd)) {
         res.status(400).json({ ok: false, error: 'Required: pnlUsd (number)' });
         return;
       }
-      if (pnlPct === undefined || typeof pnlPct !== 'number') {
+      if (pnlPct === undefined || !Number.isFinite(pnlPct)) {
         res.status(400).json({ ok: false, error: 'Required: pnlPct (number)' });
         return;
       }

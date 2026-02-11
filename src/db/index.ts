@@ -4,7 +4,7 @@
 
 import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
 import { join } from 'path';
-import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { logger } from '../utils/logger';
 import { resolveStateDir } from '../utils/config';
 import type {
@@ -1948,7 +1948,9 @@ export async function initDatabase(): Promise<Database> {
     if (!sqlJsDb) return;
     const data = sqlJsDb.export();
     const buffer = Buffer.from(data);
-    writeFileSync(DB_FILE, buffer);
+    const tmpPath = DB_FILE + '.tmp';
+    writeFileSync(tmpPath, buffer);
+    renameSync(tmpPath, DB_FILE);
   }
 
   function getBackupConfig(): { enabled: boolean; intervalMs: number; maxFiles: number } {

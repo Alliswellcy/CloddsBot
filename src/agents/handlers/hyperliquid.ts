@@ -63,7 +63,10 @@ async function positionsHandler(
   try {
     const state = await hyperliquid.getUserState(wallet);
     const positions = state.assetPositions
-      .filter(p => parseFloat(p.position.szi) !== 0)
+      .filter(p => {
+        const size = parseFloat(p.position.szi);
+        return Number.isFinite(size) && size !== 0;
+      })
       .map(p => ({
         coin: p.position.coin,
         size: parseFloat(p.position.szi),
@@ -106,7 +109,7 @@ async function priceHandler(
   try {
     const mids = await hyperliquid.getAllMids();
     const price = mids[coin];
-    if (!price) {
+    if (price == null) {
       return JSON.stringify({ error: `No price for ${coin}` });
     }
     return JSON.stringify({ coin, price: parseFloat(price) });

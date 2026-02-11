@@ -225,7 +225,14 @@ async function connectCDP(port: number, onDisconnect?: (reason: string) => void)
         send(method, params = {}) {
           return new Promise((res, rej) => {
             const id = ++messageId;
-            pending.set(id, { resolve: res, reject: rej });
+            const timeout = setTimeout(() => {
+              pending.delete(id);
+              rej(new Error(`CDP timeout: ${method} (30s)`));
+            }, 30000);
+            pending.set(id, {
+              resolve: (v) => { clearTimeout(timeout); res(v); },
+              reject: (e) => { clearTimeout(timeout); rej(e); },
+            });
             ws.send(JSON.stringify({ id, method, params }));
           });
         },

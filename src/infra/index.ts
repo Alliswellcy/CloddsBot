@@ -289,39 +289,43 @@ export class DockerManager {
     const interval = config.interval ?? DEFAULT_HEALTH_INTERVAL;
 
     const checker = setInterval(async () => {
-      const status = this.statuses.get(name);
-      if (!status) return;
+      try {
+        const status = this.statuses.get(name);
+        if (!status) return;
 
-      let healthy = false;
+        let healthy = false;
 
-      if (config.http) {
-        healthy = await checkHttpHealth(
-          config.http.url,
-          config.http.expectedStatus,
-          config.timeout ?? DEFAULT_HEALTH_TIMEOUT
-        );
-      } else if (config.tcp) {
-        healthy = await checkTcpHealth(
-          config.tcp.host,
-          config.tcp.port,
-          config.timeout ?? DEFAULT_HEALTH_TIMEOUT
-        );
-      } else if (config.command) {
-        try {
-          await this.exec(name, config.command);
-          healthy = true;
-        } catch {
-          healthy = false;
+        if (config.http) {
+          healthy = await checkHttpHealth(
+            config.http.url,
+            config.http.expectedStatus,
+            config.timeout ?? DEFAULT_HEALTH_TIMEOUT
+          );
+        } else if (config.tcp) {
+          healthy = await checkTcpHealth(
+            config.tcp.host,
+            config.tcp.port,
+            config.timeout ?? DEFAULT_HEALTH_TIMEOUT
+          );
+        } else if (config.command) {
+          try {
+            await this.exec(name, config.command);
+            healthy = true;
+          } catch {
+            healthy = false;
+          }
         }
-      }
 
-      const previousHealth = status.health;
-      status.health = healthy ? 'healthy' : 'unhealthy';
-      status.lastCheck = new Date();
+        const previousHealth = status.health;
+        status.health = healthy ? 'healthy' : 'unhealthy';
+        status.lastCheck = new Date();
 
-      if (previousHealth !== status.health) {
-        this.events.emit('healthChange', { name, health: status.health });
-        logger.info({ name, health: status.health }, 'Health status changed');
+        if (previousHealth !== status.health) {
+          this.events.emit('healthChange', { name, health: status.health });
+          logger.info({ name, health: status.health }, 'Health status changed');
+        }
+      } catch (error) {
+        logger.error({ error, name }, 'Health check failed');
       }
     }, interval);
 

@@ -1048,8 +1048,8 @@ class BinanceFuturesClient {
 
   async modifyOrder(symbol: string, orderId: string, quantity?: number, price?: number): Promise<FuturesOrder> {
     const params: Record<string, string | number> = { symbol, orderId };
-    if (quantity) params.quantity = quantity;
-    if (price) params.price = price;
+    if (quantity != null) params.quantity = quantity;
+    if (price != null) params.price = price;
 
     const result = await this.request('PUT', '/fapi/v1/order', params, true) as {
       orderId: number;
@@ -2188,8 +2188,8 @@ class BybitFuturesClient {
 
   async amendOrder(symbol: string, orderId: string, qty?: number, price?: number): Promise<FuturesOrder> {
     const params: Record<string, string | number> = { category: 'linear', symbol, orderId };
-    if (qty) params.qty = String(qty);
-    if (price) params.price = String(price);
+    if (qty != null) params.qty = String(qty);
+    if (price != null) params.price = String(price);
 
     const result = await this.request('POST', '/v5/order/amend', params) as { orderId: string };
 
@@ -2199,7 +2199,7 @@ class BybitFuturesClient {
       symbol,
       side: 'BUY',
       type: 'LIMIT',
-      size: qty || 0,
+      size: qty ?? 0,
       price,
       leverage: 1,
       reduceOnly: false,

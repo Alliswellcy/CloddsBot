@@ -263,6 +263,7 @@ export async function createHedgehogFeed(config: HedgehogFeedConfig = {}): Promi
     if (ws || !enableWebSocket) return;
 
     const fullWsUrl = apiKey ? `${wsUrl}?apiKey=${apiKey}` : wsUrl;
+    let lastPong = Date.now();
 
     try {
       ws = new WebSocket(fullWsUrl);
@@ -270,11 +271,18 @@ export async function createHedgehogFeed(config: HedgehogFeedConfig = {}): Promi
       ws.on('open', () => {
         wsConnected = true;
         wsReconnectAttempt = 0;
+        lastPong = Date.now();
         logger.info('Hedgehog: WebSocket connected');
 
         // Start heartbeat
         heartbeatInterval = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
+            // Check if last pong was received within 2x heartbeat interval
+            if (Date.now() - lastPong > 60000) {
+              logger.warn('Hedgehog: No heartbeat response, reconnecting');
+              ws.close();
+              return;
+            }
             ws.send(JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }));
           }
         }, 30000);
@@ -288,6 +296,10 @@ export async function createHedgehogFeed(config: HedgehogFeedConfig = {}): Promi
       ws.on('message', (data) => {
         try {
           const message = JSON.parse(data.toString()) as HedgehogWsMessage;
+          // Update lastPong on heartbeat messages (heartbeat is bidirectional)
+          if (message.type === 'heartbeat') {
+            lastPong = Date.now();
+          }
           handleWsMessage(message);
         } catch (error) {
           logger.warn({ error }, 'Hedgehog: Failed to parse WebSocket message');

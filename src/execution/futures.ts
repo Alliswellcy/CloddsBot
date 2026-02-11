@@ -759,16 +759,25 @@ async function placeMexcFuturesOrder(
     const openType = mexcMarginPreference.get(request.symbol) === 'cross' ? 2 : 1;
     let result: mexc.OrderResult | null;
 
-    if (request.reduceOnly || request.closePosition) {
+    if (request.reduceOnly && request.orderType === 'LIMIT' && request.price) {
+      // Reduce-only limit order: use close sides (4=close long, 2=close short)
+      const side = request.side === 'long' ? 4 : 2;
+      result = await mexc.placeLimitOrder(
+        mexcConfig,
+        request.symbol,
+        side,
+        request.size,
+        request.price,
+        { leverage: request.leverage, openType }
+      );
+    } else if (request.reduceOnly || request.closePosition) {
       result = await mexc.closePosition(mexcConfig, request.symbol);
       if (!result) {
         return { success: true }; // No position to close
       }
     } else if (request.orderType === 'LIMIT' && request.price) {
-      // Limit order
-      const side = request.side === 'long'
-        ? (request.reduceOnly ? 4 : 1)  // 1=open long, 4=close short
-        : (request.reduceOnly ? 2 : 3); // 3=open short, 2=close long
+      // Open position limit order: use open sides (1=open long, 3=open short)
+      const side = request.side === 'long' ? 1 : 3;
       result = await mexc.placeLimitOrder(
         mexcConfig,
         request.symbol,

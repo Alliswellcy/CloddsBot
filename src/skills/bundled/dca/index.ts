@@ -157,11 +157,13 @@ async function createPumpExecutor(mint: string, slippageBps: number, pool: strin
 
   const adapter = {
     buyLimit: async (req: any): Promise<OrderResult> => {
+      // DCA engine converts USD/SOL budget to token count (shares = budget / price),
+      // so req.size is in tokens. Use denominatedInSol: false for token-denominated buys.
       const result = await pumpapi.executePumpFunTrade(connection, keypair, {
         action: 'buy',
         mint,
         amount: req.size,
-        denominatedInSol: true,
+        denominatedInSol: false,
         slippageBps,
         pool,
       });

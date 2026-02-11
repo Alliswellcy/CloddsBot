@@ -133,6 +133,10 @@ export type CronEvent =
 
 /** Parse simple cron expression to next run time */
 function getNextCronTime(expr: string, _tz?: string): number {
+  if (_tz && _tz !== Intl.DateTimeFormat().resolvedOptions().timeZone) {
+    logger.warn({ tz: _tz, serverTz: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      '[cron] Timezone parameter not supported; using server timezone');
+  }
   // Simple cron parser - supports: minute hour dayOfMonth month dayOfWeek
   // Format: "0 9 * * *" = 9 AM daily
   const parts = expr.trim().split(/\s+/);

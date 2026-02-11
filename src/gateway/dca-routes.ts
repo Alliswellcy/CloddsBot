@@ -7,6 +7,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../utils/logger.js';
+import type { ExecutionService } from '../execution/index.js';
 import {
   saveDCAOrder,
   getDCAOrder,
@@ -15,6 +16,14 @@ import {
   deleteDCAOrder,
   type PersistedDCAOrder,
 } from '../execution/dca-persistence.js';
+import { createDCAOrder, type DCAOrder } from '../execution/dca.js';
+
+export interface DCARouterDeps {
+  execution?: ExecutionService;
+}
+
+/** Track active in-memory DCA order instances for cancel/progress */
+const activeDCAOrders = new Map<string, DCAOrder>();
 
 /** Enrich a persisted order with computed fields for API responses */
 function enrichOrder(order: PersistedDCAOrder) {
@@ -28,8 +37,9 @@ function enrichOrder(order: PersistedDCAOrder) {
   };
 }
 
-export function createDCARouter(): Router {
+export function createDCARouter(deps?: DCARouterDeps): Router {
   const router = Router();
+  const execution = deps?.execution;
 
   // ── GET /api/dca/orders ─────────────────────────────────────────────────
   // List active DCA orders (optionally filtered by userId query param)
@@ -109,6 +119,41 @@ export function createDCARouter(): Router {
       };
 
       saveDCAOrder(order);
+
+      // Start the DCA execution engine if an execution service is available
+      if (execution) {
+        try {
+          const dcaOrder = createDCAOrder(
+            execution,
+            {
+              platform: platform as any,
+              marketId: marketId || '',
+              tokenId: tokenId ?? undefined,
+              outcome: outcome ?? undefined,
+              side: (side as 'buy' | 'sell') || 'buy',
+              price: price ?? 0,
+              negRisk: negRisk ?? undefined,
+            },
+            {
+              totalAmount,
+              amountPerCycle,
+              cycleIntervalMs: resolvedIntervalMs,
+              maxPrice: maxPrice ?? undefined,
+              maxCycles: maxCycles ?? undefined,
+            },
+            { userId: body.userId || 'default', orderId: order.id },
+            body.extraConfig ?? undefined,
+          );
+
+          activeDCAOrders.set(dcaOrder.id, dcaOrder);
+          dcaOrder.on('completed', () => activeDCAOrders.delete(dcaOrder.id));
+          dcaOrder.on('cancelled', () => activeDCAOrders.delete(dcaOrder.id));
+          dcaOrder.start();
+        } catch (startErr) {
+          logger.warn({ err: startErr }, 'DCA API: Order saved but execution engine failed to start');
+        }
+      }
+
       res.json({ ok: true, data: enrichOrder(order) });
     } catch (err) {
       logger.warn({ err }, 'DCA API: Failed to create order');

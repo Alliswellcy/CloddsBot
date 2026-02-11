@@ -69,6 +69,7 @@ export function createSignalRouter(
   let running = false;
   let stopped = false;
   let signalHandler: ((signal: TradingSignal) => void) | null = null;
+  let currentSignalBus: SignalBus | null = null;
 
   // Serial queue
   const signalQueue: TradingSignal[] = [];
@@ -440,6 +441,7 @@ export function createSignalRouter(
     if (running) return;
     stopped = false;
     running = true;
+    currentSignalBus = signalBus;
 
     // Subscribe to signal bus
     signalHandler = (signal: TradingSignal) => enqueueSignal(signal);
@@ -457,7 +459,13 @@ export function createSignalRouter(
   function stop(): void {
     stopped = true;
     running = false;
+
+    // Unsubscribe from signal bus before nulling the handler
+    if (signalHandler && currentSignalBus) {
+      currentSignalBus.removeListener('signal', signalHandler);
+    }
     signalHandler = null;
+    currentSignalBus = null;
     signalQueue.length = 0;
 
     if (dailyResetTimer) {

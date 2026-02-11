@@ -210,8 +210,8 @@ export function createSafetyManager(db: Database, config: Partial<SafetyConfig> 
 
       // Check if we need to reset daily counters
       const lastReset = row.last_reset ? new Date(row.last_reset) : null;
-      const today = new Date().toDateString();
-      if (!lastReset || lastReset.toDateString() !== today) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (!lastReset || lastReset.toISOString().slice(0, 10) !== today) {
         state.dailyPnL = 0;
         state.dailyTrades = 0;
       }
@@ -363,7 +363,7 @@ export function createSafetyManager(db: Database, config: Partial<SafetyConfig> 
 
       // Check position concentration
       const tradeValue = trade.size * trade.price;
-      const concentrationPct = (tradeValue / state.currentValue) * 100;
+      const concentrationPct = state.currentValue > 0 ? (tradeValue / state.currentValue) * 100 : 100;
 
       if (concentrationPct > cfg.maxConcentrationPct) {
         return {
@@ -543,20 +543,18 @@ export function createSafetyManager(db: Database, config: Partial<SafetyConfig> 
     },
   } as Partial<SafetyManager>);
 
-  // Schedule daily reset at midnight
+  // Schedule daily reset at midnight UTC
   const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
   const msUntilMidnight = tomorrow.getTime() - now.getTime();
 
   let dailyResetTimeout: ReturnType<typeof setTimeout> | null = null;
   let dailyResetInterval: ReturnType<typeof setInterval> | null = null;
 
   dailyResetTimeout = setTimeout(() => {
-    emitter.resetDaily();
-    // Then reset every 24 hours
+    // Store interval BEFORE calling resetDaily to prevent leak if destroy() races
     dailyResetInterval = setInterval(() => emitter.resetDaily(), 24 * 60 * 60 * 1000);
+    emitter.resetDaily();
   }, msUntilMidnight);
 
   logger.info({ config: cfg }, 'Safety manager initialized');

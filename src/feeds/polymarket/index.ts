@@ -377,7 +377,7 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
   // Fetch market data from REST API
   async function fetchMarket(marketId: string): Promise<Market | null> {
     try {
-      const res = await fetch(`${GAMMA_URL}/markets/${marketId}`);
+      const res = await fetch(`${GAMMA_URL}/markets/${marketId}`, { signal: AbortSignal.timeout(15000) });
       if (!res.ok) return null;
 
       const data = (await res.json()) as PolymarketMarket;
@@ -394,6 +394,7 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token_id: tokenId }),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) {
         logger.warn({ tokenId, status: res.status }, 'Polymarket orderbook fetch failed');
@@ -442,7 +443,8 @@ export async function createPolymarketFeed(): Promise<PolymarketFeed> {
   async function searchMarketsREST(query: string): Promise<Market[]> {
     try {
       const res = await fetch(
-        `${GAMMA_URL}/markets?_limit=20&active=true&closed=false&_q=${encodeURIComponent(query)}`
+        `${GAMMA_URL}/markets?_limit=20&active=true&closed=false&_q=${encodeURIComponent(query)}`,
+        { signal: AbortSignal.timeout(15000) }
       );
       if (!res.ok) return [];
 

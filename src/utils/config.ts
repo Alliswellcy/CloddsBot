@@ -351,8 +351,10 @@ function substituteEnvVars(obj: unknown): unknown {
  * Deep merge two objects
  */
 function deepMerge<T>(target: T, source: Partial<T>): T {
+  const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
   const result = { ...target };
   for (const key in source) {
+    if (DANGEROUS_KEYS.has(key)) continue;
     const sourceValue = source[key];
     const targetValue = (target as Record<string, unknown>)[key];
 

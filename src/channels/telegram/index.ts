@@ -303,8 +303,9 @@ export async function createTelegramChannel(
 
   // Handle incoming messages (text and media)
   bot.on('message', async (ctx: Context) => {
-    const msg = ctx.message;
-    if (!msg) return;
+    try {
+      const msg = ctx.message;
+      if (!msg) return;
 
     // Get text (may be from caption for media messages)
     const text = msg.text || msg.caption || '';
@@ -451,15 +452,19 @@ export async function createTelegramChannel(
     );
 
     await callbacks.onMessage(incomingMessage);
+    } catch (error) {
+      logger.error({ error }, 'Telegram message handler failed');
+    }
   });
 
   // Handle callback queries (inline buttons)
   bot.on('callback_query:data', async (ctx) => {
-    const data = ctx.callbackQuery.data;
-    const userId = ctx.from?.id?.toString() || '';
-    logger.info({ userId, data }, 'Callback query received');
+    try {
+      const data = ctx.callbackQuery.data;
+      const userId = ctx.from?.id?.toString() || '';
+      logger.info({ userId, data }, 'Callback query received');
 
-    await ctx.answerCallbackQuery();
+      await ctx.answerCallbackQuery();
 
     // Handle different callback types
     if (data.startsWith('alert_delete:')) {
@@ -486,6 +491,9 @@ export async function createTelegramChannel(
         timestamp: new Date(),
       };
       await callbacks.onMessage(incomingMessage);
+    }
+    } catch (error) {
+      logger.error({ error }, 'Telegram callback query handler failed');
     }
   });
 

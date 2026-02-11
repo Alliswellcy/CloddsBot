@@ -773,7 +773,11 @@ export function createSubagentManager(): SubagentManager {
 
       // Set up completion handling
       run.events.on('complete', async () => {
-        await announceCompletion(state);
+        try {
+          await announceCompletion(state);
+        } catch (error) {
+          logger.error({ error, id: state.config.id }, 'Failed to announce completion');
+        }
       });
 
       logger.info({ id: config.id, task: config.task }, 'Started subagent run');

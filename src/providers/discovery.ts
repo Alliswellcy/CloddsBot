@@ -13,7 +13,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger';
-import {
+import type {
   Provider,
   ProviderConfig,
   Message,

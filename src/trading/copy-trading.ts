@@ -211,6 +211,12 @@ export function createCopyTradingService(
   function getOrCreateWhalePerformance(address: string): WhalePerformance {
     let perf = whalePerformance.get(address);
     if (!perf) {
+      // Cap whale performance tracking at 500 entries
+      if (whalePerformance.size >= 500) {
+        // Evict oldest entry (first inserted)
+        const firstKey = whalePerformance.keys().next().value;
+        if (firstKey) whalePerformance.delete(firstKey);
+      }
       perf = {
         address,
         overallWinRate: 0,

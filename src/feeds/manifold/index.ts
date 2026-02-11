@@ -160,6 +160,15 @@ export async function createManifoldFeed(): Promise<ManifoldFeed> {
   }
 
   function setupWebSocket(): void {
+    // Prevent overlapping connections
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    // Close stale socket if exists
+    if (ws) {
+      try { ws.close(); } catch { /* ignore */ }
+      ws = null;
+    }
     ws = new WebSocket(WS_URL);
 
     ws.on('open', () => {

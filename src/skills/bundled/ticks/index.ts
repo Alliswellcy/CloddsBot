@@ -178,7 +178,7 @@ Example: /ticks ohlc polymarket 0x1234 --outcome 0x5678 --interval 1h`;
     const endpoint = `/api/ohlc/${platform}/${marketId}?outcomeId=${encodeURIComponent(outcomeId)}&interval=${interval}&startTime=${startTime}&endTime=${now}`;
     const data = await fetchApi<OHLCResponse>(endpoint);
 
-    if (data.candles.length === 0) {
+    if (!data.candles || data.candles.length === 0) {
       return `No OHLC data found for ${platform}/${marketId} in the last 7 days.`;
     }
 

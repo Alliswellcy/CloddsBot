@@ -298,6 +298,7 @@ interface PolymarketBookResponse {
 }
 
 interface PolymarketMarketResponse {
+  condition_id?: string;
   tokens?: Array<{ token_id: string; outcome: string }>;
   question?: string;
 }
@@ -9526,10 +9527,11 @@ async function executeTool(
           }
 
           // Buy YES
-          const yesResult = await execSvc.buyLimit({ platform: 'polymarket', marketId: yesToken.token_id, tokenId: yesToken.token_id, price: yesAsk, size });
+          const arbMarketId = marketData.condition_id || yesToken.token_id;
+          const yesResult = await execSvc.buyLimit({ platform: 'polymarket', marketId: arbMarketId, tokenId: yesToken.token_id, price: yesAsk, size });
 
           // Buy NO
-          const noResult = await execSvc.buyLimit({ platform: 'polymarket', marketId: noToken.token_id, tokenId: noToken.token_id, price: noAsk, size });
+          const noResult = await execSvc.buyLimit({ platform: 'polymarket', marketId: arbMarketId, tokenId: noToken.token_id, price: noAsk, size });
 
           await context.credentials.markSuccess(userId, 'polymarket');
 
@@ -9840,7 +9842,7 @@ async function executeTool(
           try {
             const result = await execSvc.buyLimit({
               platform: 'polymarket',
-              marketId: tokenId,
+              marketId: (toolInput.condition_id as string) || tokenId,
               tokenId,
               price,
               size,
@@ -9881,6 +9883,16 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
         const size = toolInput.size as number;
         const price = (toolInput.price as number) || 0.01;
+        const notional = price * size;
+        const maxError = enforceMaxOrderSize(context, notional, 'polymarket_sell');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'polymarket',
+          outcomeId: tokenId,
+          notional,
+          label: 'polymarket_sell',
+        });
+        if (exposureError) return exposureError;
 
         // Use TypeScript execution service if available
         const execSvc = context.tradingContext?.executionService;
@@ -9888,7 +9900,7 @@ async function executeTool(
           try {
             const result = await execSvc.sellLimit({
               platform: 'polymarket',
-              marketId: tokenId,
+              marketId: (toolInput.condition_id as string) || tokenId,
               tokenId,
               price,
               size,
@@ -10142,6 +10154,15 @@ async function executeTool(
       case 'polymarket_market_sell': {
         const tokenId = toolInput.token_id as string;
         const size = toolInput.size as number;
+        const maxError = enforceMaxOrderSize(context, size, 'polymarket_market_sell');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'polymarket',
+          outcomeId: tokenId,
+          notional: size,
+          label: 'polymarket_market_sell',
+        });
+        if (exposureError) return exposureError;
 
         // Use TypeScript execution service if available
         const execSvc = context.tradingContext?.executionService;
@@ -10149,7 +10170,7 @@ async function executeTool(
           try {
             const result = await execSvc.marketSell({
               platform: 'polymarket',
-              marketId: tokenId,
+              marketId: (toolInput.condition_id as string) || tokenId,
               tokenId,
               size,
             });
@@ -10202,11 +10223,27 @@ async function executeTool(
         const execSvc = context.tradingContext?.executionService;
         if (execSvc) {
           try {
+            // Fetch current buy price to convert USD amount to shares.
+            // Polymarket size = number of shares, not USD.
+            let buyPrice = 0.99; // fallback: worst-case price
+            try {
+              const priceRes = await fetchPolymarketClob(context, `https://clob.polymarket.com/price?token_id=${tokenId}&side=buy`);
+              const priceData = await priceRes.json() as { price?: string | number };
+              const parsed = Number(priceData.price);
+              if (parsed > 0 && parsed <= 1) buyPrice = parsed;
+            } catch {
+              // Use fallback price if CLOB price fetch fails
+            }
+            const shares = Math.floor(amount / buyPrice);
+            if (shares <= 0) {
+              return JSON.stringify({ error: 'Market buy failed', details: `Amount $${amount} too small at price ${buyPrice}` });
+            }
+
             const result = await execSvc.marketBuy({
               platform: 'polymarket',
-              marketId: tokenId,
+              marketId: (toolInput.condition_id as string) || tokenId,
               tokenId,
-              size: amount,
+              size: shares,
             });
 
             if (result.success) {
@@ -10261,7 +10298,7 @@ async function executeTool(
           try {
             const result = await execSvc.makerBuy({
               platform: 'polymarket',
-              marketId: tokenId,
+              marketId: (toolInput.condition_id as string) || tokenId,
               tokenId,
               price,
               size,
@@ -10302,6 +10339,16 @@ async function executeTool(
         const tokenId = toolInput.token_id as string;
         const price = toolInput.price as number;
         const size = toolInput.size as number;
+        const notional = price * size;
+        const maxError = enforceMaxOrderSize(context, notional, 'polymarket_maker_sell');
+        if (maxError) return maxError;
+        const exposureError = enforceExposureLimits(context, userId, {
+          platform: 'polymarket',
+          outcomeId: tokenId,
+          notional,
+          label: 'polymarket_maker_sell',
+        });
+        if (exposureError) return exposureError;
 
         // Use TypeScript execution service if available
         const execSvc = context.tradingContext?.executionService;
@@ -10309,7 +10356,7 @@ async function executeTool(
           try {
             const result = await execSvc.makerSell({
               platform: 'polymarket',
-              marketId: tokenId,
+              marketId: (toolInput.condition_id as string) || tokenId,
               tokenId,
               price,
               size,
@@ -16709,8 +16756,20 @@ export async function createAgentManager(
 
   const client = new Anthropic({ apiKey });
   const skills = createSkillManager(config.agents.defaults.workspace);
-  const createCredentialsManager = await _loadCredentials();
-  const credentials = createCredentialsManager(db);
+  let credentials: CredentialsManager;
+  try {
+    const createCredentialsManager = await _loadCredentials();
+    credentials = createCredentialsManager(db);
+  } catch (err) {
+    logger.warn({ err }, '[agents] Failed to load credentials module — credential tools disabled');
+    credentials = {
+      get: () => null,
+      set: () => {},
+      delete: () => {},
+      list: () => [],
+      has: () => false,
+    } as unknown as CredentialsManager;
+  }
   const transcription = createTranscriptionTool(config.agents.defaults.workspace);
   const files = createFileTool(config.agents.defaults.workspace);
   const shellHistory = createShellHistoryTool();

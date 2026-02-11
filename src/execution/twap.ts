@@ -114,6 +114,7 @@ export function createTwapOrder(
   let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   let currentSliceOrderId: string | undefined;
   let cancelled = false;
+  let consecutiveFailures = 0;
 
   // Save to database on creation (unless resuming)
   if (!options?.orderId) {
@@ -221,6 +222,9 @@ export function createTwapOrder(
       }
 
       if (result.success) {
+        // Reset consecutive failures on success
+        consecutiveFailures = 0;
+
         // NaN guard: Number(undefined) => NaN, || 0 catches NaN and 0
         const sliceFilled = Number(result.filledSize) || 0;
         const slicePrice = Number(result.avgFillPrice) || 0;
@@ -280,8 +284,26 @@ export function createTwapOrder(
           'TWAP slice filled'
         );
       } else {
-        logger.warn({ error: result.error }, 'TWAP slice failed');
+        consecutiveFailures++;
+        logger.warn({ error: result.error, consecutiveFailures }, 'TWAP slice failed');
         emitter.emit('slice_failed', { sliceNumber: slicesCompleted + 1, error: result.error });
+
+        // Circuit breaker: stop execution after 5 consecutive failures
+        if (consecutiveFailures >= 5) {
+          logger.error(
+            { orderId, consecutiveFailures, error: result.error },
+            'TWAP paused: 5 consecutive failures'
+          );
+          status = 'failed';
+          cleanup();
+          try {
+            updateTwapProgress(orderId, { filledSize, totalCost, slicesCompleted, status: 'failed' });
+          } catch (err) {
+            logger.warn({ error: String(err) }, 'Failed to persist TWAP failure');
+          }
+          emitter.emit('failed', { reason: '5 consecutive failures', lastError: result.error });
+          return;
+        }
       }
 
       // Check if we're done
@@ -296,9 +318,27 @@ export function createTwapOrder(
         sliceTimer = setTimeout(executeSlice, interval);
       }
     } catch (error) {
+      consecutiveFailures++;
       const msg = error instanceof Error ? error.message : String(error);
-      logger.error({ error: msg }, 'TWAP slice execution error');
+      logger.error({ error: msg, consecutiveFailures }, 'TWAP slice execution error');
       emitter.emit('slice_failed', { sliceNumber: slicesCompleted + 1, error: msg });
+
+      // Circuit breaker: stop execution after 5 consecutive failures
+      if (consecutiveFailures >= 5) {
+        logger.error(
+          { orderId, consecutiveFailures, error: msg },
+          'TWAP paused: 5 consecutive failures'
+        );
+        status = 'failed';
+        cleanup();
+        try {
+          updateTwapProgress(orderId, { filledSize, totalCost, slicesCompleted, status: 'failed' });
+        } catch (err) {
+          logger.warn({ error: String(err) }, 'Failed to persist TWAP failure');
+        }
+        emitter.emit('failed', { reason: '5 consecutive failures', lastError: msg });
+        return;
+      }
 
       // Continue trying unless cancelled
       if (!cancelled && status === 'executing') {

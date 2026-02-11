@@ -179,8 +179,8 @@ export function extractFeatures(
   const price1hAgo = findPriceAt(priceHistory, Date.now() - 60 * 60 * 1000);
   const price24hAgo = findPriceAt(priceHistory, Date.now() - 24 * 60 * 60 * 1000);
 
-  const change1h = price1hAgo ? (current.price - price1hAgo) / price1hAgo : 0;
-  const change24h = price24hAgo ? (current.price - price24hAgo) / price24hAgo : 0;
+  const change1h = (price1hAgo && price1hAgo > 0) ? (current.price - price1hAgo) / price1hAgo : 0;
+  const change24h = (price24hAgo && price24hAgo > 0) ? (current.price - price24hAgo) / price24hAgo : 0;
 
   const volatility24h = calculateVolatility(prices.slice(-24));
   const rsi14 = calculateRSI(prices.slice(-15));
@@ -207,9 +207,13 @@ export function extractFeatures(
     orderbookFeatures.bidAskRatio = totalAskVol > 0 ? totalBidVol / totalAskVol : 1;
     orderbookFeatures.imbalanceScore = (totalBidVol - totalAskVol) / (totalBidVol + totalAskVol + 1);
 
-    const bestBid = orderbookSnapshot.bids[0]?.[0] || 0;
-    const bestAsk = orderbookSnapshot.asks[0]?.[0] || 1;
-    orderbookFeatures.spreadPct = (bestAsk - bestBid) / ((bestBid + bestAsk) / 2);
+    const bestBid = orderbookSnapshot.bids[0]?.[0] ?? 0;
+    const bestAsk = orderbookSnapshot.asks[0]?.[0] ?? 0;
+    if (bestBid > 0 && bestAsk > 0) {
+      orderbookFeatures.spreadPct = (bestAsk - bestBid) / ((bestBid + bestAsk) / 2);
+    } else {
+      orderbookFeatures.spreadPct = 0;
+    }
 
     // Depth within 10%
     const midPrice = (bestBid + bestAsk) / 2;
@@ -365,7 +369,7 @@ export function createMLSignalModel(config: ModelConfig): MLSignalModel {
 
   function calculateLevels(features: MarketFeatures, direction: 1 | -1): MLSignal['levels'] {
     const current = features.price.current;
-    const volatility = features.price.volatility24h || 0.02;
+    const volatility = features.price.volatility24h ?? 0.02;
 
     if (direction === 1) {
       return {
@@ -620,6 +624,7 @@ function calculateVolatility(prices: number[]): number {
   if (prices.length < 2) return 0;
   const returns = [];
   for (let i = 1; i < prices.length; i++) {
+    if (prices[i - 1] === 0) continue;
     returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
   }
   return standardDeviation(returns);
@@ -649,6 +654,7 @@ function calculateMomentum(prices: number[]): number {
   if (prices.length < 2) return 0;
   const first = prices[0];
   const last = prices[prices.length - 1];
+  if (first === 0) return 0;
   return (last - first) / first;
 }
 

@@ -216,7 +216,28 @@ export function createTradingOrchestrator(deps: OrchestratorDeps): TradingOrches
     getOrder: execution.getOrder.bind(execution),
     estimateFill: execution.estimateFill.bind(execution),
     estimateSlippage: execution.estimateSlippage.bind(execution),
-    placeOrdersBatch: execution.placeOrdersBatch.bind(execution),
+    placeOrdersBatch: async (orders) => {
+      for (const order of orders) {
+        const fullOrder = { ...order, orderType: 'GTC' as const } as OrderRequest;
+        const rejection = preTradeCheck(fullOrder, (order as any).side ?? 'buy');
+        if (rejection) return [reject(rejection)];
+      }
+      stats.ordersSubmitted += orders.length;
+      try {
+        const results = await execution.placeOrdersBatch(orders);
+        for (const r of results) {
+          if (r.success) {
+            stats.ordersExecuted++;
+          } else {
+            stats.ordersFailed++;
+          }
+        }
+        return results;
+      } catch (error) {
+        stats.ordersFailed += orders.length;
+        throw error;
+      }
+    },
     cancelOrdersBatch: execution.cancelOrdersBatch.bind(execution),
     connectFillsWebSocket: execution.connectFillsWebSocket.bind(execution),
     disconnectFillsWebSocket: execution.disconnectFillsWebSocket.bind(execution),

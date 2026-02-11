@@ -265,7 +265,7 @@ export function loadWalletsFromEnv(): SwarmWallet[] {
       const keypair = loadKeypairFromString(mainKey);
       wallets.push(createWallet('wallet_0', keypair));
     } catch (e) {
-      logger.error({ error: e }, 'Failed to load SOLANA_PRIVATE_KEY');
+      logger.error({ error: e instanceof Error ? e.message : 'Parse error' }, 'Failed to load SOLANA_PRIVATE_KEY');
     }
   }
 

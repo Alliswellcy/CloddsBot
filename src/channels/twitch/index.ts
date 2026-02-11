@@ -55,97 +55,105 @@ export async function createTwitchChannel(
 
   // Handle channel messages
   client.on('message', async (channel, tags, message, self) => {
-    if (self) return;
+    try {
+      if (self) return;
 
-    const username = tags.username || tags['display-name'] || 'anonymous';
-    const channelName = channel.replace('#', '');
+      const username = tags.username || tags['display-name'] || 'anonymous';
+      const channelName = channel.replace('#', '');
 
-    // Check mention requirement
-    if (config.requireMention !== false) {
-      const botMention = `@${config.username.toLowerCase()}`;
-      if (!message.toLowerCase().includes(botMention)) {
-        return;
+      // Check mention requirement
+      if (config.requireMention !== false) {
+        const botMention = `@${config.username.toLowerCase()}`;
+        if (!message.toLowerCase().includes(botMention)) {
+          return;
+        }
       }
+
+      const escapedUsername = config.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const cleanMessage = message
+        .replace(new RegExp(`@${escapedUsername}`, 'gi'), '')
+        .trim();
+
+      const incomingMessage: IncomingMessage = {
+        id: tags.id || `${Date.now()}`,
+        platform: 'twitch',
+        userId: tags['user-id'] || username,
+        chatId: channelName,
+        chatType: 'group',
+        text: cleanMessage,
+        timestamp: new Date(parseInt(tags['tmi-sent-ts'] || String(Date.now()), 10)),
+      };
+
+      logger.info({ username, channel: channelName }, 'Received Twitch message');
+      await callbacks.onMessage(incomingMessage);
+    } catch (error) {
+      logger.error({ error }, 'Twitch message handler failed');
     }
-
-    const escapedUsername = config.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const cleanMessage = message
-      .replace(new RegExp(`@${escapedUsername}`, 'gi'), '')
-      .trim();
-
-    const incomingMessage: IncomingMessage = {
-      id: tags.id || `${Date.now()}`,
-      platform: 'twitch',
-      userId: tags['user-id'] || username,
-      chatId: channelName,
-      chatType: 'group',
-      text: cleanMessage,
-      timestamp: new Date(parseInt(tags['tmi-sent-ts'] || String(Date.now()), 10)),
-    };
-
-    logger.info({ username, channel: channelName }, 'Received Twitch message');
-    await callbacks.onMessage(incomingMessage);
   });
 
   // Handle whispers (DMs)
   client.on('whisper', async (from, tags, message, self) => {
-    if (self) return;
+    try {
+      if (self) return;
 
-    const username = tags.username || from.replace('#', '');
+      const username = tags.username || from.replace('#', '');
 
-    // DM Policy enforcement
-    switch (config.dmPolicy) {
-      case 'allowlist':
-        if (!isUserAllowed(username)) {
-          logger.info({ username }, 'Ignoring Twitch whisper from non-allowlisted user');
-          return;
-        }
-        break;
-
-      case 'pairing':
-        if (!isUserAllowed(username)) {
-          const potentialCode = message.trim().toUpperCase();
-          if (/^[A-Z0-9]{8}$/.test(potentialCode) && pairing) {
-            const request = await pairing.validateCode(potentialCode);
-            if (request) {
-              client.whisper(username, 'Successfully paired! You can now chat with Clodds.');
-              logger.info({ username, code: potentialCode }, 'Twitch user paired');
-              return;
-            }
+      // DM Policy enforcement
+      switch (config.dmPolicy) {
+        case 'allowlist':
+          if (!isUserAllowed(username)) {
+            logger.info({ username }, 'Ignoring Twitch whisper from non-allowlisted user');
+            return;
           }
+          break;
 
-          if (pairing) {
-            const code = await pairing.createPairingRequest('twitch', username.toLowerCase());
-            if (code) {
-              client.whisper(
-                username,
-                `Pairing Required - Your code: ${code} - Run 'clodds pairing approve twitch ${code}' - Code expires in 1 hour.`
-              );
-              logger.info({ username, code }, 'Generated Twitch pairing code');
-            } else {
-              client.whisper(username, 'Pairing Required - Too many pending requests. Try again later.');
+        case 'pairing':
+          if (!isUserAllowed(username)) {
+            const potentialCode = message.trim().toUpperCase();
+            if (/^[A-Z0-9]{8}$/.test(potentialCode) && pairing) {
+              const request = await pairing.validateCode(potentialCode);
+              if (request) {
+                client.whisper(username, 'Successfully paired! You can now chat with Clodds.');
+                logger.info({ username, code: potentialCode }, 'Twitch user paired');
+                return;
+              }
             }
-          }
-          return;
-        }
-        break;
 
-      case 'disabled':
-        return;
+            if (pairing) {
+              const code = await pairing.createPairingRequest('twitch', username.toLowerCase());
+              if (code) {
+                client.whisper(
+                  username,
+                  `Pairing Required - Your code: ${code} - Run 'clodds pairing approve twitch ${code}' - Code expires in 1 hour.`
+                );
+                logger.info({ username, code }, 'Generated Twitch pairing code');
+              } else {
+                client.whisper(username, 'Pairing Required - Too many pending requests. Try again later.');
+              }
+            }
+            return;
+          }
+          break;
+
+        case 'disabled':
+          return;
+      }
+
+      const incomingMessage: IncomingMessage = {
+        id: tags.id || `${Date.now()}`,
+        platform: 'twitch',
+        userId: tags['user-id'] || username,
+        chatId: username, // Use username as chat ID for whispers
+        chatType: 'dm',
+        text: message,
+        timestamp: new Date(),
+      };
+
+      logger.info({ username }, 'Received Twitch whisper');
+      await callbacks.onMessage(incomingMessage);
+    } catch (error) {
+      logger.error({ error }, 'Twitch whisper handler failed');
     }
-
-    const incomingMessage: IncomingMessage = {
-      id: tags.id || `${Date.now()}`,
-      platform: 'twitch',
-      userId: tags['user-id'] || username,
-      chatId: username, // Use username as chat ID for whispers
-      chatType: 'dm',
-      text: message,
-      timestamp: new Date(),
-    };
-
-    logger.info({ username }, 'Received Twitch whisper');
-    await callbacks.onMessage(incomingMessage);
   });
 
   client.on('connected', (addr, port) => {

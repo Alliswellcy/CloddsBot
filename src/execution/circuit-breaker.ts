@@ -343,11 +343,10 @@ export function createCircuitBreaker(
       checkConditions();
     }, cfg.checkIntervalMs);
 
-    // Daily reset at midnight
+    // Daily reset at midnight UTC
     const now = new Date();
-    const midnight = new Date(now);
-    midnight.setHours(24, 0, 0, 0);
-    const msToMidnight = midnight.getTime() - now.getTime();
+    const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
+    const msToMidnight = tomorrow.getTime() - now.getTime();
 
     dailyResetTimeout = setTimeout(() => {
       dailyTrades = 0;

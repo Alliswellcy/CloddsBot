@@ -184,9 +184,9 @@ export function createTradingSystem(db: Database, config: TradingSystemConfig = 
         tokenId: signal.meta?.tokenId as string,
         outcome: signal.outcome,
         side: signal.type === 'buy' ? 'buy' : 'sell',
-        price: signal.price || 0.5,
-        size: (signal.size || signal.sizePct)
-          ? Math.floor((config.portfolioValue || 10000) * (signal.sizePct || 5) / 100 / (signal.price || 0.5))
+        price: signal.price ?? 0.5,
+        size: (signal.size ?? signal.sizePct)
+          ? Math.floor((config.portfolioValue ?? 10000) * (signal.sizePct ?? 5) / 100 / (signal.price || 0.5))
           : 100,
         orderType: signal.price ? 'GTC' : 'FOK',
       };
@@ -265,8 +265,9 @@ export function createTradingSystem(db: Database, config: TradingSystemConfig = 
           pos.shares += trade.filled;
           pos.totalCost += trade.cost;
         } else {
-          pos.shares -= trade.filled;
-          pos.totalCost -= trade.filled * pos.avgPrice;
+          const sharesToSell = Math.min(trade.filled, pos.shares);
+          pos.shares = Math.max(0, pos.shares - trade.filled);
+          pos.totalCost -= sharesToSell * pos.avgPrice;
         }
 
         if (pos.shares > 0) {
@@ -354,7 +355,7 @@ function wrapExecutionWithLogging(
           price: request.price || 0.5,
           size: request.size,
           filled: result.filledSize || 0,
-          cost: (request.price || 0.5) * request.size,
+          cost: (request.price ?? 0.5) * request.size,
           orderId: result.orderId,
           status: result.status === 'filled' ? 'filled'
             : result.status === 'open' ? 'pending'

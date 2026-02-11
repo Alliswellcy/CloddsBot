@@ -337,6 +337,8 @@ export function createCryptoWhaleTracker(
     logger.info('Solana whale tracking started');
   }
 
+  let birdeyeReconnectAttempts = 0;
+
   function connectSolanaWebSocket(apiKey: string): void {
     try {
       const ws = new WebSocket(BIRDEYE_WS, {
@@ -344,6 +346,7 @@ export function createCryptoWhaleTracker(
       });
 
       ws.on('open', () => {
+        birdeyeReconnectAttempts = 0;
         logger.info('Birdeye WebSocket connected');
 
         // Subscribe to large transactions
@@ -381,11 +384,13 @@ export function createCryptoWhaleTracker(
         logger.warn('Birdeye WebSocket closed');
         emitter.emit('disconnected', 'solana');
 
-        // Reconnect after delay
+        // Reconnect after exponential backoff delay
         if (running) {
+          const delay = Math.min(30000, 1000 * Math.pow(2, birdeyeReconnectAttempts));
+          birdeyeReconnectAttempts++;
           setTimeout(() => {
             if (running) connectSolanaWebSocket(apiKey);
-          }, 5000);
+          }, delay);
         }
       });
 
@@ -625,8 +630,13 @@ export function createCryptoWhaleTracker(
         }),
       });
 
+      if (!nativeResponse.ok) {
+        throw new Error(`RPC error fetching native balance: ${nativeResponse.status}`);
+      }
       const nativeData = await nativeResponse.json() as any;
-      const nativeBalance = parseInt(nativeData.result || '0', 16) / 1e18;
+      // Use BigInt to prevent overflow on large blockchain balances
+      const nativeBalanceRaw = BigInt(nativeData.result || '0x0');
+      const nativeBalance = Number(nativeBalanceRaw / BigInt(10 ** 18)) + Number(nativeBalanceRaw % BigInt(10 ** 18)) / 1e18;
 
       // Build holdings list (simplified - would need price API for full USD values)
       const holdings: TokenHolding[] = [
@@ -643,10 +653,13 @@ export function createCryptoWhaleTracker(
       // Add ERC20 tokens (first 10 with balance)
       for (const tb of tokenBalances.slice(0, 10)) {
         if (tb.tokenBalance && tb.tokenBalance !== '0x0') {
+          // Use BigInt to prevent overflow on large token balances
+          const tokenBalanceRaw = BigInt(tb.tokenBalance || '0x0');
+          const tokenBalance = Number(tokenBalanceRaw / BigInt(10 ** 18)) + Number(tokenBalanceRaw % BigInt(10 ** 18)) / 1e18;
           holdings.push({
             token: tb.contractAddress,
             symbol: 'TOKEN',
-            amount: parseInt(tb.tokenBalance, 16) / 1e18,
+            amount: tokenBalance,
             valueUsd: 0,
             pctOfPortfolio: 0,
             currentPrice: 0,
@@ -685,8 +698,12 @@ export function createCryptoWhaleTracker(
         }),
       });
 
+      if (!blockResponse.ok) {
+        throw new Error(`RPC error fetching block number: ${blockResponse.status}`);
+      }
       const blockData = await blockResponse.json() as any;
-      const latestBlock = parseInt(blockData.result, 16);
+      // Use BigInt defensively for block numbers (safe for now, but future-proof)
+      const latestBlock = Number(BigInt(blockData.result || '0x0'));
 
       // Get asset transfers in last ~100 blocks
       const transferResponse = await fetchWithRetry(baseUrl, {
@@ -706,6 +723,9 @@ export function createCryptoWhaleTracker(
         }),
       });
 
+      if (!transferResponse.ok) {
+        throw new Error(`RPC error fetching asset transfers: ${transferResponse.status}`);
+      }
       const transferData = await transferResponse.json() as any;
       const transfers = transferData.result?.transfers || [];
 

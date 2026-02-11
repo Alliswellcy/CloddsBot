@@ -349,8 +349,18 @@ export function createServer(
     // Redirect HTTP to HTTPS if forced
     const forceHttps = process.env.CLODDS_FORCE_HTTPS === 'true';
     if (forceHttps && !isSecure) {
-      const host = req.headers.host || 'localhost';
-      res.redirect(301, `https://${host}${req.url}`);
+      const allowedHosts = new Set([
+        process.env.CLODDS_PUBLIC_HOST || 'localhost',
+        'localhost',
+        '127.0.0.1',
+        'compute.cloddsbot.com',
+      ].filter(Boolean));
+      const host = req.headers.host?.split(':')[0] || 'localhost';
+      if (!allowedHosts.has(host)) {
+        res.status(400).send('Invalid host');
+        return;
+      }
+      res.redirect(301, `https://${req.headers.host}${req.url}`);
       return;
     }
 

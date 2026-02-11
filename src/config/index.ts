@@ -1256,8 +1256,10 @@ function parseJson5(text: string): unknown {
 /** Deep merge configs */
 function deepMerge(target: CloddsConfig, source: CloddsConfig): CloddsConfig {
   const result = { ...target };
+  const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
   for (const key of Object.keys(source) as Array<keyof CloddsConfig>) {
+    if (DANGEROUS_KEYS.has(key as string)) continue;
     const sourceVal = source[key];
     const targetVal = target[key];
 

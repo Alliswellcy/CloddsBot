@@ -301,12 +301,17 @@ export class Repl extends EventEmitter {
     });
 
     this.rl.on('line', async (line) => {
-      const trimmed = line.trim();
-      if (trimmed) {
-        this.history.add(trimmed);
-        await this.execute(trimmed);
+      try {
+        const trimmed = line.trim();
+        if (trimmed) {
+          this.history.add(trimmed);
+          await this.execute(trimmed);
+        }
+        this.rl?.prompt();
+      } catch (error) {
+        logger.error({ error }, '[terminal] Command execution failed');
+        this.rl?.prompt();
       }
-      this.rl?.prompt();
     });
 
     this.rl.on('close', () => {

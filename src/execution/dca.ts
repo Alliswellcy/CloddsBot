@@ -110,6 +110,8 @@ export function createDCAOrder(
   let startedAt: number | undefined;
   let nextCycleAtMs: number | undefined;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 5;
 
   const maxCycles = dcaConfig.maxCycles ?? Math.ceil(dcaConfig.totalAmount / dcaConfig.amountPerCycle);
   const totalAmount = dcaConfig.totalAmount;
@@ -189,6 +191,17 @@ export function createDCAOrder(
     const remainingBudget = totalAmount - investedAmount;
     const cycleBudget = Math.min(dcaConfig.amountPerCycle, remainingBudget);
     const price = Number(orderRequest.price) || 0;
+
+    // Enforce maxPrice — skip cycle if current price exceeds limit
+    if (dcaConfig.maxPrice && price > dcaConfig.maxPrice) {
+      logger.info(
+        { orderId, price, maxPrice: dcaConfig.maxPrice },
+        'DCA: skipping cycle, price above maxPrice'
+      );
+      scheduleNext();
+      return;
+    }
+
     const cycleShares = price > 0 ? Math.floor(cycleBudget / price) : 0;
 
     // If remaining budget is too small for even 1 share (dust), mark complete
@@ -210,6 +223,8 @@ export function createDCAOrder(
         : await executionService.buyLimit({ ...orderRequest, size: cycleShares, orderType: 'GTC' });
 
       if (result.success) {
+        consecutiveFailures = 0;
+
         // NaN guard: Number(undefined) => NaN, || 0 catches NaN and 0
         const rawFillPrice = Number(result.avgFillPrice) || 0;
         const rawFilledSize = Number(result.filledSize) || 0;
@@ -235,10 +250,28 @@ export function createDCAOrder(
 
         emitter.emit('cycle', { cycle: cyclesCompleted, shares: filledShares, price: fillPrice, progress: getProgress() });
       } else {
+        consecutiveFailures++;
         emitter.emit('cycle_failed', { cycle: cyclesCompleted + 1, error: result.error });
+
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          logger.error({ orderId, consecutiveFailures }, '[DCA] Too many consecutive failures, pausing');
+          status = 'paused';
+          emitter.emit('paused', { orderId, reason: 'consecutive_failures', progress: getProgress() });
+          persist();
+          return; // Don't schedule next
+        }
       }
     } catch (err: any) {
+      consecutiveFailures++;
       emitter.emit('error', err);
+
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        logger.error({ orderId, consecutiveFailures }, '[DCA] Too many consecutive failures, pausing');
+        status = 'paused';
+        emitter.emit('paused', { orderId, reason: 'consecutive_failures', progress: getProgress() });
+        persist();
+        return; // Don't schedule next
+      }
     }
 
     persist();
@@ -255,7 +288,12 @@ export function createDCAOrder(
       return;
     }
     nextCycleAtMs = Date.now() + dcaConfig.cycleIntervalMs;
-    timer = setTimeout(executeCycle, dcaConfig.cycleIntervalMs);
+    timer = setTimeout(() => {
+      executeCycle().catch((err) => {
+        logger.error({ err, orderId }, '[DCA] Scheduled cycle failed');
+        emitter.emit('error', { orderId, error: err });
+      });
+    }, dcaConfig.cycleIntervalMs);
   }
 
   function start(): void {
@@ -267,9 +305,17 @@ export function createDCAOrder(
     const delay = dcaConfig.startAtMs ? Math.max(0, dcaConfig.startAtMs - Date.now()) : 0;
     if (delay > 0) {
       nextCycleAtMs = Date.now() + delay;
-      timer = setTimeout(executeCycle, delay);
+      timer = setTimeout(() => {
+        executeCycle().catch((err) => {
+          logger.error({ err, orderId }, '[DCA] Delayed first cycle failed');
+          emitter.emit('error', { orderId, error: err });
+        });
+      }, delay);
     } else {
-      executeCycle();
+      executeCycle().catch((err) => {
+        logger.error({ err, orderId }, '[DCA] First cycle failed');
+        emitter.emit('error', { orderId, error: err });
+      });
     }
     persist();
     emitter.emit('started', getProgress());

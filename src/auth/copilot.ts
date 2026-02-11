@@ -331,7 +331,7 @@ export class CopilotCompletionClient {
       body: JSON.stringify({
         prompt,
         max_tokens: options.maxTokens || 500,
-        temperature: options.temperature || 0,
+        temperature: options.temperature ?? 0,
         stop: options.stop,
         suffix: options.suffix,
         n: 1,
@@ -363,7 +363,7 @@ export class CopilotCompletionClient {
         model: options.model || 'gpt-4o',
         messages,
         max_tokens: options.maxTokens || 4096,
-        temperature: options.temperature || 0.5,
+        temperature: options.temperature ?? 0.5,
         stream: false,
       }),
     });

@@ -377,6 +377,26 @@ const orderbookCache = new Map<string, { data: OrderbookData; cachedAt: number }
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour for static data
 const ORDERBOOK_CACHE_TTL_MS = 5000; // 5 seconds for orderbook (needs to be fresh)
 
+/**
+ * Evict expired entries from module-level caches to prevent unbounded growth.
+ * Called periodically by the execution service.
+ */
+function evictExpiredCaches(): void {
+  const now = Date.now();
+  for (const [key, val] of tickSizeCache) {
+    if (now - val.cachedAt > 86400000) tickSizeCache.delete(key); // 24h
+  }
+  for (const [key, val] of negRiskCache) {
+    if (now - val.cachedAt > 86400000) negRiskCache.delete(key); // 24h
+  }
+  for (const [key, val] of feeRateCache) {
+    if (now - val.cachedAt > 3600000) feeRateCache.delete(key); // 1h
+  }
+  for (const [key, val] of orderbookCache) {
+    if (now - val.cachedAt > 30000) orderbookCache.delete(key); // 30s
+  }
+}
+
 // Nonce tracking to prevent duplicate orders
 // Uses atomic counter to avoid race conditions in concurrent async operations
 // Format: timestamp_base + counter ensures uniqueness across restarts and within process
@@ -629,11 +649,16 @@ export async function getPolymarketBalance(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: USDC_POLYGON, data }, 'latest'], id: 1 }),
     });
+    if (!rpcResponse.ok) {
+      logger.warn({ status: rpcResponse.status }, 'Polygon RPC error fetching balance');
+      throw new Error(`RPC error: ${rpcResponse.status}`);
+    }
     const rpcData = await rpcResponse.json() as { result?: string };
-    const balance = parseInt(rpcData.result || '0x0', 16) / 1e6;
+    const rawBalance = BigInt(rpcData.result || '0x0');
+    const balance = Number(rawBalance) / 1e6;
     return { balance, allowance: balance };
   } catch (error) {
-    logger.error({ error, walletAddress }, 'Failed to fetch Polymarket balance');
+    logger.error({ error, walletAddress: walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'unknown' }, 'Failed to fetch Polymarket balance');
     return { balance: 0, allowance: 0 };
   }
 }
@@ -735,7 +760,7 @@ export async function getPolymarketTrades(
       .map(t => ({
         id: t.transactionHash || '',
         tokenId: t.asset || '',
-        side: (t.side?.toUpperCase() || 'BUY') as 'BUY' | 'SELL',
+        side: (t.side?.toUpperCase() ?? 'BUY') as 'BUY' | 'SELL',
         price: t.price || 0,
         size: t.size || t.usdcSize || 0,
         timestamp: new Date((t.timestamp || 0) * 1000),
@@ -1108,8 +1133,14 @@ async function placePolymarketOrder(
       body: JSON.stringify(order),
     });
 
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      const redactedError = errorBody.slice(0, 200).replace(/0x[a-fA-F0-9]{20,}/g, '0x***').replace(/"(api[Kk]ey|secret|password|token)"\s*:\s*"[^"]+"/g, '"$1":"***"');
+      logger.error({ status: response.status, errorBody: redactedError, tokenId, side, price, size }, 'Polymarket order failed');
+      return { success: false, error: `HTTP ${response.status}: ${redactedError}` };
+    }
     const data = (await response.json()) as PolymarketOrderResponse;
-    if (!response.ok || data.errorMsg) {
+    if (data.errorMsg) {
       const { code, message } = parsePolymarketError(data.errorMsg, response.status);
       logger.error({ status: response.status, errorCode: code, error: message }, 'Polymarket order failed');
       return { success: false, error: `[${code}] ${message}` };
@@ -1591,13 +1622,19 @@ async function placeKalshiOrder(
     }
   }
 
+  // FAK (Fill-and-Kill) is not natively supported on Kalshi; treat as FOK (closest equivalent)
+  if (orderType === 'FAK') {
+    logger.warn('[execution] FAK order type not supported on Kalshi, using FOK instead');
+    orderType = 'FOK';
+  }
+
   const order = {
     ticker,
     side,
     action,
     type: orderType === 'FOK' && maxSlippage !== undefined ? 'limit' : (orderType === 'FOK' ? 'market' : 'limit'),
-    yes_price: side === 'yes' ? Math.round(effectivePrice * 100) : undefined,
-    no_price: side === 'no' ? Math.round(effectivePrice * 100) : undefined,
+    yes_price: side === 'yes' ? Math.round((effectivePrice + Number.EPSILON) * 100) : undefined,
+    no_price: side === 'no' ? Math.round((effectivePrice + Number.EPSILON) * 100) : undefined,
     count,
   };
 
@@ -1933,7 +1970,10 @@ async function placeOpinionOrder(
 
   const config = toOpinionConfig(auth);
   // Extract marketId from tokenId (Opinion tokens use format: marketId-outcomeIndex)
-  const marketId = parseInt(tokenId.split('-')[0], 10) || 0;
+  const marketId = parseInt(tokenId.split('-')[0], 10);
+  if (Number.isNaN(marketId)) {
+    throw new Error(`Invalid tokenId format: ${tokenId}`);
+  }
   const result = await opinion.placeOrder(
     config,
     marketId,
@@ -1941,8 +1981,11 @@ async function placeOpinionOrder(
     side === 'buy' ? 'BUY' : 'SELL',
     price,
     size,
-    orderType === 'FOK' ? 'MARKET' : 'LIMIT'
+    (orderType === 'FOK' || orderType === 'FAK') ? 'MARKET' : 'LIMIT'
   );
+  if (orderType === 'FAK') {
+    logger.warn('[execution] FAK order type not supported on Opinion, using FOK/MARKET instead');
+  }
 
   return {
     success: result.success,
@@ -2350,6 +2393,10 @@ async function getPolymarketUSDCAllowance(
       }),
     });
 
+    if (!response.ok) {
+      logger.warn({ status: response.status }, 'Polygon RPC error fetching USDC allowance');
+      throw new Error(`RPC error: ${response.status}`);
+    }
     const result = await response.json() as { result?: string };
     if (!result.result || result.result === '0x') {
       return 0;
@@ -2525,6 +2572,10 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
       return;
     }
 
+    // Clean up any previous WebSocket before creating a new one to prevent
+    // listener accumulation on reconnect (each call adds on('fill'), etc.)
+    disconnectFillsWebSocket();
+
     const userId = config.polymarket.funderAddress || config.polymarket.apiKey;
     userWs = createUserWebSocket(userId, {
       privateKey: config.polymarket.privateKey || '',
@@ -2557,6 +2608,7 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
   // ==========================================================================
   let heartbeatId: string | null = null;
   let heartbeatInterval: NodeJS.Timeout | null = null;
+  let heartbeatInProgress = false;
   const HEARTBEAT_INTERVAL_MS = 8000; // 8s to be safe (10s timeout)
 
   async function postHeartbeat(existingId?: string): Promise<string> {
@@ -2597,22 +2649,31 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
   }
 
   async function startHeartbeat(): Promise<string> {
+    // Stop any existing interval before starting a new one to prevent
+    // duplicate intervals if startHeartbeat() is called twice.
     if (heartbeatInterval) {
-      // Already running, just return current ID
-      if (heartbeatId) return heartbeatId;
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
     }
+    heartbeatInProgress = false;
 
     // Initial heartbeat
     heartbeatId = await postHeartbeat();
     logger.info({ heartbeatId }, 'Polymarket heartbeat started');
 
-    // Start recurring heartbeat
+    // Start recurring heartbeat with overlap guard: if postHeartbeat takes
+    // longer than HEARTBEAT_INTERVAL_MS, skip the next tick instead of
+    // running two concurrent heartbeat requests.
     heartbeatInterval = setInterval(async () => {
+      if (heartbeatInProgress) return;
+      heartbeatInProgress = true;
       try {
         heartbeatId = await postHeartbeat(heartbeatId || undefined);
         logger.debug({ heartbeatId }, 'Heartbeat sent');
       } catch (err) {
         logger.error({ err }, 'Heartbeat failed - orders may be cancelled');
+      } finally {
+        heartbeatInProgress = false;
       }
     }, HEARTBEAT_INTERVAL_MS);
 
@@ -2707,18 +2768,16 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
   function recordOrderToCircuitBreaker(result: OrderResult, sizeUsd: number): void {
     if (!circuitBreaker) return;
 
-    // Record as trade (P&L = 0 for now, actual P&L tracked on fills/closes)
+    // Record as trade (P&L = 0 at order time — actual P&L tracked on fills/closes).
+    // recordTrade already increments errorCount when success=false (line 251),
+    // so do NOT also call recordError() — that would double-count errors in both
+    // totalTrades and errorCount, inflating the error rate.
     circuitBreaker.recordTrade({
       pnlUsd: 0, // P&L unknown at order time
       success: result.success,
       sizeUsd,
       error: result.error,
     });
-
-    // Record error if order failed
-    if (!result.success && result.error) {
-      circuitBreaker.recordError(result.error);
-    }
   }
 
   async function executeOrder(request: OrderRequest): Promise<OrderResult> {
@@ -2799,7 +2858,10 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
         return { success: false, error: 'Kalshi not configured' };
       }
 
-      const outcome = request.outcome?.toLowerCase() as 'yes' | 'no' || 'yes';
+      const outcome = (request.outcome?.toLowerCase() ?? 'yes') as 'yes' | 'no';
+      if (outcome !== 'yes' && outcome !== 'no') {
+        return { success: false, error: `Invalid Kalshi outcome: ${request.outcome}. Must be 'yes' or 'no'.`, status: 'rejected' as OrderStatus };
+      }
 
       return placeKalshiOrder(
         config.kalshi,
@@ -2924,50 +2986,71 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
       }
 
       let count = 0;
+      const errors: string[] = [];
 
       if ((!platform || platform === 'polymarket') && config.polymarket) {
-        count += await cancelAllPolymarketOrders(config.polymarket, marketId);
+        try {
+          count += await cancelAllPolymarketOrders(config.polymarket, marketId);
 
-        // Auto-stop heartbeat if all Polymarket orders cancelled (no market filter)
-        // Heartbeat is only needed when there are open GTC/GTD orders
-        if (!marketId && isHeartbeatActive()) {
-          stopHeartbeat();
-          logger.info('Heartbeat auto-stopped after cancelling all orders');
+          // Auto-stop heartbeat if all Polymarket orders cancelled (no market filter)
+          // Heartbeat is only needed when there are open GTC/GTD orders
+          if (!marketId && isHeartbeatActive()) {
+            stopHeartbeat();
+            logger.info('Heartbeat auto-stopped after cancelling all orders');
+          }
+        } catch (err) {
+          errors.push(`Polymarket: ${(err as Error).message}`);
         }
       }
 
       // Kalshi: fetch open orders, batch cancel matching ones
       if ((!platform || platform === 'kalshi') && config.kalshi) {
-        const orders = await getKalshiOpenOrders(config.kalshi);
-        const toCancel = orders
-          .filter(o => !marketId || o.marketId === marketId)
-          .map(o => o.orderId);
-        if (toCancel.length > 0) {
-          const results = await cancelKalshiOrdersBatch(config.kalshi, toCancel);
-          count += results.filter(r => r.success).length;
+        try {
+          const orders = await getKalshiOpenOrders(config.kalshi);
+          const toCancel = orders
+            .filter(o => !marketId || o.marketId === marketId)
+            .map(o => o.orderId);
+          if (toCancel.length > 0) {
+            const results = await cancelKalshiOrdersBatch(config.kalshi, toCancel);
+            count += results.filter(r => r.success).length;
+          }
+        } catch (err) {
+          errors.push(`Kalshi: ${(err as Error).message}`);
         }
       }
 
       // Opinion: use SDK's cancelAllOrders (handles batch internally)
       if ((!platform || platform === 'opinion') && config.opinion) {
-        count += await cancelAllOpinionOrders(config.opinion, marketId);
+        try {
+          count += await cancelAllOpinionOrders(config.opinion, marketId);
+        } catch (err) {
+          errors.push(`Opinion: ${(err as Error).message}`);
+        }
       }
 
       // PredictFun has bulk cancel support
       if ((!platform || platform === 'predictfun') && config.predictfun) {
-        if (marketId) {
-          // Filter by market if specified
-          const orders = await getPredictFunOpenOrders(config.predictfun);
-          for (const order of orders) {
-            if (order.marketId === marketId) {
-              if (await cancelPredictFunOrder(config.predictfun, order.orderId)) {
-                count++;
+        try {
+          if (marketId) {
+            // Filter by market if specified
+            const orders = await getPredictFunOpenOrders(config.predictfun);
+            for (const order of orders) {
+              if (order.marketId === marketId) {
+                if (await cancelPredictFunOrder(config.predictfun, order.orderId)) {
+                  count++;
+                }
               }
             }
+          } else {
+            count += await cancelAllPredictFunOrders(config.predictfun);
           }
-        } else {
-          count += await cancelAllPredictFunOrders(config.predictfun);
+        } catch (err) {
+          errors.push(`PredictFun: ${(err as Error).message}`);
         }
+      }
+
+      if (errors.length > 0) {
+        logger.warn({ errors }, 'Some platforms failed during cancelAllOrders');
       }
 
       return count;
@@ -3521,6 +3604,10 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
         clearInterval(fillCleanupInterval);
         fillCleanupInterval = null;
       }
+      if (cacheEvictionInterval) {
+        clearInterval(cacheEvictionInterval);
+        cacheEvictionInterval = null;
+      }
     },
   };
 
@@ -3533,6 +3620,11 @@ export function createExecutionService(config: ExecutionConfig): ExecutionServic
   }, 10 * 60 * 1000);
   fillCleanupTimer.unref();
   let fillCleanupInterval: ReturnType<typeof setInterval> | null = fillCleanupTimer;
+
+  // Periodic eviction of expired module-level caches (every 60 seconds)
+  const cacheEvictionTimer = setInterval(evictExpiredCaches, 60000);
+  cacheEvictionTimer.unref();
+  let cacheEvictionInterval: ReturnType<typeof setInterval> | null = cacheEvictionTimer;
 
   return service;
 }

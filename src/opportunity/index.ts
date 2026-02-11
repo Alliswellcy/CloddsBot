@@ -182,6 +182,8 @@ export interface ExecutionStep {
   platform: Platform;
   /** Market ID */
   marketId: string;
+  /** Token ID (Polymarket: the outcome token_id, distinct from condition_id/marketId) */
+  tokenId?: string;
   /** Action */
   action: 'buy' | 'sell';
   /** Outcome */
@@ -824,12 +826,16 @@ export function createOpportunityFinder(
     yesPrice: number,
     noPrice: number
   ): ExecutionPlan {
+    // Resolve token IDs from market outcomes (critical for Polymarket where tokenId != marketId)
+    const yesOutcome = market.outcomes.find(o => o.name.toUpperCase() === 'YES');
+    const noOutcome = market.outcomes.find(o => o.name.toUpperCase() === 'NO');
     return {
       steps: [
         {
           order: 1,
           platform,
           marketId: market.id,
+          tokenId: yesOutcome?.tokenId,
           action: 'buy',
           outcome: 'YES',
           price: yesPrice,
@@ -840,6 +846,7 @@ export function createOpportunityFinder(
           order: 2,
           platform,
           marketId: market.id,
+          tokenId: noOutcome?.tokenId,
           action: 'buy',
           outcome: 'NO',
           price: noPrice,
@@ -867,12 +874,18 @@ export function createOpportunityFinder(
       warnings.push('Cross-platform execution requires accounts on both platforms');
     }
 
+    // Resolve token IDs from market outcomes (critical for Polymarket where tokenId != marketId)
+    const lowestYes = lowest.market.outcomes.find(o => o.name.toUpperCase() === 'YES');
+    const highestYes = highest.market.outcomes.find(o => o.name.toUpperCase() === 'YES');
+    const highestNo = highest.market.outcomes.find(o => o.name.toUpperCase() === 'NO');
+
     return {
       steps: [
         {
           order: 1,
           platform: lowest.platform,
           marketId: lowest.market.id,
+          tokenId: lowestYes?.tokenId,
           action: 'buy',
           outcome: 'YES',
           price: lowest.yesPrice,
@@ -883,6 +896,7 @@ export function createOpportunityFinder(
           order: 2,
           platform: highest.platform,
           marketId: highest.market.id,
+          tokenId: buyNo ? highestNo?.tokenId : highestYes?.tokenId,
           action: buyNo ? 'buy' : 'sell',
           outcome: buyNo ? 'NO' : 'YES',
           price: buyNo ? highest.noPrice : highest.yesPrice,
@@ -982,8 +996,12 @@ export function createOpportunityFinder(
 
     // Set up polling
     scanInterval = setInterval(async () => {
-      if (isScanning) {
-        await scan();
+      try {
+        if (isScanning) {
+          await scan();
+        }
+      } catch (error) {
+        logger.error({ error }, 'Opportunity scan interval failed');
       }
     }, cfg.scanIntervalMs);
 

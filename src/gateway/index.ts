@@ -570,11 +570,7 @@ export async function createGateway(config: Config): Promise<AppGateway> {
     httpGateway.setAuditRouter(createAuditRouter());
   }
 
-  // Wire DCA HTTP API router (DCA persistence already initialized above)
-  {
-    const { createDCARouter } = await import('./dca-routes.js');
-    httpGateway.setDCARouter(createDCARouter());
-  }
+  // DCA router is wired later (after executionService is created) so it can start the engine
 
   // Create alt-data sentiment pipeline if enabled
   let altDataService: AltDataService | null = null;
@@ -748,6 +744,12 @@ export async function createGateway(config: Config): Promise<AppGateway> {
         allowSplitting: config.smartRouting?.allowSplitting ?? false,
       })
     : null;
+
+  // Wire DCA HTTP API router (DCA persistence already initialized above)
+  {
+    const { createDCARouter } = await import('./dca-routes.js');
+    httpGateway.setDCARouter(createDCARouter(executionService ? { execution: executionService } : undefined));
+  }
 
   // Wire TWAP + Bracket + Trigger order routers (require executionService)
   if (executionService) {

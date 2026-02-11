@@ -274,7 +274,7 @@ export class AlertManager {
       case '>=': return value >= threshold.value;
       case '<': return value < threshold.value;
       case '<=': return value <= threshold.value;
-      case '==': return value === threshold.value;
+      case '==': return Math.abs(value - threshold.value) < 1e-9;
       case '!=': return value !== threshold.value;
       default: return false;
     }

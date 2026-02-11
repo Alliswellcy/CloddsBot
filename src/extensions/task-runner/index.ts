@@ -147,6 +147,13 @@ builtInExecutors.set('file', {
     const filePath = task.input?.path as string;
     const fullPath = path.isAbsolute(filePath) ? filePath : path.join(context.workDir, filePath);
 
+    // Security: Prevent path traversal outside working directory
+    const resolved = path.resolve(fullPath);
+    const workDirResolved = path.resolve(context.workDir) + path.sep;
+    if (!resolved.startsWith(workDirResolved) && resolved !== path.resolve(context.workDir)) {
+      throw new Error('Path traversal detected: path escapes working directory');
+    }
+
     // Audit: Log file operation
     logger.info(
       { taskId: task.id, executor: 'file', operation, path: fullPath },
@@ -203,6 +210,26 @@ builtInExecutors.set('file', {
   },
 });
 
+// SSRF protection: validate URLs before fetching
+function isAllowedUrl(urlStr: string): boolean {
+  try {
+    const parsed = new URL(urlStr);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return false;
+    if (hostname.startsWith('10.')) return false;
+    if (hostname.startsWith('192.168.')) return false;
+    if (hostname.startsWith('169.254.')) return false;
+    // Check 172.16-31.x.x private range
+    if (hostname.startsWith('172.')) {
+      const second = parseInt(hostname.split('.')[1], 10);
+      if (second >= 16 && second <= 31) return false;
+    }
+    if (hostname === '0.0.0.0' || hostname.endsWith('.local') || hostname.endsWith('.internal')) return false;
+    return true;
+  } catch { return false; }
+}
+
 // HTTP executor
 builtInExecutors.set('http', {
   name: 'http',
@@ -211,6 +238,10 @@ builtInExecutors.set('http', {
     const method = (task.input?.method as string) || 'GET';
     const headers = (task.input?.headers as Record<string, string>) || {};
     const body = task.input?.body;
+
+    if (!isAllowedUrl(url)) {
+      throw new Error('URL not allowed: blocked by SSRF protection');
+    }
 
     const response = await fetch(url, {
       method,

@@ -74,6 +74,7 @@ export interface ExecutionStep {
   order: number;
   platform: Platform;
   marketId: string;
+  tokenId?: string;
   action: 'buy' | 'sell';
   outcome: string;
   price: number;

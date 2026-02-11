@@ -347,9 +347,15 @@ export function createTradingApiRouter(deps: TradingApiDeps): Router {
       if (!platform || !marketId || !side || !price || !size) {
         res.status(400).json({ error: 'Missing required fields: platform, marketId, side, price, size' }); return;
       }
+      const numPrice = Number(price);
+      const numSize = Number(size);
+      if (!Number.isFinite(numPrice) || !Number.isFinite(numSize)) {
+        res.status(400).json({ error: 'price and size must be valid finite numbers' });
+        return;
+      }
       const orderRequest = {
         platform: platform as 'polymarket' | 'kalshi' | 'opinion' | 'predictfun',
-        marketId, tokenId, outcome, price: Number(price), size: Number(size),
+        marketId, tokenId, outcome, price: numPrice, size: numSize,
         orderType: orderType || 'GTC', negRisk: negRisk ?? undefined,
       };
       const result = side === 'buy' ? await execution.buyLimit(orderRequest) : await execution.sellLimit(orderRequest);
@@ -677,6 +683,10 @@ export function createTradingApiRouter(deps: TradingApiDeps): Router {
       const position = positionManager.getPosition(req.params.id);
       if (!position) { res.status(404).json({ error: `Position ${req.params.id} not found` }); return; }
       const closePrice = req.body?.price ?? position.currentPrice;
+      if (req.body?.price !== undefined && !Number.isFinite(Number(req.body.price))) {
+        res.status(400).json({ error: 'price must be a finite number' });
+        return;
+      }
       positionManager.closePosition(req.params.id, closePrice, 'manual_api_close');
       res.json({ success: true, positionId: req.params.id, closePrice });
     } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to close position' }); }
@@ -711,6 +721,18 @@ export function createTradingApiRouter(deps: TradingApiDeps): Router {
     if (!positionManager) { res.status(404).json({ error: 'Position manager not available' }); return; }
     try {
       const { price, percentFromEntry, trailingPercent } = req.body ?? {};
+      if (price !== undefined && !Number.isFinite(Number(price))) {
+        res.status(400).json({ error: 'price must be a finite number' });
+        return;
+      }
+      if (percentFromEntry !== undefined && !Number.isFinite(Number(percentFromEntry))) {
+        res.status(400).json({ error: 'percentFromEntry must be a finite number' });
+        return;
+      }
+      if (trailingPercent !== undefined && !Number.isFinite(Number(trailingPercent))) {
+        res.status(400).json({ error: 'trailingPercent must be a finite number' });
+        return;
+      }
       positionManager.setStopLoss(req.params.id, { price, percentFromEntry, trailingPercent });
       res.json({ success: true, positionId: req.params.id });
     } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to set stop-loss' }); }
@@ -720,6 +742,14 @@ export function createTradingApiRouter(deps: TradingApiDeps): Router {
     if (!positionManager) { res.status(404).json({ error: 'Position manager not available' }); return; }
     try {
       const { price, percentFromEntry, partialLevels } = req.body ?? {};
+      if (price !== undefined && !Number.isFinite(Number(price))) {
+        res.status(400).json({ error: 'price must be a finite number' });
+        return;
+      }
+      if (percentFromEntry !== undefined && !Number.isFinite(Number(percentFromEntry))) {
+        res.status(400).json({ error: 'percentFromEntry must be a finite number' });
+        return;
+      }
       positionManager.setTakeProfit(req.params.id, { price, percentFromEntry, partialLevels });
       res.json({ success: true, positionId: req.params.id });
     } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to set take-profit' }); }
@@ -745,7 +775,7 @@ export function createTradingApiRouter(deps: TradingApiDeps): Router {
     if (!positionManager) { res.status(404).json({ error: 'Position manager not available' }); return; }
     try {
       const { price } = req.body ?? {};
-      if (typeof price !== 'number') { res.status(400).json({ error: 'Required: price (number)' }); return; }
+      if (!Number.isFinite(price)) { res.status(400).json({ error: 'Required: price (number)' }); return; }
       positionManager.updatePrice(req.params.id, price);
       res.json({ success: true, positionId: req.params.id, price });
     } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to update price' }); }

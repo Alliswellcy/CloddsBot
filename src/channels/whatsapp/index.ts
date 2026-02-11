@@ -557,9 +557,10 @@ export async function createWhatsAppChannel(
     // Handle incoming messages
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     sock.ev.on('messages.upsert', async ({ messages, type }: any) => {
-      if (type !== 'notify') return;
+      try {
+        if (type !== 'notify') return;
 
-      for (const msg of messages) {
+        for (const msg of messages) {
         // Skip if no message content
         if (!msg.message) continue;
 
@@ -718,6 +719,9 @@ export async function createWhatsAppChannel(
 
         rememberMessageKey(account, msg.key, textContent, jid);
         await callbacks.onMessage(incomingMessage);
+      }
+      } catch (error) {
+        logger.error({ error }, 'WhatsApp message handler failed');
       }
     });
 

@@ -180,11 +180,17 @@ export function createUserWebSocket(
 
             // Handle order events (placements, updates, cancellations)
             if (message.event_type === 'order' || message.type === 'order') {
+              const validOrderTypes = new Set<OrderEvent['type']>(['PLACEMENT', 'UPDATE', 'CANCELLATION']);
+              const rawType = (message.order_type || '').toUpperCase();
+              const orderType: OrderEvent['type'] = validOrderTypes.has(rawType as OrderEvent['type'])
+                ? (rawType as OrderEvent['type'])
+                : 'UPDATE';
+
               const orderEvent: OrderEvent = {
                 orderId: message.order_id || message.id || '',
                 marketId: message.market || message.condition_id || '',
                 tokenId: message.asset_id || message.token_id || '',
-                type: (message.order_type || message.type || 'UPDATE') as OrderEvent['type'],
+                type: orderType,
                 side: (message.side?.toUpperCase() || 'BUY') as 'BUY' | 'SELL',
                 price: parseFloat(message.price || '0'),
                 originalSize: parseFloat(message.original_size || message.size || '0'),
@@ -285,19 +291,33 @@ export interface UserWebSocketManager {
 
 export function createUserWebSocketManager(): UserWebSocketManager {
   const connections = new Map<string, UserWebSocket>();
+  const connecting = new Map<string, Promise<UserWebSocket>>();
 
   return {
     async getOrCreate(userId: string, credentials: PolymarketCredentials): Promise<UserWebSocket> {
-      let conn = connections.get(userId);
+      const conn = connections.get(userId);
+      if (conn?.isConnected()) return conn;
 
-      if (!conn || !conn.isConnected()) {
-        conn?.disconnect();
-        conn = createUserWebSocket(userId, credentials);
-        connections.set(userId, conn);
-        await conn.connect();
-      }
+      // Deduplicate concurrent calls: if a connection attempt is already
+      // in-flight for this userId, return the same promise instead of
+      // creating a second WebSocket.
+      const inflight = connecting.get(userId);
+      if (inflight) return inflight;
 
-      return conn;
+      const promise = (async () => {
+        try {
+          conn?.disconnect();
+          const newConn = createUserWebSocket(userId, credentials);
+          connections.set(userId, newConn);
+          await newConn.connect();
+          return newConn;
+        } finally {
+          connecting.delete(userId);
+        }
+      })();
+
+      connecting.set(userId, promise);
+      return promise;
     },
 
     disconnect(userId: string): void {
@@ -306,6 +326,7 @@ export function createUserWebSocketManager(): UserWebSocketManager {
         conn.disconnect();
         connections.delete(userId);
       }
+      connecting.delete(userId);
     },
 
     disconnectAll(): void {
@@ -313,6 +334,7 @@ export function createUserWebSocketManager(): UserWebSocketManager {
         conn.disconnect();
         connections.delete(userId);
       }
+      connecting.clear();
     },
   };
 }

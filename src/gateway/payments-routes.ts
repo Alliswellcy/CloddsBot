@@ -57,7 +57,7 @@ export function createPaymentsRouter(deps: PaymentsRouterDeps): Router {
     try {
       const network = req.params.network as any;
       const balance = await client().getBalance(network);
-      if (!balance) {
+      if (balance == null) {
         res.json({ ok: true, data: null });
         return;
       }

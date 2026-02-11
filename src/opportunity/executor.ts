@@ -331,7 +331,7 @@ export function createOpportunityExecutor(
             orderResult = await execution.buyLimit({
               platform: effectivePlatform as 'polymarket' | 'kalshi',
               marketId: step.marketId,
-              tokenId: step.marketId,
+              tokenId: step.tokenId ?? step.marketId,
               outcome: step.outcome,
               price: effectivePrice,
               size,
@@ -342,7 +342,7 @@ export function createOpportunityExecutor(
             orderResult = await execution.sellLimit({
               platform: effectivePlatform as 'polymarket' | 'kalshi',
               marketId: step.marketId,
-              tokenId: step.marketId,
+              tokenId: step.tokenId ?? step.marketId,
               outcome: step.outcome,
               price: effectivePrice,
               size,

@@ -77,6 +77,21 @@ export class Counter {
     } else {
       this.values.set(key, { value, labels, timestamp: Date.now() });
     }
+
+    // Prune oldest entries if too many label combos
+    if (this.values.size > 1000) {
+      const now = Date.now();
+      for (const [k, v] of this.values) {
+        if (now - (v.timestamp ?? 0) > 24 * 60 * 60 * 1000) {
+          this.values.delete(k);
+        }
+      }
+      // Hard cap: if still over, remove oldest
+      if (this.values.size > 1000) {
+        const firstKey = this.values.keys().next().value;
+        if (firstKey) this.values.delete(firstKey);
+      }
+    }
   }
 
   get(labels: MetricLabels = {}): number {
@@ -126,6 +141,21 @@ export class Gauge {
     }
     const key = this.getKey(labels);
     this.values.set(key, { value, labels, timestamp: Date.now() });
+
+    // Prune oldest entries if too many label combos
+    if (this.values.size > 1000) {
+      const now = Date.now();
+      for (const [k, v] of this.values) {
+        if (now - (v.timestamp ?? 0) > 24 * 60 * 60 * 1000) {
+          this.values.delete(k);
+        }
+      }
+      // Hard cap: if still over, remove oldest
+      if (this.values.size > 1000) {
+        const firstKey = this.values.keys().next().value;
+        if (firstKey) this.values.delete(firstKey);
+      }
+    }
   }
 
   inc(labels: MetricLabels = {}, value = 1): void {
@@ -217,6 +247,24 @@ export class Histogram {
     for (const bucket of this.buckets) {
       if (value <= bucket) {
         histogram.buckets.set(bucket, (histogram.buckets.get(bucket) || 0) + 1);
+      }
+    }
+
+    // Prune oldest entries if too many label combos (using count as a proxy for age)
+    if (this.values.size > 1000) {
+      let pruned = 0;
+      for (const [k, h] of this.values) {
+        // Remove histograms with very old data (no updates in 24h, count < 10)
+        if (h.count < 10) {
+          this.values.delete(k);
+          pruned++;
+          if (this.values.size <= 1000) break;
+        }
+      }
+      // Hard cap: if still over, remove oldest (first inserted)
+      if (this.values.size > 1000) {
+        const firstKey = this.values.keys().next().value;
+        if (firstKey) this.values.delete(firstKey);
       }
     }
   }

@@ -81,7 +81,8 @@ function ensureReadOnlySql(sql: string): void {
 
   const forbidden = containsForbiddenKeywords(normalized);
   if (forbidden) {
-    throw new Error(`Forbidden SQL keyword detected: ${forbidden}`);
+    logger.warn({ keyword: forbidden }, 'Forbidden SQL keyword detected');
+    throw new Error('SQL query validation failed');
   }
 
   // Disallow multiple statements separated by semicolons.

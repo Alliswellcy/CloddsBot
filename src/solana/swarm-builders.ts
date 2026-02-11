@@ -198,6 +198,21 @@ export class PumpFunBuilder implements SwarmTransactionBuilder {
     if (isBuy) {
       // SOL → Token
       const inputLamports = amount * 1e9;
+
+      // Guard against precision loss on large reserve calculations
+      if (inputLamports * tokenReserves > Number.MAX_SAFE_INTEGER) {
+        // Use BigInt for precise calculation
+        const inputBig = BigInt(Math.floor(inputLamports));
+        const tokenBig = BigInt(Math.floor(tokenReserves));
+        const solBig = BigInt(Math.floor(solReserves));
+        const outputBig = (inputBig * tokenBig) / (solBig + inputBig);
+        return {
+          inputAmount: amount,
+          outputAmount: Number(outputBig) / 1e6, // tokens have 6 decimals
+          route: 'pumpfun',
+        };
+      }
+
       const outputTokens = (inputLamports * tokenReserves) / (solReserves + inputLamports);
       return {
         inputAmount: amount,
@@ -207,6 +222,21 @@ export class PumpFunBuilder implements SwarmTransactionBuilder {
     } else {
       // Token → SOL
       const inputTokens = amount * 1e6;
+
+      // Guard against precision loss on large reserve calculations
+      if (inputTokens * solReserves > Number.MAX_SAFE_INTEGER) {
+        // Use BigInt for precise calculation
+        const inputBig = BigInt(Math.floor(inputTokens));
+        const tokenBig = BigInt(Math.floor(tokenReserves));
+        const solBig = BigInt(Math.floor(solReserves));
+        const outputBig = (inputBig * solBig) / (tokenBig + inputBig);
+        return {
+          inputAmount: amount,
+          outputAmount: Number(outputBig) / 1e9,
+          route: 'pumpfun',
+        };
+      }
+
       const outputLamports = (inputTokens * solReserves) / (tokenReserves + inputTokens);
       return {
         inputAmount: amount,

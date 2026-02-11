@@ -43,6 +43,9 @@ async function kalshiGet(path: string): Promise<string> {
     const response = await fetch(url, {
       headers: { 'Content-Type': 'application/json' },
     });
+    if (!response.ok) {
+      return JSON.stringify({ error: `Kalshi API error: ${response.status} ${response.statusText}` });
+    }
     const data = await response.json();
     return JSON.stringify(data);
   } catch (err: unknown) {
@@ -70,6 +73,9 @@ async function kalshiAuthFetch(
   }
   try {
     const response = await fetch(url, fetchOptions);
+    if (!response.ok) {
+      return JSON.stringify({ error: `Kalshi API error: ${response.status} ${response.statusText}` });
+    }
     const data = await response.json();
     return JSON.stringify(data);
   } catch (err: unknown) {
@@ -156,7 +162,18 @@ async function sellHandler(toolInput: ToolInput, context: HandlerContext): Promi
   const side = toolInput.side as string;
   const count = toolInput.count as number;
   const price = toolInput.price as number;
+  const notional = count * (price > 1 ? price / 100 : price);
   const userId = context.userId || '';
+  const maxError = enforceMaxOrderSize(context, notional, 'kalshi_sell');
+  if (maxError) return maxError;
+  const exposureError = enforceExposureLimits(context, userId, {
+    platform: 'kalshi',
+    marketId: ticker,
+    outcomeId: side,
+    notional,
+    label: 'kalshi_sell',
+  });
+  if (exposureError) return exposureError;
 
   const execSvc = context.tradingContext?.executionService;
   if (execSvc) {
@@ -644,6 +661,9 @@ async function batchCandlesticksHandler(toolInput: ToolInput, _context: HandlerC
         if (t.interval) params.set('period_interval', String(t.interval));
         const url = `${KALSHI_API_BASE}/markets/${encodeURIComponent(t.ticker)}/candlesticks?${params.toString()}`;
         const response = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+        if (!response.ok) {
+          return { ticker: t.ticker, error: `Kalshi API error: ${response.status} ${response.statusText}` };
+        }
         return { ticker: t.ticker, data: await response.json() };
       })
     );
@@ -982,6 +1002,9 @@ async function liveDataBatchHandler(toolInput: ToolInput, _context: HandlerConte
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ requests }),
     });
+    if (!response.ok) {
+      return JSON.stringify({ error: `Kalshi API error: ${response.status} ${response.statusText}` });
+    }
     const data = await response.json();
     return JSON.stringify(data);
   } catch (err: unknown) {

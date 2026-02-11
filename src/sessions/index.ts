@@ -347,7 +347,7 @@ export function createSessionManager(db: Database, configInput?: Config['session
   function checkDailyReset() {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
-    const currentHour = now.getHours();
+    const currentHour = now.getUTCHours();
 
     // Only reset once per day at the configured hour
     if (currentHour === config.reset.atHour && lastDailyResetDate !== today) {

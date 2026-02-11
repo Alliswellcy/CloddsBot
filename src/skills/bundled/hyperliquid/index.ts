@@ -177,7 +177,7 @@ async function handlePrice(coin: string): Promise<string> {
   const coinUpper = coin.toUpperCase();
   const price = mids[coinUpper];
 
-  if (!price) {
+  if (price == null) {
     return `Market ${coinUpper} not found`;
   }
 

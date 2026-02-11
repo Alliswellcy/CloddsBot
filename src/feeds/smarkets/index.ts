@@ -127,6 +127,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
   const marketCache = new Map<string, { market: SmarketsMarket; event: SmarketsEvent }>();
   const contractCache = new Map<string, SmarketsContract[]>();
   let pingInterval: NodeJS.Timeout | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
   const MAX_RECONNECT_DELAY = 60000; // 60s max
 
@@ -153,6 +154,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       const response = await fetch(`${SMARKETS_API_URL}${endpoint}`, {
         ...options,
         headers: { ...headers, ...options?.headers },
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!response.ok) {
@@ -269,7 +271,7 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
       const delay = Math.min(5000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
       reconnectAttempts++;
       logger.info({ delay, attempt: reconnectAttempts }, 'Smarkets reconnecting...');
-      setTimeout(connectStream, delay);
+      reconnectTimer = setTimeout(connectStream, delay);
     });
 
     ws.on('error', (err) => {
@@ -321,6 +323,11 @@ export async function createSmarketsFeed(config: SmarketsConfig = {}): Promise<S
     },
 
     stop() {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+
       if (pingInterval) {
         clearInterval(pingInterval);
         pingInterval = null;

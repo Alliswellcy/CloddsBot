@@ -2,7 +2,7 @@
  * Skills Module - Clawdbot-style skills registry (ClawdHub style)
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, createWriteStream } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, createWriteStream, cpSync } from 'fs';
 import * as path from 'path';
 import { join, basename } from 'path';
 import { homedir, tmpdir } from 'os';
@@ -140,7 +140,7 @@ export class SkillRegistry extends EventEmitter {
     if (!path.resolve(skillPath).startsWith(path.resolve(this.skillsDir) + path.sep)) {
       throw new Error('Invalid skill name: path traversal detected');
     }
-    await execAsync(`cp -r ${JSON.stringify(resolvedSource)} ${JSON.stringify(skillPath)}`);
+    cpSync(resolvedSource, skillPath, { recursive: true });
     const installed: InstalledSkill = {
       manifest,
       path: skillPath,

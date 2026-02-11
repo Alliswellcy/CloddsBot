@@ -82,7 +82,7 @@ export function createPercolatorRouter(deps: PercolatorRouterDeps): Router {
         res.status(400).json({ ok: false, error: 'Required: direction ("long"|"short")' });
         return;
       }
-      if (!size || typeof size !== 'number' || size <= 0) {
+      if (size === undefined || !Number.isFinite(size) || size <= 0) {
         res.status(400).json({ ok: false, error: 'Required: size (positive number in USD)' });
         return;
       }
@@ -105,7 +105,7 @@ export function createPercolatorRouter(deps: PercolatorRouterDeps): Router {
   router.post('/deposit', async (req: Request, res: Response) => {
     try {
       const { amount } = req.body as { amount?: number };
-      if (!amount || typeof amount !== 'number' || amount <= 0) {
+      if (amount === undefined || !Number.isFinite(amount) || amount <= 0) {
         res.status(400).json({ ok: false, error: 'Required: amount (positive number in USDC)' });
         return;
       }
@@ -127,7 +127,7 @@ export function createPercolatorRouter(deps: PercolatorRouterDeps): Router {
   router.post('/withdraw', async (req: Request, res: Response) => {
     try {
       const { amount } = req.body as { amount?: number };
-      if (!amount || typeof amount !== 'number' || amount <= 0) {
+      if (amount === undefined || !Number.isFinite(amount) || amount <= 0) {
         res.status(400).json({ ok: false, error: 'Required: amount (positive number in USDC)' });
         return;
       }

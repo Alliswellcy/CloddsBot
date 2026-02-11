@@ -31,10 +31,21 @@ export function createSignalBus(): SignalBus {
   const originalEmit = bus.emit.bind(bus);
   bus.emit = (event: string | symbol, ...args: unknown[]): boolean => {
     if (typeof event !== 'string') return originalEmit(event, ...args);
-    const listeners = bus.rawListeners(event);
-    for (const listener of listeners) {
+    // Snapshot the raw listeners array so removals during iteration are safe.
+    // rawListeners() returns once-wrappers as objects with a `.listener` prop.
+    const listeners = bus.rawListeners(event).slice();
+    for (const raw of listeners) {
       try {
-        (listener as (...a: unknown[]) => void)(...args);
+        // Detect .once() wrappers: Node stores them with a `listener` property
+        // holding the original handler.  We must remove the wrapper *before*
+        // invoking so that .once() semantics are honoured (fire-and-forget).
+        const fn = raw as ((...a: unknown[]) => void) & { listener?: (...a: unknown[]) => void };
+        if (typeof fn.listener === 'function') {
+          bus.removeListener(event, fn as (...a: unknown[]) => void);
+          fn.listener(...args);
+        } else {
+          fn(...args);
+        }
       } catch (error) {
         logger.error({ error, event }, 'Signal bus listener error — isolated');
       }
@@ -48,7 +59,14 @@ export function createSignalBus(): SignalBus {
 
     currentFeeds = feeds;
 
-    priceHandler = (update: any) => bus.emit('tick', update);
+    priceHandler = (update: any) => {
+      // Feeds emit 'previousPrice' but TickUpdate type uses 'prevPrice' —
+      // normalize here so all downstream consumers see a consistent field name.
+      if (update.previousPrice !== undefined && update.prevPrice === undefined) {
+        update.prevPrice = update.previousPrice;
+      }
+      bus.emit('tick', update);
+    };
     orderbookHandler = (update: any) => bus.emit('orderbook', update);
 
     feeds.on('price', priceHandler);

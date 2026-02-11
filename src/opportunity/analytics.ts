@@ -1125,11 +1125,11 @@ export function createOpportunityAnalytics(db: Database): OpportunityAnalytics {
         }
       }
 
-      const avgLifespanMs = lifespans.reduce((a, b) => a + b, 0) / lifespans.length;
+      const avgLifespanMs = lifespans.length > 0 ? lifespans.reduce((a, b) => a + b, 0) / lifespans.length : 0;
 
       const decayCurve: Array<{ minutesSinceDiscovery: number; remainingEdgePct: number }> = [];
       for (const [minute, edges] of Object.entries(edgeByMinute)) {
-        const avgEdge = edges.reduce((a, b) => a + b, 0) / edges.length;
+        const avgEdge = edges.length > 0 ? edges.reduce((a, b) => a + b, 0) / edges.length : 0;
         decayCurve.push({
           minutesSinceDiscovery: parseInt(minute, 10),
           remainingEdgePct: avgEdge,

@@ -364,15 +364,18 @@ export function createCryptoHftEngine(
         postOnly: useMaker,
       });
 
-      positionMgr.close(
-        pos.id,
-        result.avgFillPrice ?? exitPrice,
-        reason,
-        useMaker && result.success
-      );
+      if (result.success) {
+        positionMgr.close(
+          pos.id,
+          result.avgFillPrice ?? exitPrice,
+          reason,
+          useMaker,
+        );
+      } else {
+        logger.warn({ positionId: pos.id, error: result.error, reason }, 'Exit order failed, keeping position open');
+      }
     } catch (err) {
-      logger.error({ err, positionId: pos.id, reason }, 'Exit execution error');
-      positionMgr.close(pos.id, exitPrice, reason, false);
+      logger.error({ err, positionId: pos.id, reason }, 'Exit execution error, keeping position open');
     }
   }
 

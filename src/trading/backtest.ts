@@ -655,7 +655,7 @@ export function createBacktestEngine(db: Database): BacktestEngine {
     async runWithTicks(strategy, config, ticks, orderbooks) {
       const cfg: TickReplayConfig = { ...DEFAULT_CONFIG, ...DEFAULT_TICK_REPLAY, ...config };
 
-      if (ticks.length === 0) {
+      if (!ticks || ticks.length === 0) {
         return emptyResult(strategy.config.id, cfg);
       }
 

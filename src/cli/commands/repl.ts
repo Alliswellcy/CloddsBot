@@ -138,8 +138,13 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
   };
 
   process.on('SIGINT', async () => {
-    await shutdown();
-    process.exit(0);
+    try {
+      await shutdown();
+    } catch (error) {
+      logger.error({ error }, 'SIGINT handler failed');
+    } finally {
+      process.exit(0);
+    }
   });
 
   const processInput = async (input: string): Promise<void> => {

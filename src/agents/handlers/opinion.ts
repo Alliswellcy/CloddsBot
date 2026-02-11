@@ -73,7 +73,7 @@ async function priceHandler(toolInput: ToolInput): Promise<HandlerResult> {
   const tokenId = toolInput.token_id as string;
 
   return safeHandler(async () => {
-    const response = await fetch(`${API_BASE}/token/latest-price?tokenId=${tokenId}`, {
+    const response = await fetch(`${API_BASE}/token/latest-price?tokenId=${encodeURIComponent(tokenId)}`, {
       headers: { 'apikey': getApiKey() },
     });
 

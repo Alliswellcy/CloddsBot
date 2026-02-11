@@ -224,12 +224,12 @@ export async function createKalshiFeed(config?: {
     if (value === null || value === undefined) return null;
     const numeric = typeof value === 'number' ? value : Number.parseFloat(String(value));
     if (!Number.isFinite(numeric)) return null;
-    // Kalshi prices are in cents (1-99) or decimals (0.01-0.99)
-    // Values >= 2 are definitely cents; values <= 1 are already decimal
-    if (numeric >= 2) return numeric / 100;
-    if (numeric <= 1) return numeric;
-    // Ambiguous range 1-2: assume cents (Kalshi doesn't have prices > $1)
-    return numeric / 100;
+    // Kalshi prices are in cents (1-100) or decimals (0.01-0.99)
+    // Values in (0, 1) exclusive are already decimal
+    if (numeric > 0 && numeric < 1) return numeric;
+    // Values 1-100 are cents (Kalshi 1 cent = 0.01, not 100%)
+    if (numeric >= 1 && numeric <= 100) return numeric / 100;
+    return null;
   }
 
   function normalizeCents(value: unknown): number | null {

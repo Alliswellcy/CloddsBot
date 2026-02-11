@@ -54,13 +54,19 @@ async function fetchClob(
     ? buildPolymarketHeadersForUrl(creds, method, url, init?.body as string | undefined)
     : {};
 
-  return fetch(url, {
+  const response = await fetch(url, {
     ...init,
     headers: {
       ...(init?.headers ?? {}),
       ...authHeaders,
     },
   });
+
+  if (!response.ok) {
+    throw new Error(`Polymarket API error: ${response.status} ${response.statusText}`);
+  }
+
+  return response;
 }
 
 // =============================================================================
@@ -368,7 +374,7 @@ async function eventBySlugHandler(toolInput: ToolInput): Promise<HandlerResult> 
   const slug = toolInput.slug as string;
 
   return safeHandler(async () => {
-    const response = await fetch(`https://gamma-api.polymarket.com/events/slug/${slug}`);
+    const response = await fetch(`https://gamma-api.polymarket.com/events/slug/${encodeURIComponent(slug)}`);
     return await response.json();
   });
 }
@@ -401,7 +407,7 @@ async function marketBySlugHandler(toolInput: ToolInput): Promise<HandlerResult>
   const slug = toolInput.slug as string;
 
   return safeHandler(async () => {
-    const response = await fetch(`https://gamma-api.polymarket.com/markets/slug/${slug}`);
+    const response = await fetch(`https://gamma-api.polymarket.com/markets/slug/${encodeURIComponent(slug)}`);
     return await response.json();
   });
 }
@@ -493,7 +499,7 @@ async function balancesHandler(
     if (balanceResponse.ok) {
       balanceData = await balanceResponse.json() as { balance?: string; allowance?: string };
     } else {
-      logger.warn(`Failed to fetch Polymarket balance for ${address}: HTTP ${balanceResponse.status} ${balanceResponse.statusText}`);
+      logger.warn(`Failed to fetch Polymarket balance: HTTP ${balanceResponse.status} ${balanceResponse.statusText}`);
     }
 
     // Fetch positions

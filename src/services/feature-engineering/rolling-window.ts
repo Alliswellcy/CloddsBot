@@ -138,6 +138,14 @@ export class RollingStats {
     this.sum += value;
     this.sumSq += value * value;
 
+    // Guard against overflow in sumSq accumulation
+    if (!Number.isFinite(this.sumSq) || this.sumSq > Number.MAX_SAFE_INTEGER / 2) {
+      // Recompute from scratch to avoid accumulated precision errors
+      this.recompute();
+      this.pushCount = 0;
+      return;
+    }
+
     this.pushCount++;
     if (this.pushCount >= this.recomputeEvery) {
       this.recompute();

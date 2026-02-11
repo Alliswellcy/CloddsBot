@@ -307,6 +307,7 @@ export function createTickStreamer(config: TickStreamerConfig = {}): TickStreame
 
       ws.on('error', (err) => {
         logger.error({ err }, 'WebSocket client error');
+        try { ws.close(); } catch { /* ignore */ }
         handleDisconnect(client);
       });
     },

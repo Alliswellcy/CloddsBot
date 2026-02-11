@@ -13,7 +13,7 @@ import { execSync } from 'child_process';
 
 function sanitizeShellArg(input: string): string {
   // Whitelist: only allow alphanumeric, spaces, hyphens, underscores, dots, slashes, and common punctuation
-  return input.replace(/[^a-zA-Z0-9 \-_./,;:!?@#%&()+=\[\]{}~]/g, '');
+  return input.replace(/[^a-zA-Z0-9 \-_./,:!?@#%+=\[\]~]/g, '');
 }
 
 function checkQmd(): string | null {

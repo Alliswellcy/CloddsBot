@@ -239,6 +239,28 @@ export function createDynamicKellyCalculator(
     const adjustments: KellyAdjustment[] = [];
     const warnings: string[] = [];
 
+    // Guard: zero bankroll
+    if (bankroll <= 0) {
+      return {
+        kelly: 0,
+        baseKelly: 0,
+        positionSize: 0,
+        adjustments: [{
+          type: 'sample_size',
+          multiplier: 0,
+          reason: 'Zero or negative bankroll - cannot size position',
+        }],
+        risk: {
+          drawdown: getCurrentDrawdown(),
+          recentWinRate: getRecentWinRate(),
+          volatility: getRecentVolatility(),
+          winStreak,
+        },
+        confidence: 0,
+        warnings: ['Bankroll is zero or negative'],
+      };
+    }
+
     // 1. Calculate base Kelly
     const fullKelly = getBaseKelly(edge, odds, winRate);
     let kelly = fullKelly * cfg.baseMultiplier;

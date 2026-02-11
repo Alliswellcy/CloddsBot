@@ -77,7 +77,12 @@ function isAllowedUrl(urlString: string): boolean {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
     const hostname = parsed.hostname.toLowerCase();
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '0.0.0.0') return false;
-    if (hostname.startsWith('10.') || hostname.startsWith('192.168.') || hostname.startsWith('172.')) return false;
+    if (hostname.startsWith('10.') || hostname.startsWith('192.168.')) return false;
+    if (hostname.startsWith('172.')) {
+      const parts = hostname.split('.');
+      const second = parseInt(parts[1], 10);
+      if (second >= 16 && second <= 31) return false;
+    }
     if (hostname === '169.254.169.254' || hostname.endsWith('.internal') || hostname.endsWith('.local')) return false;
     return true;
   } catch {

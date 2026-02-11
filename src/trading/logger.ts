@@ -9,6 +9,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
+import { randomUUID } from 'crypto';
 import { Database, type SqlBindValue } from '../db/index';
 import { logger } from '../utils/logger';
 import type { Platform } from '../types';
@@ -269,8 +270,21 @@ export function createTradeLogger(db: Database): TradeLogger {
     };
   }
 
+  const MAX_IN_MEMORY_TRADES = 1000;
+
+  function pruneInMemoryTrades(): void {
+    if (trades.size > MAX_IN_MEMORY_TRADES) {
+      const entries = Array.from(trades.keys());
+      const toRemove = entries.slice(0, entries.length - MAX_IN_MEMORY_TRADES);
+      for (const key of toRemove) {
+        trades.delete(key);
+      }
+    }
+  }
+
   function saveTrade(trade: Trade): void {
     trades.set(trade.id, trade);
+    pruneInMemoryTrades();
 
     db.run(
       `INSERT OR REPLACE INTO trades
@@ -310,7 +324,7 @@ export function createTradeLogger(db: Database): TradeLogger {
   }
 
   function generateId(): string {
-    return `trade_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    return `trade_${randomUUID()}`;
   }
 
   // Attach methods

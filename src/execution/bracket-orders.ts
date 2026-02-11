@@ -388,42 +388,77 @@ export function createBracketOrder(
       'Bracket order: placing TP + SL'
     );
 
-    // Place both orders
-    const [tpResult, slResult] = await Promise.allSettled([
-      placeTakeProfit(),
-      placeStopLoss(),
-    ]);
-
-    // Process take-profit result
-    if (tpResult.status === 'fulfilled' && tpResult.value.success) {
-      takeProfitOrderId = tpResult.value.orderId;
-    } else {
-      const err = tpResult.status === 'rejected'
-        ? String(tpResult.reason)
-        : tpResult.value.error;
-      logger.error({ error: err }, 'Bracket: failed to place take-profit');
-    }
-
-    // Process stop-loss result
-    if (slResult.status === 'fulfilled' && slResult.value.success) {
-      stopLossOrderId = slResult.value.orderId;
-    } else {
-      const err = slResult.status === 'rejected'
-        ? String(slResult.reason)
-        : slResult.value.error;
-      logger.error({ error: err }, 'Bracket: failed to place stop-loss');
-    }
-
-    // Need at least one order to be active
-    if (!takeProfitOrderId && !stopLossOrderId) {
+    // Place TP first, then SL. If SL fails after TP succeeds, cancel TP to
+    // avoid leaving the user without stop-loss protection.
+    try {
+      const tpResult = await placeTakeProfit();
+      if (tpResult.success) {
+        takeProfitOrderId = tpResult.orderId;
+      } else {
+        logger.error({ error: tpResult.error }, 'Bracket: failed to place take-profit');
+        status = 'failed';
+        try {
+          updateBracketStatus(orderId, { status: 'failed' });
+        } catch (err) {
+          logger.warn({ error: String(err) }, 'Failed to persist bracket failure');
+        }
+        emitter.emit('failed', { error: `Take-profit placement failed: ${tpResult.error}` });
+        return;
+      }
+    } catch (err) {
+      logger.error({ error: String(err) }, 'Bracket: take-profit placement threw');
       status = 'failed';
-      // Persist failed status
       try {
         updateBracketStatus(orderId, { status: 'failed' });
-      } catch (err) {
-        logger.warn({ error: String(err) }, 'Failed to persist bracket failure');
+      } catch (persistErr) {
+        logger.warn({ error: String(persistErr) }, 'Failed to persist bracket failure');
       }
-      emitter.emit('failed', { error: 'Both bracket orders failed to place' });
+      emitter.emit('failed', { error: `Take-profit placement threw: ${String(err)}` });
+      return;
+    }
+
+    try {
+      const slResult = await placeStopLoss();
+      if (slResult.success) {
+        stopLossOrderId = slResult.orderId;
+      } else {
+        logger.error({ error: slResult.error }, 'Bracket: failed to place stop-loss');
+        // Cancel the TP since SL failed -- user would have no stop-loss protection
+        if (takeProfitOrderId) {
+          try {
+            await executionService.cancelOrder(config.platform, takeProfitOrderId);
+            logger.info({ orderId: takeProfitOrderId }, 'Bracket: cancelled TP after SL failure');
+          } catch (cancelErr) {
+            logger.warn({ error: String(cancelErr) }, 'Bracket: failed to cancel TP after SL failure');
+          }
+        }
+        status = 'failed';
+        try {
+          updateBracketStatus(orderId, { status: 'failed' });
+        } catch (persistErr) {
+          logger.warn({ error: String(persistErr) }, 'Failed to persist bracket failure');
+        }
+        emitter.emit('failed', { error: `Stop-loss placement failed: ${slResult.error}` });
+        return;
+      }
+    } catch (err) {
+      logger.error({ error: String(err) }, 'Bracket: stop-loss placement threw');
+      // Cancel the TP since SL failed
+      if (takeProfitOrderId) {
+        try {
+          await executionService.cancelOrder(config.platform, takeProfitOrderId);
+          logger.info({ orderId: takeProfitOrderId }, 'Bracket: cancelled TP after SL throw');
+        } catch (cancelErr) {
+          logger.warn({ error: String(cancelErr) }, 'Bracket: failed to cancel TP after SL throw');
+        }
+      }
+      status = 'failed';
+      try {
+        updateBracketStatus(orderId, { status: 'failed' });
+      } catch (persistErr) {
+        logger.warn({ error: String(persistErr) }, 'Failed to persist bracket failure');
+      }
+      emitter.emit('failed', { error: `Stop-loss placement threw: ${String(err)}` });
       return;
     }
 
@@ -464,15 +499,37 @@ export function createBracketOrder(
       logger.warn({ error: String(err) }, 'Failed to persist bracket cancellation');
     }
 
-    const cancellations: Promise<boolean>[] = [];
+    const cancellations: Array<{ orderId: string; promise: Promise<boolean> }> = [];
     if (takeProfitOrderId) {
-      cancellations.push(executionService.cancelOrder(config.platform, takeProfitOrderId));
+      cancellations.push({
+        orderId: takeProfitOrderId,
+        promise: executionService.cancelOrder(config.platform, takeProfitOrderId),
+      });
     }
     if (stopLossOrderId) {
-      cancellations.push(executionService.cancelOrder(config.platform, stopLossOrderId));
+      cancellations.push({
+        orderId: stopLossOrderId,
+        promise: executionService.cancelOrder(config.platform, stopLossOrderId),
+      });
     }
 
-    await Promise.allSettled(cancellations);
+    const results = await Promise.allSettled(cancellations.map((c) => c.promise));
+
+    // Check cancellation results and log failures
+    results.forEach((result, index) => {
+      const orderIdToCancel = cancellations[index]?.orderId;
+      if (result.status === 'rejected') {
+        logger.error(
+          { orderId: orderIdToCancel, error: String(result.reason) },
+          '[bracket] Failed to cancel order during cleanup'
+        );
+      } else if (result.value === false) {
+        logger.warn(
+          { orderId: orderIdToCancel },
+          '[bracket] Cancel order returned false during cleanup'
+        );
+      }
+    });
 
     logger.info({ orderId }, 'Bracket order cancelled');
     emitter.emit('cancelled', getStatusSnapshot());
