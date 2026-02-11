@@ -16754,7 +16754,11 @@ export async function createAgentManager(
     throw new Error('ANTHROPIC_API_KEY environment variable is required');
   }
 
-  const client = new Anthropic({ apiKey });
+  const baseURL = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+  const client = new Anthropic({
+    apiKey,
+    baseURL,
+  });
   const skills = createSkillManager(config.agents.defaults.workspace);
   let credentials: CredentialsManager;
   try {
@@ -17067,6 +17071,14 @@ export async function createAgentManager(
         Boolean(editMessage) &&
         STREAM_RESPONSE_PLATFORMS.has(processedMessage.platform);
 
+      logger.info({
+        canStreamResponse,
+        STREAM_RESPONSES_ENABLED,
+        hasEditMessage: Boolean(editMessage),
+        platform: processedMessage.platform,
+        isPlatformSupported: STREAM_RESPONSE_PLATFORMS.has(processedMessage.platform)
+      }, 'Stream response check');
+
       const extractResponseText = (response: Anthropic.Message): string => {
         const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text');
         return textBlocks.map((b) => b.text).join('\n');
@@ -17080,53 +17092,86 @@ export async function createAgentManager(
         let lastSentText = '';
         let lastUpdateAt = 0;
         let updateTimer: NodeJS.Timeout | null = null;
+        let flushPromise: Promise<void> | null = null; // Track ongoing flush
 
         const scheduleFlush = (): void => {
           if (updateTimer) return;
           const delay = Math.max(0, STREAM_RESPONSE_INTERVAL_MS - (Date.now() - lastUpdateAt));
           updateTimer = setTimeout(() => {
             updateTimer = null;
-            void flushUpdate(true);
+            void flushUpdate(false);
           }, delay);
         };
 
         const flushUpdate = async (force = false): Promise<void> => {
           if (!pendingText || pendingText === lastSentText) return;
+
+          // If a flush is already in progress, wait for it if this is a forced flush
+          if (flushPromise) {
+            if (force) {
+              logger.info({ platform: processedMessage.platform }, 'Streaming: waiting for previous flush to complete');
+              await flushPromise;
+              // After waiting, check again if we still need to flush
+              if (!pendingText || pendingText === lastSentText) return;
+            } else {
+              logger.info({ platform: processedMessage.platform }, 'Streaming: flush already in progress, skipping');
+              return;
+            }
+          }
+
           const now = Date.now();
           if (!force && now - lastUpdateAt < STREAM_RESPONSE_INTERVAL_MS) {
             scheduleFlush();
             return;
           }
-          try {
-            if (!streamedMessageId) {
-              const sentId = await sendMessage({
-                platform: processedMessage.platform,
-                chatId: processedMessage.chatId,
-                text: pendingText,
-                parseMode: 'Markdown',
-                thread: processedMessage.thread,
-              });
-              if (!sentId) {
-                logger.debug({ platform: processedMessage.platform }, 'Streaming send returned no messageId');
-                return;
+
+          // Start the flush and track the promise
+          flushPromise = (async () => {
+            try {
+              if (!streamedMessageId) {
+                logger.info({ platform: processedMessage.platform, textLength: pendingText.length }, 'Streaming: sending initial message');
+                const sentId = await sendMessage({
+                  platform: processedMessage.platform,
+                  chatId: processedMessage.chatId,
+                  text: pendingText,
+                  parseMode: 'Markdown',
+                  thread: processedMessage.thread,
+                });
+                if (!sentId) {
+                  logger.info({ platform: processedMessage.platform }, 'Streaming send returned no messageId');
+                  return;
+                }
+                logger.info({ platform: processedMessage.platform, messageId: sentId }, 'Streaming: initial message sent');
+                streamedMessageId = sentId;
+                streamedResponseSent = true;
+              } else if (editMessage) {
+                logger.info({ platform: processedMessage.platform, messageId: streamedMessageId, textLength: pendingText.length }, 'Streaming: editing message');
+                await editMessage({
+                  platform: processedMessage.platform,
+                  chatId: processedMessage.chatId,
+                  messageId: streamedMessageId,
+                  text: pendingText,
+                  parseMode: 'Markdown',
+                  thread: processedMessage.thread,
+                });
+                logger.info({ platform: processedMessage.platform, messageId: streamedMessageId }, 'Streaming: message edited successfully');
               }
-              streamedMessageId = sentId;
-              streamedResponseSent = true;
-            } else if (editMessage) {
-              await editMessage({
-                platform: processedMessage.platform,
-                chatId: processedMessage.chatId,
-                messageId: streamedMessageId,
-                text: pendingText,
-                parseMode: 'Markdown',
-                thread: processedMessage.thread,
-              });
+              lastSentText = pendingText;
+              lastUpdateAt = Date.now();
+            } catch (error) {
+              logger.warn({ error, platform: processedMessage.platform, messageId: streamedMessageId }, 'Streaming response update failed');
+              // Reset streamedMessageId so next update sends a new message instead of retrying failed edit
+              if (streamedMessageId) {
+                logger.info({ platform: processedMessage.platform }, 'Streaming: resetting messageId after edit failure');
+                streamedMessageId = null;
+                streamedResponseSent = false;
+              }
+            } finally {
+              flushPromise = null;
             }
-            lastSentText = pendingText;
-            lastUpdateAt = Date.now();
-          } catch (error) {
-            logger.debug({ error }, 'Streaming response update failed');
-          }
+          })();
+
+          await flushPromise;
         };
 
         const message = await withRetry(

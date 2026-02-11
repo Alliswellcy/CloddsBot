@@ -550,7 +550,10 @@ export function createSubagentManager(): SubagentManager {
         run.events.emit('error', new Error('ANTHROPIC_API_KEY not set'));
         return state;
       }
-      anthropicClient = new Anthropic({ apiKey });
+      anthropicClient = new Anthropic({
+        apiKey,
+        baseURL: process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+      });
     }
 
     const model = state.config.model || 'claude-3-5-sonnet-20241022';

@@ -5,6 +5,28 @@ All notable changes to Clodds will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.13] - 2026-02-12
+
+### Added
+- **中转 API (Relay/Proxy) 支持**: 新增 `ANTHROPIC_BASE_URL` 环境变量，所有 Anthropic SDK 客户端实例均支持自定义 API 地址
+  - `src/agents/index.ts` — 主 Agent 客户端
+  - `src/agents/subagents.ts` — 子 Agent 客户端
+  - `src/memory/summarizer.ts` — 摘要服务客户端
+  - `src/tools/image.ts` — 图像分析工具客户端
+  - `src/providers/index.ts` — Provider 管理器
+- **`CLODDS_GATEWAY_PORT` 环境变量**: 支持通过环境变量配置 Gateway 端口
+- **中转 API 配置文档**: 新增 `RELAY_API_SETUP.md`，包含完整的中转 API 配置指南
+
+### Fixed
+- **流式响应并发竞态**: 引入 `flushPromise` 追踪机制，防止多个 flush 操作同时执行导致消息乱序
+- **流式响应错误恢复**: 编辑消息失败时自动重置 `streamedMessageId`，下次更新会发送新消息而非重试失败的编辑
+- **TypeScript 类型问题**: 添加 `@types/connect` 依赖，tsconfig 增加 `"types": []` 避免隐式类型引入
+
+### Changed
+- 流式响应增加详细日志（初始发送、编辑、flush 状态等），便于调试
+- `.env.example` 增加 `ANTHROPIC_BASE_URL` 配置说明
+- 版本号升级至 1.6.13
+
 ## [1.2.1] - 2026-02-09
 
 ### Fixed

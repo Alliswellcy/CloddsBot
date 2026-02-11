@@ -652,6 +652,7 @@ function safeParseFloat(raw: string): number | undefined {
 /** Environment variables that can be used in config */
 const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
   ANTHROPIC_API_KEY: () => {}, // Used directly by agent
+  ANTHROPIC_BASE_URL: () => {}, // Used directly by provider
   OPENAI_API_KEY: () => {},
   ELEVENLABS_API_KEY: (cfg) => {
     if (cfg.tts) cfg.tts.apiKey = process.env.ELEVENLABS_API_KEY;
@@ -1005,6 +1006,11 @@ const ENV_MAPPINGS: Record<string, (cfg: CloddsConfig) => void> = {
     if (!cfg.gateway.auth) cfg.gateway.auth = {};
     cfg.gateway.auth.token = process.env.CLODDS_GATEWAY_TOKEN;
     cfg.gateway.auth.mode = 'token';
+  },
+  CLODDS_GATEWAY_PORT: (cfg) => {
+    if (!cfg.gateway) cfg.gateway = {};
+    const raw = process.env.CLODDS_GATEWAY_PORT;
+    if (raw) cfg.gateway.port = safeParseInt(raw) ?? cfg.gateway.port;
   },
   CLODDS_GATEWAY_PASSWORD: (cfg) => {
     if (!cfg.gateway) cfg.gateway = {};

@@ -18,7 +18,10 @@ export function createClaudeSummarizer(options: ClaudeSummarizerOptions = {}): S
   const apiKey = options.apiKey || process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return undefined;
 
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({
+    apiKey,
+    baseURL: process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+  });
   const model = options.model || DEFAULT_SUMMARY_MODEL;
 
   return async (text: string, maxTokens: number): Promise<string> => {

@@ -13,7 +13,8 @@
     "resolveJsonModule": true,
     "declaration": true,
     "sourceMap": true,
-    "noEmit": false
+    "noEmit": false,
+    "types": []
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
