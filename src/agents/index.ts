@@ -17198,7 +17198,7 @@ export async function createAgentManager(
 
       // Build final system prompt (Clawdbot-style)
       // Priority: routed agent prompt > default system prompt
-      const skillContext = skills.getSkillContext();
+      const skillContext = skills.getSkillContextForMessage(processedMessage.text || '');
       const baseSystemPrompt = SYSTEM_PROMPT.replace(
         '{{SKILLS}}',
         skillContext ? `\n## Skills Reference\n${skillContext}` : ''

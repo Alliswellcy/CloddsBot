@@ -400,6 +400,8 @@ export interface SkillManager {
   getSkill: (name: string) => Skill | undefined;
   getEnabledSkills: () => Skill[];
   getSkillContext: () => string;
+  /** Get context with only relevant skills expanded based on user message */
+  getSkillContextForMessage: (message: string) => string;
   reload: () => void;
   /** Inject skill env overrides into process.env. Returns a restore function. */
   applyEnvOverrides: () => () => void;
@@ -578,6 +580,217 @@ export function createSkillManager(workspacePath?: string, config?: SkillManager
         parts.push(`${skill.description}\n`);
         parts.push(skill.content);
         parts.push('\n---\n');
+      }
+
+      return parts.join('\n');
+    },
+
+    /**
+     * Get context with lazy skill loading — only expand skills matching the message.
+     * Uses a compact grouped directory (~300 tokens) + keyword matching to expand
+     * only relevant skills within a token budget.
+     *
+     * Token savings: "hi" → ~300 tokens (vs 133K). "buy on polymarket" → ~8K (vs 133K).
+     */
+    getSkillContextForMessage(message: string) {
+      const enabled = this.getEnabledSkills()
+        .filter(s => s.modelInvocable !== false);
+      if (enabled.length === 0) return '';
+
+      const msg = message.toLowerCase();
+      const TOKEN_BUDGET = 25000; // Max ~25K tokens for expanded skill content
+      const CHARS_PER_TOKEN = 4; // Conservative estimate
+      const CHAR_BUDGET = TOKEN_BUDGET * CHARS_PER_TOKEN;
+
+      // =====================================================================
+      // KEYWORD ALIASES — map abbreviations to canonical names used in skills
+      // =====================================================================
+      const ALIASES: Record<string, string[]> = {
+        // Platform abbreviations
+        poly: ['polymarket'], pm: ['polymarket'], polymarket: ['polymarket'],
+        sol: ['solana'], solana: ['solana'],
+        eth: ['ethereum', 'evm'], ethereum: ['evm'],
+        btc: ['bitcoin'], bitcoin: ['bitcoin'],
+        hl: ['hyperliquid'], hyper: ['hyperliquid'],
+        bnb: ['pancakeswap', 'opinion'],
+        // Trading intents (NOT "trading" — too broad, matches all trading-* skills)
+        buy: ['execution'], sell: ['execution'],
+        trade: ['execution'], order: ['execution'],
+        long: ['futures'], short: ['futures'],
+        // Strategy
+        arb: ['arbitrage'], arbitrage: ['arbitrage'],
+        perps: ['futures'], perpetuals: ['futures'], leverage: ['futures'],
+        copy: ['copy'], mirror: ['copy'],
+        snipe: ['pumpfun', 'pump'], pump: ['pumpfun', 'pump'],
+        meme: ['pumpfun', 'pump', 'bags'],
+        strat: ['strategy', 'backtest'], strategy: ['strategy', 'backtest'],
+        backtest: ['backtest'], test: ['backtest'],
+        // DeFi
+        swap: ['jupiter', 'raydium', 'dex'],
+        lp: ['liquidity', 'pool'], pool: ['liquidity'],
+        lend: ['kamino', 'marginfi', 'solend'], borrow: ['kamino', 'marginfi', 'solend'],
+        defi: ['jupiter', 'raydium', 'orca', 'kamino', 'marginfi', 'solend', 'meteora'],
+        bridge: ['bridge'], transfer: ['bridge'],
+        // Portfolio & risk
+        portfolio: ['portfolio', 'positions'], pnl: ['portfolio', 'positions'],
+        balance: ['portfolio'], balances: ['portfolio'], positions: ['positions'],
+        risk: ['risk', 'sizing'], sizing: ['sizing'],
+        slippage: ['slippage'],
+        // Monitoring & data
+        whale: ['whale'], whales: ['whale'],
+        alert: ['alerts', 'triggers'], alerts: ['alerts', 'triggers'],
+        price: ['markets'], prices: ['markets'],
+        chart: ['feeds'], charts: ['feeds'],
+        news: ['news'], research: ['research', 'edge'],
+        search: ['markets'],
+        // Admin & config
+        setup: ['setup', 'credentials'], config: ['setup', 'credentials'],
+        credentials: ['credentials'], api: ['credentials'],
+        key: ['credentials'], keys: ['credentials'],
+        // System
+        help: ['doctor'], diagnose: ['doctor'], debug: ['doctor'],
+        ssh: ['remote', 'tailscale'], vpn: ['tailscale'],
+        voice: ['voice', 'tts'], speak: ['tts'],
+        memory: ['memory'], remember: ['memory'],
+        // Social
+        tweet: ['tweet', 'farcaster', 'x'],
+        twitter: ['x', 'tweet'], farcaster: ['farcaster'],
+      };
+
+      // =====================================================================
+      // STOP WORDS — skip these when matching description words
+      // =====================================================================
+      const STOP_WORDS = new Set([
+        // English stop words
+        'the', 'and', 'for', 'with', 'from', 'that', 'this', 'are', 'was',
+        'will', 'can', 'all', 'has', 'have', 'been', 'not', 'but', 'use',
+        'via', 'your', 'you', 'any', 'more', 'also', 'into', 'when',
+        'data', 'based', 'using', 'across', 'complete', 'full', 'manage',
+        // Domain-generic words (appear in most trading skill descriptions)
+        'market', 'markets', 'trading', 'trade', 'trades', 'token', 'tokens',
+        'price', 'prices', 'order', 'orders', 'platform', 'platforms',
+        'crypto', 'chain', 'chains', 'protocol', 'exchange', 'onchain',
+        'automated', 'monitor', 'track', 'system', 'real', 'time',
+        // Generic command verbs (common subcommand names — not useful for matching)
+        'check', 'show', 'get', 'set', 'list', 'start', 'stop', 'status',
+        'help', 'info', 'view', 'update', 'delete', 'create', 'add', 'remove',
+        'search', 'find', 'open', 'close', 'run', 'cancel', 'new', 'true', 'false',
+        'config', 'pause', 'resume',
+      ]);
+
+      // =====================================================================
+      // EXPAND MESSAGE — resolve aliases to get expanded keyword set
+      // =====================================================================
+      const msgWords = msg.split(/\W+/).filter(w => w.length >= 2);
+      const expandedKeywords = new Set(msgWords);
+      for (const word of msgWords) {
+        const aliases = ALIASES[word];
+        if (aliases) {
+          for (const a of aliases) expandedKeywords.add(a);
+        }
+      }
+
+      // =====================================================================
+      // SCORE SKILLS — match against expanded keywords
+      // =====================================================================
+      const scored: Array<{ skill: Skill; score: number }> = [];
+      for (const skill of enabled) {
+        let score = 0;
+
+        // Match skill name parts (e.g. "trading-polymarket" → ["trading", "polymarket"])
+        // ONLY whole-word matching to avoid "market" matching inside "polymarket"
+        const nameParts = skill.name.split(/[-_]/);
+        for (const part of nameParts) {
+          if (part.length < 3) continue;
+          if (expandedKeywords.has(part)) score += 3;
+        }
+
+        // Match meaningful description words (lower weight — descriptions are broad)
+        const descWords = skill.description.toLowerCase().split(/\W+/);
+        for (const w of descWords) {
+          if (w.length < 4 || STOP_WORDS.has(w)) continue;
+          if (expandedKeywords.has(w)) score += 1;
+        }
+
+        // Match subcommand names — ONLY whole-word match, skip generic verbs
+        // that appear in many skills (check, list, show, get, set, etc.)
+        if (skill.subcommands) {
+          for (const sub of skill.subcommands) {
+            const subName = sub.name.toLowerCase();
+            if (subName.length >= 3 && !STOP_WORDS.has(subName) && expandedKeywords.has(subName)) score += 4;
+          }
+        }
+
+        // Minimum score 2 — require at least a name-part match (3) or
+        // multiple description/subcommand matches. Single description word
+        // matches (score 1) are too noisy.
+        if (score >= 2) scored.push({ skill, score });
+      }
+
+      // Sort by score descending
+      scored.sort((a, b) => b.score - a.score);
+
+      // Select within token budget
+      const expanded = new Set<string>();
+      let charBudgetUsed = 0;
+      for (const { skill } of scored) {
+        const contentChars = skill.content.length;
+        if (charBudgetUsed + contentChars > CHAR_BUDGET) {
+          // If we haven't expanded anything yet, allow one skill even if over budget
+          if (expanded.size > 0) continue;
+        }
+        expanded.add(skill.name);
+        charBudgetUsed += contentChars;
+      }
+
+      // =====================================================================
+      // BUILD CONTEXT — compact directory + expanded details
+      // =====================================================================
+      const SKILL_GROUPS: Record<string, string[]> = {
+        'Trading': [], 'Futures/Perps': [], 'Solana DeFi': [], 'EVM': [],
+        'Strategy': [], 'Portfolio': [], 'Monitoring': [], 'Analytics': [],
+        'Social': [], 'Admin': [], 'System': [], 'Other': [],
+      };
+
+      // Categorize skills into groups based on name patterns
+      const categorize = (name: string): string => {
+        if (/^trading-/.test(name) || /^(betfair|smarkets|metaculus|predictit|predictfun|opinion|veil|agentbets|markets)$/.test(name)) return 'Trading';
+        if (/futures$/.test(name) || /^(hyperliquid|drift|drift-sdk|percolator|lighter)$/.test(name)) return 'Futures/Perps';
+        if (/^(jupiter|raydium|pumpfun|pump-swarm|meteora|meteora-dbc|orca|kamino|marginfi|solend|dex|mev|bags|copy-trading-solana)$/.test(name)) return 'Solana DeFi';
+        if (/^(bridge|clanker|pancakeswap|ens|onchainkit|erc8004)$/.test(name)) return 'EVM';
+        if (/^(arbitrage|opportunity|edge|divergence|crypto-hft|mm|copy-trading|ai-strategy|strategy|backtest|sizing|signals|dca)$/.test(name)) return 'Strategy';
+        if (/^(portfolio|portfolio-sync|positions|risk|slippage|execution|router|trading-system)$/.test(name)) return 'Portfolio';
+        if (/^(whale-tracking|alerts|triggers|feeds|ticks|monitoring|features|weather|news)$/.test(name)) return 'Monitoring';
+        if (/^(metrics|analytics|history|usage|ledger|market-index|search-config)$/.test(name)) return 'Analytics';
+        if (/^(farcaster|tweet-ideas|x-research|botchan|bankr|virtuals)$/.test(name)) return 'Social';
+        if (/^(credentials|sessions|permissions|identity|setup|harden|shield|verify|doctor)$/.test(name)) return 'Admin';
+        if (/^(processes|automation|webhooks|routing|pairing|auto-reply|mcp|plugins|acp|remote|tailscale|sandbox|voice|tts|streaming|presence|memory|embeddings|qmd)$/.test(name)) return 'System';
+        return 'Other';
+      };
+
+      for (const skill of enabled) {
+        const group = categorize(skill.name);
+        SKILL_GROUPS[group].push(skill.name);
+      }
+
+      const parts = ['## Available Skills\n'];
+
+      // Compact grouped directory
+      for (const [group, names] of Object.entries(SKILL_GROUPS)) {
+        if (names.length === 0) continue;
+        parts.push(`**${group}:** ${names.join(', ')}`);
+      }
+      parts.push('');
+
+      // Expanded skill details
+      if (expanded.size > 0) {
+        parts.push('### Relevant Skill Details\n');
+        for (const skill of enabled) {
+          if (!expanded.has(skill.name)) continue;
+          parts.push(`#### ${skill.name}`);
+          parts.push(skill.content);
+          parts.push('\n---\n');
+        }
       }
 
       return parts.join('\n');
